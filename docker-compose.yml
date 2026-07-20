@@ -1,0 +1,142 @@
+name: revora
+
+x-backend: &backend
+  build:
+    context: ./backend
+    target: development
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+asyncpg://revora:revora@postgres:5432/revora
+    REDIS_URL: redis://redis:6379/0
+    MINIO_ENDPOINT: minio:9000
+    MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-revora}
+    MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-revora-local-secret}
+    JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-only-change-me}
+    APP_ENV: ${APP_ENV:-development}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  volumes:
+    - ./backend:/app
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  backend:
+    <<: *backend
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *backend
+    command: celery -A app.worker:celery_app worker --loglevel=info
+
+  beat:
+    <<: *backend
+    command: celery -A app.worker:celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-revora}
+      POSTGRES_USER: ${POSTGRES_USER:-revora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-revora}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-revora}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-revora-local-secret}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: development
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
+    expose:
+      - "3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    restart: unless-stopped
+
+  flower:
+    <<: *backend
+    command: celery -A app.worker:celery_app flower --port=5555
+    profiles: ["dev"]
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  frontend_node_modules:
+  frontend_next:

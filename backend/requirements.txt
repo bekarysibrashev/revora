@@ -1,0 +1,29 @@
+# Runtime dependencies — direct versions resolved and pinned on 2026-07-18.
+
+# Web
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+
+# Database
+sqlalchemy[asyncio]==2.0.51
+asyncpg==0.31.0
+alembic==1.18.5
+
+# Validation / settings
+pydantic==2.13.4
+pydantic-settings==2.14.2
+
+# Auth
+python-jose[cryptography]==3.5.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+
+# Background jobs
+celery==5.6.3
+redis==8.0.1
+flower==2.0.1
+
+# Files and exports
+minio==7.2.20
+openpyxl==3.1.5
+reportlab==5.0.0

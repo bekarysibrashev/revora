@@ -1,0 +1,13 @@
+"use client";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { ReactNode } from "react";
+
+export function PageHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) { return <div className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>; }
+export function DateFilters() { const router = useRouter(); const path = usePathname(); const search = useSearchParams(); const today = new Date(); const start = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10); const end = today.toISOString().slice(0, 10); function set(key: string, value: string) { const p = new URLSearchParams(search.toString()); p.set(key, value); router.push(`${path}?${p}`); } return <div className="filters"><label>С<input type="date" value={search.get("date_from") || start} onChange={e => set("date_from", e.target.value)} /></label><label>По<input type="date" value={search.get("date_to") || end} onChange={e => set("date_to", e.target.value)} /></label></div>; }
+export function queryString(search: URLSearchParams | ReadonlyURLSearchParams) { const today = new Date(); const p = new URLSearchParams(); p.set("date_from", search.get("date_from") || new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0,10)); p.set("date_to", search.get("date_to") || today.toISOString().slice(0,10)); if (search.get("branch_id")) p.set("branch_id", search.get("branch_id")!); return p.toString(); }
+type ReadonlyURLSearchParams = { get(name: string): string | null };
+export function Metric({ label, value, note, tone }: { label: string; value: string; note?: string; tone?: "good" | "bad" }) { return <article className="metric"><p>{label}</p><strong className={tone || ""}>{value}</strong>{note && <small>{note}</small>}</article>; }
+export function DataState({ loading, error, children }: { loading: boolean; error: unknown; children: ReactNode }) { if (loading) return <div className="panel center-state">Собираем показатели…</div>; if (error) return <div className="panel error-box">{error instanceof Error ? error.message : "Не удалось загрузить данные"}</div>; return <>{children}</>; }
+export function AsOf({ value }: { value?: string | null }) { return <p className="as-of">Данные актуальны на: {value ? new Date(value).toLocaleString("ru-RU") : "нет загруженных данных"}</p>; }
+export function money(value: string | number | null | undefined) { return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "KZT", maximumFractionDigits: 0 }).format(Number(value || 0)); }
+export function percent(value: string | number | null | undefined) { return `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`; }

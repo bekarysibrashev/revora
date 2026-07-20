@@ -1,0 +1,33 @@
+{
+  "name": "revora-frontend",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Revora frontend — структура зафиксирована в 05_frontend_revora.md. Версии пакетов будут закреплены на шаге 'frontend' (Этап 7), сейчас — только состав стека.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^14",
+    "react": "^18",
+    "react-dom": "^18",
+    "@tanstack/react-query": "^5",
+    "react-hook-form": "^7",
+    "zod": "^3",
+    "@hookform/resolvers": "^3",
+    "recharts": "^2",
+    "framer-motion": "^11",
+    "date-fns": "^3",
+    "nuqs": "^1"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "tailwindcss": "^3",
+    "postcss": "^8",
+    "autoprefixer": "^10",
+    "@types/react": "^18",
+    "@types/node": "^20"
+  }
+}

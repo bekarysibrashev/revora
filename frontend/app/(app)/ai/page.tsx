@@ -1,0 +1,2 @@
+import{PageHeader}from"@/shared/ui";
+export default function AiPage(){return <><PageHeader title="AI-аналитик" subtitle="Диалог с данными клиники на естественном языке"/><section className="coming-soon"><div>✦</div><p className="eyebrow">СКОРО</p><h2>Спросите Revora о своём бизнесе</h2><p>AI-аналитик сможет объяснять изменения показателей, находить причины отклонений и отвечать на вопросы по данным клиники. В версии 1 уже работают фоновые автоматические инсайты на обзорном экране.</p><button disabled>Открыть диалог</button></section></>}
