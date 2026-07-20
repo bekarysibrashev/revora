@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=15, ge=1, le=1440)
     refresh_token_expire_days: int = Field(default=30, ge=1, le=365)
 
+    # Отдельный секрет для /platform/* (создание новых клиник) — не JWT, не
+    # per-tenant роль. Видит только оператор платформы. Та же логика защиты
+    # от дефолтного значения в проде, что и у остальных секретов ниже.
+    platform_admin_token: SecretStr = SecretStr("local-only-change-me-platform")
+
     cors_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:3000",
         "http://localhost:8080",
@@ -77,8 +82,9 @@ class Settings(BaseSettings):
         insecure_values = {
             self.jwt_secret_key.get_secret_value(),
             self.minio_secret_key.get_secret_value(),
+            self.platform_admin_token.get_secret_value(),
         }
-        defaults = {"local-only-change-me", "revora-local-secret"}
+        defaults = {"local-only-change-me", "revora-local-secret", "local-only-change-me-platform"}
         if insecure_values & defaults:
             raise ValueError("Production requires unique JWT and MinIO secrets")
         if self.debug:

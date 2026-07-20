@@ -1,0 +1,12 @@
+ ⨯ Error: The Middleware "/middleware" must export a `middleware` or a `default` function
+    at <unknown> (webpack-internal:///(middleware)/./node_modules/next/dist/build/webpack/loaders/next-middleware-loader.js?absolutePagePath=C%3A%5CUsers%5Cbekai%5CDocuments%5CCodex%5C2026-07-18%5Cnew-chat%5Crevora_workspace%5Crevora%5Cfrontend%5Cmiddleware.ts&page=%2Fmiddleware&rootDir=C%3A%5CUsers%5Cbekai%5CDocuments%5CCodex%5C2026-07-18%5Cnew-chat%5Crevora_workspace%5Crevora%5Cfrontend&matchers=&preferredRegion=&middlewareConfig=e30%3D!:19)
+    at eval (webpack-internal:///(middleware)/./node_modules/next/dist/build/webpack/loaders/next-middleware-loader.js?absolutePagePath=C%3A%5CUsers%5Cbekai%5CDocuments%5CCodex%5C2026-07-18%5Cnew-chat%5Crevora_workspace%5Crevora%5Cfrontend%5Cmiddleware.ts&page=%2Fmiddleware&rootDir=C%3A%5CUsers%5Cbekai%5CDocuments%5CCodex%5C2026-07-18%5Cnew-chat%5Crevora_workspace%5Crevora%5Cfrontend&matchers=&preferredRegion=&middlewareConfig=e30%3D!:19:11)
+    at (middleware)/./node_modules/next/dist/build/webpack/loaders/next-middleware-loader.js?absolutePagePath=C%3A%5CUsers%5Cbekai%5CDocuments%5CCodex%5C2026-07-18%5Cnew-chat%5Crevora_workspace%5Crevora%5Cfrontend%5Cmiddleware.ts&page=%2Fmiddleware&rootDir=C%3A%5CUsers%5Cbekai%5CDocuments%5CCodex%5C2026-07-18%5Cnew-chat%5Crevora_workspace%5Crevora%5Cfrontend&matchers=&preferredRegion=&middlewareConfig=e30%3D! (file://C:\Users\bekai\Documents\Codex\2026-07-18\new-chat\revora_workspace\revora\frontend\.next\server\middleware.js:40:1)
+    at __webpack_require__ (file://C:\Users\bekai\Documents\Codex\2026-07-18\new-chat\revora_workspace\revora\frontend\.next\server\edge-runtime-webpack.js:37:33)
+    at __webpack_exec__ (file://C:\Users\bekai\Documents\Codex\2026-07-18\new-chat\revora_workspace\revora\frontend\.next\server\middleware.js:582:48)
+    at <unknown> (file://C:\Users\bekai\Documents\Codex\2026-07-18\new-chat\revora_workspace\revora\frontend\.next\server\middleware.js:583:37)
+    at webpackJsonpCallback (file://C:\Users\bekai\Documents\Codex\2026-07-18\new-chat\revora_workspace\revora\frontend\.next\server\edge-runtime-webpack.js:1127:39)
+    at <unknown> (file://C:\Users\bekai\Documents\Codex\2026-07-18\new-chat\revora_workspace\revora\frontend\.next\server\middleware.js:9:61)
+    at Script.runInContext (node:vm:149:12)
+    at runInContext (node:vm:301:6)
+    at evaluateInContext (file://C:\Users\bekai\Documents\Codex\2026-07-18\new-chat\revora_workspace\revora\frontend\node_modules\next\dist\server\web\sandbox\context.js:398:38)

@@ -22,6 +22,7 @@ from app.modules.finance.router import router as finance_router
 from app.modules.integrations.router import router as integrations_router
 from app.modules.marketing.router import router as marketing_router
 from app.modules.sales.router import router as sales_router
+from app.modules.tenancy.router import router as tenancy_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -91,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok", "service": settings.app_name, "environment": settings.app_env}
 
     application.include_router(auth_router, prefix=settings.api_v1_prefix)
+    application.include_router(tenancy_router, prefix=settings.api_v1_prefix)
     application.include_router(admin_router, prefix=settings.api_v1_prefix)
     application.include_router(integrations_router, prefix=settings.api_v1_prefix)
     application.include_router(finance_router, prefix=settings.api_v1_prefix)

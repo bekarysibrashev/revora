@@ -1,0 +1,560 @@
+diff --git a/backend/app/core/config.py b/backend/app/core/config.py
+index 09ea856..a7fea4d 100644
+--- a/backend/app/core/config.py
++++ b/backend/app/core/config.py
+@@ -39,6 +39,11 @@ class Settings(BaseSettings):
+     access_token_expire_minutes: int = Field(default=15, ge=1, le=1440)
+     refresh_token_expire_days: int = Field(default=30, ge=1, le=365)
+ 
++    # Отдельный секрет для /platform/* (создание новых клиник) — не JWT, не
++    # per-tenant роль. Видит только оператор платформы. Та же логика защиты
++    # от дефолтного значения в проде, что и у остальных секретов ниже.
++    platform_admin_token: SecretStr = SecretStr("local-only-change-me-platform")
++
+     cors_origins: Annotated[list[str], NoDecode] = [
+         "http://localhost:3000",
+         "http://localhost:8080",
+@@ -77,8 +82,9 @@ class Settings(BaseSettings):
+         insecure_values = {
+             self.jwt_secret_key.get_secret_value(),
+             self.minio_secret_key.get_secret_value(),
++            self.platform_admin_token.get_secret_value(),
+         }
+-        defaults = {"local-only-change-me", "revora-local-secret"}
++        defaults = {"local-only-change-me", "revora-local-secret", "local-only-change-me-platform"}
+         if insecure_values & defaults:
+             raise ValueError("Production requires unique JWT and MinIO secrets")
+         if self.debug:
+diff --git a/backend/app/main.py b/backend/app/main.py
+index a516454..aa7c132 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -22,6 +22,7 @@ from app.modules.finance.router import router as finance_router
+ from app.modules.integrations.router import router as integrations_router
+ from app.modules.marketing.router import router as marketing_router
+ from app.modules.sales.router import router as sales_router
++from app.modules.tenancy.router import router as tenancy_router
+ 
+ 
+ def create_app(settings: Settings | None = None) -> FastAPI:
+@@ -91,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+         return {"status": "ok", "service": settings.app_name, "environment": settings.app_env}
+ 
+     application.include_router(auth_router, prefix=settings.api_v1_prefix)
++    application.include_router(tenancy_router, prefix=settings.api_v1_prefix)
+     application.include_router(admin_router, prefix=settings.api_v1_prefix)
+     application.include_router(integrations_router, prefix=settings.api_v1_prefix)
+     application.include_router(finance_router, prefix=settings.api_v1_prefix)
+diff --git a/backend/app/modules/tenancy/dependencies.py b/backend/app/modules/tenancy/dependencies.py
+index 9c56a35..e211b7b 100644
+--- a/backend/app/modules/tenancy/dependencies.py
++++ b/backend/app/modules/tenancy/dependencies.py
+@@ -1,2 +1,39 @@
+-"""FastAPI Depends() модуля 'tenancy' (например, require_role для этого модуля).
+-Реализуется вместе с auth на шаге 'auth' (Этап 7)."""
++"""FastAPI dependencies for platform (cross-tenant) clinic provisioning.
++
++Намеренно НЕ переиспользует app/modules/auth/dependencies.py (get_current_user,
++require_roles): та цепочка целиком построена вокруг JWT, у которого внутри
++уже есть tenant_id — но создание клиники по определению происходит ДО того,
++как у неё есть хоть один тенант/пользователь/токен. Здесь — отдельный,
++гораздо более узкий контур: один статический bearer-секрет
++(PLATFORM_ADMIN_TOKEN), который знает только оператор платформы (вы), а не
++пользователи клиник. Это НЕ роль в UserRole и никак не участвует в RLS.
++"""
++
++import secrets
++from typing import Annotated
++
++from fastapi import Depends
++from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
++from sqlalchemy.ext.asyncio import AsyncSession
++
++from app.core.config import Settings, get_settings
++from app.core.database import get_db_session
++from app.core.errors import AppError
++from app.modules.tenancy.repository import TenancyRepository
++from app.modules.tenancy.service import TenancyService
++
++platform_bearer_scheme = HTTPBearer()
++SessionDependency = Annotated[AsyncSession, Depends(get_db_session)]
++
++
++async def require_platform_admin(
++    credentials: Annotated[HTTPAuthorizationCredentials, Depends(platform_bearer_scheme)],
++    settings: Annotated[Settings, Depends(get_settings)],
++) -> None:
++    expected = settings.platform_admin_token.get_secret_value()
++    if not expected or not secrets.compare_digest(credentials.credentials, expected):
++        raise AppError("FORBIDDEN", "Invalid platform admin token", 403)
++
++
++def get_tenancy_service(session: SessionDependency) -> TenancyService:
++    return TenancyService(TenancyRepository(session))
+diff --git a/backend/app/modules/tenancy/repository.py b/backend/app/modules/tenancy/repository.py
+index e9b2bd5..2a4093f 100644
+--- a/backend/app/modules/tenancy/repository.py
++++ b/backend/app/modules/tenancy/repository.py
+@@ -1,2 +1,72 @@
+-"""Repository-слой модуля 'tenancy': только доступ к БД (SQLAlchemy), без бизнес-правил.
+-Реализуется вместе с моделями на шаге 'БД' (Этап 7)."""
++"""Database operations for platform (cross-tenant) clinic provisioning.
++
++Только `tenants` не защищена RLS (нет своего tenant_id — это сам корень
++мультитенантности, см. миграцию 20260718_0001_core_tenancy_auth.py: RLS
++включена только на `branches` и `users`). Поэтому list_tenants/slug_exists
++читают её напрямую, без какого-либо tenant-контекста. А вот вставка Branch и
++User внутри create_tenant_with_owner требует `SET LOCAL app.tenant_id` ДО
++самого INSERT — иначе WITH CHECK политики их отклонит. Та же
++последовательность, что и в app/cli/create_initial_owner.py — этот
++репозиторий её просто переиспользует за HTTP-слоем, не дублирует логику.
++"""
++
++from sqlalchemy import select, text
++from sqlalchemy.ext.asyncio import AsyncSession
++
++from app.modules.auth.models import User, UserBranch, UserRole
++from app.modules.tenancy.models import Branch, Tenant
++
++
++class TenancyRepository:
++    def __init__(self, session: AsyncSession) -> None:
++        self.session = session
++
++    async def slug_exists(self, slug: str) -> bool:
++        return bool(await self.session.scalar(select(Tenant.id).where(Tenant.slug == slug)))
++
++    async def list_tenants(self) -> list[Tenant]:
++        result = await self.session.scalars(select(Tenant).order_by(Tenant.created_at.desc()))
++        return list(result)
++
++    async def _set_tenant_context(self, tenant_id: object) -> None:
++        await self.session.execute(
++            text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
++            {"tenant_id": str(tenant_id)},
++        )
++
++    async def create_tenant_with_owner(
++        self,
++        *,
++        tenant_name: str,
++        tenant_slug: str,
++        branch_name: str,
++        branch_code: str,
++        owner_email: str,
++        owner_full_name: str,
++        owner_password_hash: str,
++    ) -> Tenant:
++        tenant = Tenant(name=tenant_name, slug=tenant_slug)
++        self.session.add(tenant)
++        await self.session.flush()
++
++        await self._set_tenant_context(tenant.id)
++
++        branch = Branch(tenant_id=tenant.id, name=branch_name, code=branch_code)
++        self.session.add(branch)
++        await self.session.flush()
++
++        owner = User(
++            tenant_id=tenant.id,
++            email=owner_email,
++            full_name=owner_full_name,
++            password_hash=owner_password_hash,
++            role=UserRole.OWNER,
++            is_active=True,
++        )
++        self.session.add(owner)
++        await self.session.flush()
++
++        self.session.add(UserBranch(user_id=owner.id, branch_id=branch.id))
++        await self.session.flush()
++
++        return tenant
+diff --git a/backend/app/modules/tenancy/router.py b/backend/app/modules/tenancy/router.py
+index 5a7b9fa..0ae99cf 100644
+--- a/backend/app/modules/tenancy/router.py
++++ b/backend/app/modules/tenancy/router.py
+@@ -1,2 +1,38 @@
+-"""FastAPI router модуля 'tenancy': только HTTP — валидация входа, вызов service, сериализация ответа.
+-Регистрируется в app/main.py. Реализуется на шаге 'API' (Этап 7)."""
++"""HTTP endpoints for platform-level clinic provisioning.
++
++Зарегистрирован под /platform, а не /tenancy: это осознанный выбор — эндпоинты
++здесь работают ПОПЕРЁК тенантов (создают новые), а не внутри одного
++конкретного тенанта, как остальной API. Защищены require_platform_admin
++(см. dependencies.py), не обычной per-tenant JWT-аутентификацией.
++"""
++
++from typing import Annotated
++
++from fastapi import APIRouter, Depends, status
++
++from app.modules.tenancy.dependencies import get_tenancy_service, require_platform_admin
++from app.modules.tenancy.schemas import (
++    TenantCreateRequest,
++    TenantCreateResponse,
++    TenantListResponse,
++)
++from app.modules.tenancy.service import TenancyService
++
++router = APIRouter(
++    prefix="/platform",
++    tags=["platform"],
++    dependencies=[Depends(require_platform_admin)],
++)
++TenancyServiceDependency = Annotated[TenancyService, Depends(get_tenancy_service)]
++
++
++@router.get("/tenants", response_model=TenantListResponse)
++async def list_tenants(service: TenancyServiceDependency) -> TenantListResponse:
++    return await service.list_tenants()
++
++
++@router.post("/tenants", response_model=TenantCreateResponse, status_code=status.HTTP_201_CREATED)
++async def create_tenant(
++    payload: TenantCreateRequest, service: TenancyServiceDependency
++) -> TenantCreateResponse:
++    return await service.create_tenant(payload)
+diff --git a/backend/app/modules/tenancy/schemas.py b/backend/app/modules/tenancy/schemas.py
+index 7752512..6f8f9fe 100644
+--- a/backend/app/modules/tenancy/schemas.py
++++ b/backend/app/modules/tenancy/schemas.py
+@@ -1,2 +1,58 @@
+-"""Pydantic-схемы запросов/ответов модуля 'tenancy' (API-контракт).
+-Реализуются на шаге 'API' (Этап 7)."""
++"""API contracts for platform (cross-tenant) clinic provisioning."""
++
++from datetime import datetime
++from uuid import UUID
++
++from pydantic import BaseModel, ConfigDict, Field, field_validator
++
++
++class TenantCreateRequest(BaseModel):
++    tenant_name: str = Field(min_length=2, max_length=200)
++    tenant_slug: str = Field(min_length=2, max_length=100, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
++    branch_name: str = Field(min_length=2, max_length=200)
++    branch_code: str = Field(min_length=2, max_length=50, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
++    owner_email: str = Field(min_length=3, max_length=320)
++    owner_full_name: str = Field(min_length=2, max_length=200)
++    owner_password: str = Field(min_length=8, max_length=128)
++
++    @field_validator("tenant_name", "branch_name", "owner_full_name", mode="before")
++    @classmethod
++    def strip_text(cls, value: object) -> object:
++        return value.strip() if isinstance(value, str) else value
++
++    @field_validator("tenant_slug", "branch_code", mode="before")
++    @classmethod
++    def normalize_slug(cls, value: object) -> object:
++        return value.strip().lower() if isinstance(value, str) else value
++
++    @field_validator("owner_email", mode="before")
++    @classmethod
++    def normalize_email(cls, value: object) -> object:
++        return value.strip().lower() if isinstance(value, str) else value
++
++
++class TenantResponse(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: UUID
++    name: str
++    slug: str
++    is_active: bool
++    created_at: datetime
++    updated_at: datetime
++
++
++class TenantListResponse(BaseModel):
++    items: list[TenantResponse]
++    total: int
++
++
++class TenantCreateResponse(BaseModel):
++    """Отдельно от TenantResponse: возвращаем ещё email владельца и код
++    филиала — то, что оператор платформы вводил в форму и должен увидеть
++    в подтверждении (пароль в ответе не возвращаем — только что создан,
++    но это секрет)."""
++
++    tenant: TenantResponse
++    branch_code: str
++    owner_email: str
+diff --git a/backend/app/modules/tenancy/service.py b/backend/app/modules/tenancy/service.py
+index 5210c5a..d61c594 100644
+--- a/backend/app/modules/tenancy/service.py
++++ b/backend/app/modules/tenancy/service.py
+@@ -1,2 +1,44 @@
+-"""Service-слой модуля 'tenancy': бизнес-правила, в т.ч. ролевые ограничения сверх RLS.
+-Реализуется на шаге 'API' (Этап 7), после repository."""
++"""Business rules for platform-level clinic provisioning (cross-tenant, not
++scoped to any single tenant — this is what lets an operator create the very
++first tenant a clinic has)."""
++
++from app.core.errors import AppError
++from app.core.security import hash_password
++from app.modules.tenancy.repository import TenancyRepository
++from app.modules.tenancy.schemas import (
++    TenantCreateRequest,
++    TenantCreateResponse,
++    TenantListResponse,
++    TenantResponse,
++)
++
++
++class TenancyService:
++    def __init__(self, repository: TenancyRepository) -> None:
++        self.repository = repository
++
++    async def list_tenants(self) -> TenantListResponse:
++        tenants = await self.repository.list_tenants()
++        items = [TenantResponse.model_validate(tenant) for tenant in tenants]
++        return TenantListResponse(items=items, total=len(items))
++
++    async def create_tenant(self, payload: TenantCreateRequest) -> TenantCreateResponse:
++        if await self.repository.slug_exists(payload.tenant_slug):
++            raise AppError(
++                "TENANT_SLUG_EXISTS", "A clinic with this code already exists", 409
++            )
++
++        tenant = await self.repository.create_tenant_with_owner(
++            tenant_name=payload.tenant_name,
++            tenant_slug=payload.tenant_slug,
++            branch_name=payload.branch_name,
++            branch_code=payload.branch_code,
++            owner_email=payload.owner_email,
++            owner_full_name=payload.owner_full_name,
++            owner_password_hash=hash_password(payload.owner_password),
++        )
++        return TenantCreateResponse(
++            tenant=TenantResponse.model_validate(tenant),
++            branch_code=payload.branch_code,
++            owner_email=payload.owner_email,
++        )
+diff --git a/frontend/app/(platform)/platform/page.tsx b/frontend/app/(platform)/platform/page.tsx
+new file mode 100644
+index 0000000..92f917a
+--- /dev/null
++++ b/frontend/app/(platform)/platform/page.tsx
+@@ -0,0 +1,221 @@
++"use client";
++// Служебная страница оператора платформы: создание новых клиник (тенантов).
++// Намеренно ВНЕ /(app) — не использует useAuth()/AppLayout (те завязаны на
++// per-tenant JWT конкретной клиники), не показана в боковой навигации.
++// Доступ — отдельным статическим токеном (PLATFORM_ADMIN_TOKEN на backend),
++// не связан с UserRole/RLS. См. backend/app/modules/tenancy/dependencies.py.
++import { FormEvent, useEffect, useState } from "react";
++import { PageHeader } from "@/shared/ui";
++
++const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
++const TOKEN_KEY = "revora_platform_token";
++
++type Tenant = { id: string; name: string; slug: string; is_active: boolean; created_at: string };
++type CreateResult = { tenant: Tenant; owner_email: string; branch_code: string };
++
++async function platformApi<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
++  const headers = new Headers(init.headers);
++  headers.set("Authorization", `Bearer ${token}`);
++  if (!(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
++  const response = await fetch(`${API_URL}${path}`, { ...init, headers, cache: "no-store" });
++  if (!response.ok) {
++    let message = "Не удалось выполнить запрос";
++    try {
++      const body = await response.json();
++      message = body.error?.message || message;
++    } catch {}
++    throw new Error(message);
++  }
++  if (response.status === 204) return undefined as T;
++  return response.json();
++}
++
++export default function PlatformPage() {
++  const [token, setToken] = useState("");
++  const [unlocked, setUnlocked] = useState(false);
++
++  useEffect(() => {
++    const saved = sessionStorage.getItem(TOKEN_KEY);
++    if (saved) {
++      setToken(saved);
++      setUnlocked(true);
++    }
++  }, []);
++
++  function unlock(e: FormEvent) {
++    e.preventDefault();
++    sessionStorage.setItem(TOKEN_KEY, token);
++    setUnlocked(true);
++  }
++
++  function lock() {
++    sessionStorage.removeItem(TOKEN_KEY);
++    setToken("");
++    setUnlocked(false);
++  }
++
++  if (!unlocked) {
++    return (
++      <main className="login-page">
++        <section className="login-brand">
++          <a className="brand" href="#">REVORA</a>
++          <div>
++            <p className="eyebrow">Служебный доступ</p>
++            <h1>Управление клиниками платформы.</h1>
++            <p>Здесь создаются новые клиники (тенанты) — это не рабочее пространство сотрудников клиник, а инструмент оператора платформы.</p>
++          </div>
++          <small>Требуется PLATFORM_ADMIN_TOKEN</small>
++        </section>
++        <section className="login-panel">
++          <form className="login-card" onSubmit={unlock}>
++            <div>
++              <p className="eyebrow">Служебный вход</p>
++              <h2>Токен платформы</h2>
++              <p className="muted">Введите значение PLATFORM_ADMIN_TOKEN, заданное в переменных окружения backend.</p>
++            </div>
++            <label>Токен
++              <input type="password" value={token} onChange={e => setToken(e.target.value)} required autoComplete="off" />
++            </label>
++            <button className="primary">Продолжить</button>
++          </form>
++        </section>
++      </main>
++    );
++  }
++
++  return <PlatformDashboard token={token} onLock={lock} />;
++}
++
++function PlatformDashboard({ token, onLock }: { token: string; onLock: () => void }) {
++  const [tenants, setTenants] = useState<Tenant[] | null>(null);
++  const [loadError, setLoadError] = useState("");
++  const [error, setError] = useState("");
++  const [busy, setBusy] = useState(false);
++  const [result, setResult] = useState<CreateResult | null>(null);
++
++  const [tenantName, setTenantName] = useState("");
++  const [tenantSlug, setTenantSlug] = useState("");
++  const [branchName, setBranchName] = useState("Главный филиал");
++  const [branchCode, setBranchCode] = useState("main");
++  const [ownerEmail, setOwnerEmail] = useState("");
++  const [ownerFullName, setOwnerFullName] = useState("");
++  const [ownerPassword, setOwnerPassword] = useState("");
++
++  async function loadTenants() {
++    setLoadError("");
++    try {
++      const data = await platformApi<{ items: Tenant[]; total: number }>("/platform/tenants", token);
++      setTenants(data.items);
++    } catch (e) {
++      setLoadError(e instanceof Error ? e.message : "Не удалось загрузить список клиник");
++    }
++  }
++
++  useEffect(() => {
++    loadTenants();
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [token]);
++
++  async function submit(e: FormEvent) {
++    e.preventDefault();
++    setError("");
++    setResult(null);
++    setBusy(true);
++    try {
++      const data = await platformApi<CreateResult>("/platform/tenants", token, {
++        method: "POST",
++        body: JSON.stringify({
++          tenant_name: tenantName,
++          tenant_slug: tenantSlug,
++          branch_name: branchName,
++          branch_code: branchCode,
++          owner_email: ownerEmail,
++          owner_full_name: ownerFullName,
++          owner_password: ownerPassword,
++        }),
++      });
++      setResult(data);
++      setTenantName("");
++      setTenantSlug("");
++      setOwnerEmail("");
++      setOwnerFullName("");
++      setOwnerPassword("");
++      loadTenants();
++    } catch (err) {
++      setError(err instanceof Error ? err.message : "Не удалось создать клинику");
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  return (
++    <div style={{ maxWidth: 980, margin: "0 auto", padding: "34px 24px 60px" }}>
++      <PageHeader
++        title="Клиники платформы"
++        subtitle="Создание новых клиник (тенантов) и просмотр уже существующих"
++        action={<button className="icon-button" title="Выйти из служебного режима" onClick={onLock}>↪ Выйти</button>}
++      />
++
++      <section className="panel">
++        <h2>Новая клиника</h2>
++        <form className="form-grid user-form" onSubmit={submit}>
++          <label>Название клиники
++            <input value={tenantName} onChange={e => setTenantName(e.target.value)} required />
++          </label>
++          <label>Код клиники (slug)
++            <input value={tenantSlug} onChange={e => setTenantSlug(e.target.value.toLowerCase())} required pattern="[a-z0-9-]+" placeholder="например, dentaplus" />
++          </label>
++          <label>Филиал — название
++            <input value={branchName} onChange={e => setBranchName(e.target.value)} required />
++          </label>
++          <label>Филиал — код
++            <input value={branchCode} onChange={e => setBranchCode(e.target.value.toLowerCase())} required pattern="[a-z0-9-]+" />
++          </label>
++          <label>Почта владельца
++            <input type="email" value={ownerEmail} onChange={e => setOwnerEmail(e.target.value)} required />
++          </label>
++          <label>Имя владельца
++            <input value={ownerFullName} onChange={e => setOwnerFullName(e.target.value)} required />
++          </label>
++          <label>Пароль владельца
++            <input type="password" minLength={8} value={ownerPassword} onChange={e => setOwnerPassword(e.target.value)} required />
++          </label>
++          <button className="primary small" disabled={busy}>{busy ? "Создаём…" : "Создать клинику"}</button>
++        </form>
++        {error && <div className="error-box">{error}</div>}
++        {result && (
++          <div className="success-box">
++            Клиника «{result.tenant.name}» создана. Код клиники: <strong>{result.tenant.slug}</strong>, почта владельца: <strong>{result.owner_email}</strong>. Эти данные нужны для входа на экране /login (пароль нигде не сохраняется — сообщите его владельцу отдельно).
++          </div>
++        )}
++      </section>
++
++      <section className="panel">
++        <h2>Существующие клиники</h2>
++        {loadError && (
++          <div className="error-box">
++            {loadError} — <a href="#" onClick={e => { e.preventDefault(); onLock(); }}>выйти и ввести токен заново</a>
++          </div>
++        )}
++        <div className="table-wrap">
++          <table>
++            <thead><tr><th>Название</th><th>Код</th><th>Статус</th><th>Создана</th></tr></thead>
++            <tbody>
++              {tenants?.map(t => (
++                <tr key={t.id}>
++                  <td><strong>{t.name}</strong></td>
++                  <td>{t.slug}</td>
++                  <td><span className={t.is_active ? "badge active" : "badge"}>{t.is_active ? "Активна" : "Отключена"}</span></td>
++                  <td>{new Date(t.created_at).toLocaleDateString("ru-RU")}</td>
++                </tr>
++              ))}
++              {tenants && tenants.length === 0 && (
++                <tr><td colSpan={4} className="empty">Пока нет ни одной клиники</td></tr>
++              )}
++            </tbody>
++          </table>
++        </div>
++      </section>
++    </div>
++  );
++}

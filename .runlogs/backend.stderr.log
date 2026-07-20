@@ -1,0 +1,5 @@
+INFO:     Started server process [23776]
+INFO:     Waiting for application startup.
+2026-07-20T06:22:35+0500 | INFO | app.main | Starting Revora API in development
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
