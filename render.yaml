@@ -1,0 +1,56 @@
+services:
+  - type: web
+    name: revora-api-bekarysibrashev
+    runtime: python
+    plan: free
+    region: frankfurt
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    initialDeployHook: >-
+      python -m app.cli.create_initial_owner
+      --tenant-name "Demo Clinic"
+      --tenant-slug demo
+      --branch-name "Main Branch"
+      --branch-code main
+      --email "$DEMO_OWNER_EMAIL"
+      --full-name "Clinic Owner"
+      --password "$DEMO_OWNER_PASSWORD"
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: revora-db-bekarysibrashev
+          property: connectionString
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: MINIO_SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://revora-web-bekarysibrashev.onrender.com
+      - key: DEMO_OWNER_EMAIL
+        sync: false
+      - key: DEMO_OWNER_PASSWORD
+        sync: false
+
+  - type: web
+    name: revora-web-bekarysibrashev
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/out
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://revora-api-bekarysibrashev.onrender.com/api/v1
+
+databases:
+  - name: revora-db-bekarysibrashev
+    plan: free
+    region: frankfurt
+    postgresMajorVersion: "16"
+    databaseName: revora
+    user: revora
+    ipAllowList: []

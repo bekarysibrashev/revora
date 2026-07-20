@@ -52,6 +52,14 @@ class Settings(BaseSettings):
             raise ValueError("API_V1_PREFIX must start with '/'")
         return value
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def use_async_postgres_driver(cls, value: object) -> object:
+        """Render supplies a plain PostgreSQL URL; the app uses asyncpg."""
+        if isinstance(value, str) and value.startswith("postgresql://"):
+            return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return value
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def split_cors_origins(cls, value: object) -> object:
