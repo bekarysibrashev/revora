@@ -12,6 +12,17 @@ def test_defaults_are_suitable_for_local_development() -> None:
     assert settings.api_v1_prefix == "/api/v1"
 
 
+def test_render_postgres_url_uses_asyncpg_driver() -> None:
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql://user:password@database.example/revora",
+    )
+
+    assert settings.database_url == (
+        "postgresql+asyncpg://user:password@database.example/revora"
+    )
+
+
 def test_comma_separated_cors_origins_are_supported() -> None:
     settings = Settings(_env_file=None, cors_origins="https://one.test, https://two.test")
 
