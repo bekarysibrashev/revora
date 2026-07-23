@@ -194,3 +194,27 @@ def test_date_time_combine_reports_an_unparseable_time_value() -> None:
     assert not result.is_valid
     assert result.issues[0].code == "VALUE_TRANSFORM_FAILED"
     assert result.issues[0].field_name == "starts_at"
+
+
+def test_required_field_with_a_non_blank_default_is_not_flagged_as_missing() -> None:
+    # Used to fake a "constant" mapping value (e.g. recognition_type =
+    # "accrual" for every row) by pointing source_fields at a column name
+    # that never appears in the file, so the default always applies.
+    definition = MappingDefinition(
+        source_entity="payments",
+        target_entity="revenue_fact",
+        fields={
+            "recognition_type": FieldMappingRule(
+                source_fields=["__never_present__"],
+                required=True,
+                transform="string",
+                default="accrual",
+            ),
+        },
+    )
+    record = SourceRecord(source_entity="payments", payload={"Пациент": "Иванов"})
+
+    result = CanonicalMapper(definition).normalize(record)
+
+    assert result.is_valid
+    assert result.data["recognition_type"] == "accrual"

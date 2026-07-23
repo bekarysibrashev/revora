@@ -68,7 +68,10 @@ class CanonicalMapper:
             found, raw_value = self._find_value(normalized_headers, rule)
             if not found or self._is_blank(raw_value):
                 output[target_field] = rule.default
-                if rule.required:
+                # A non-blank default (e.g. a constant like recognition_type
+                # = "accrual") already satisfies `required` - the column
+                # itself doesn't need to exist in the source file for that.
+                if rule.required and self._is_blank(rule.default):
                     issues.append(
                         MappingIssue(
                             code="REQUIRED_FIELD_MISSING",
