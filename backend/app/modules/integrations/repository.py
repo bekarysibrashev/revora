@@ -117,6 +117,23 @@ class IntegrationRepository:
             ).order_by(MappingProfile.is_active.desc(), MappingProfile.created_at.desc())
         )).all())
 
+    async def deactivate_mapping_profile(
+        self, *, tenant_id: UUID, connection_id: UUID, mapping_profile_id: UUID
+    ) -> bool:
+        # Soft-delete: raw records / quarantine rows already reference this
+        # profile's id, so a hard delete would break that history. Marking
+        # it inactive removes it from the "available for new uploads" list.
+        result = await self.session.execute(
+            update(MappingProfile)
+            .where(
+                MappingProfile.tenant_id == tenant_id,
+                MappingProfile.connection_id == connection_id,
+                MappingProfile.id == mapping_profile_id,
+            )
+            .values(is_active=False)
+        )
+        return result.rowcount > 0
+
     async def create_sync_run(self, tenant_id: UUID, connection_id: UUID) -> SyncRun:
         run = SyncRun(
             tenant_id=tenant_id,

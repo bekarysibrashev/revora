@@ -73,6 +73,19 @@ class IntegrationService:
         items = [MappingProfileResponse.model_validate(item) for item in profiles]
         return MappingProfileListResponse(items=items, total=len(items))
 
+    async def delete_mapping_profile(
+        self, user: User, connection_id: UUID, mapping_profile_id: UUID
+    ) -> None:
+        self._require_owner(user)
+        await self._connection(user.tenant_id, connection_id)
+        deleted = await self.repository.deactivate_mapping_profile(
+            tenant_id=user.tenant_id,
+            connection_id=connection_id,
+            mapping_profile_id=mapping_profile_id,
+        )
+        if not deleted:
+            raise AppError("MAPPING_PROFILE_NOT_FOUND", "Mapping profile not found", 404)
+
     async def ingest(
         self,
         user: User,

@@ -43,6 +43,7 @@ class FakeIntegrationRepository:
         self.quarantined = []
         self.normalized = []
         self.finished = None
+        self.profile_deactivated = False
 
     async def get_connection(self, tenant_id, connection_id):
         if tenant_id == self.connection.tenant_id and connection_id == self.connection.id:
@@ -72,6 +73,16 @@ class FakeIntegrationRepository:
 
     async def finish_sync_run(self, run, **kwargs):
         self.finished = kwargs
+
+    async def deactivate_mapping_profile(self, *, tenant_id, connection_id, mapping_profile_id):
+        if (
+            tenant_id == self.profile.tenant_id
+            and connection_id == self.profile.connection_id
+            and mapping_profile_id == self.profile.id
+        ):
+            self.profile_deactivated = True
+            return True
+        return False
 
 
 def make_owner(tenant_id):
@@ -129,3 +140,36 @@ async def test_ingestion_normalizes_quarantines_and_skips_duplicates() -> None:
     assert result.records_duplicate == 1
     assert writer.writes[0]["data"] == {"external_id": "p-1", "full_name": "Иванов"}
     assert repository.finished["records_written"] == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_mapping_profile_deactivates_it() -> None:
+    tenant_id, connection_id, profile_id = uuid4(), uuid4(), uuid4()
+    definition = MappingDefinition(
+        source_entity="patients",
+        target_entity="patient",
+        fields={"external_id": FieldMappingRule(source_fields=["ID"], transform="string")},
+    )
+    repository = FakeIntegrationRepository(tenant_id, connection_id, profile_id, definition)
+    service = IntegrationService(repository, FakeCanonicalWriter())
+
+    await service.delete_mapping_profile(make_owner(tenant_id), connection_id, profile_id)
+
+    assert repository.profile_deactivated is True
+
+
+@pytest.mark.asyncio
+async def test_delete_mapping_profile_raises_when_not_found() -> None:
+    from app.core.errors import AppError
+
+    tenant_id, connection_id, profile_id = uuid4(), uuid4(), uuid4()
+    definition = MappingDefinition(
+        source_entity="patients",
+        target_entity="patient",
+        fields={"external_id": FieldMappingRule(source_fields=["ID"], transform="string")},
+    )
+    repository = FakeIntegrationRepository(tenant_id, connection_id, profile_id, definition)
+    service = IntegrationService(repository, FakeCanonicalWriter())
+
+    with pytest.raises(AppError):
+        await service.delete_mapping_profile(make_owner(tenant_id), connection_id, uuid4())

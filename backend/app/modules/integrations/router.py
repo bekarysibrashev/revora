@@ -70,6 +70,19 @@ async def create_mapping_profile(
     return await service.create_mapping_profile(user, connection_id, payload)
 
 
+@router.delete(
+    "/connections/{connection_id}/mappings/{mapping_profile_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_mapping_profile(
+    connection_id: UUID,
+    mapping_profile_id: UUID,
+    user: CurrentUser,
+    service: IntegrationServiceDependency,
+) -> None:
+    await service.delete_mapping_profile(user, connection_id, mapping_profile_id)
+
+
 @router.post(
     "/connections/{connection_id}/ingest",
     response_model=IngestionSummaryResponse,
