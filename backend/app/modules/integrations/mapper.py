@@ -40,6 +40,8 @@ class CanonicalMapper:
             "datetime": self._to_datetime,
             "integer": self._to_integer,
             "boolean": self._to_boolean,
+            # date_time_combine is handled specially in normalize() because it
+            # needs a second column's value, not just the primary one.
         }
 
     def normalize(self, record: SourceRecord) -> MappingResult:
@@ -78,7 +80,12 @@ class CanonicalMapper:
                 continue
 
             try:
-                output[target_field] = self.transforms[rule.transform](raw_value)
+                if rule.transform == "date_time_combine":
+                    output[target_field] = self._combine_date_time(
+                        normalized_headers, rule, raw_value
+                    )
+                else:
+                    output[target_field] = self.transforms[rule.transform](raw_value)
             except (InvalidOperation, TypeError, ValueError) as exc:
                 output[target_field] = None
                 issues.append(
@@ -103,6 +110,45 @@ class CanonicalMapper:
             if key in source:
                 return True, source[key]
         return False, None
+
+    def _combine_date_time(
+        self,
+        source: dict[str, object],
+        rule: FieldMappingRule,
+        date_raw_value: object,
+    ) -> datetime:
+        """Take the calendar date from the primary column and the clock time
+        from `time_source_fields` (e.g. 1С often exports "Дата" as a full
+        timestamp and "Начало"/"Окончание" as separate "HH:MM" columns)."""
+
+        date_only_value = date_raw_value
+        if isinstance(date_raw_value, str) and " " in date_raw_value.strip():
+            # The "date" column sometimes already carries a full timestamp
+            # (e.g. 1С export "04.06.2026 15:32:21") - keep only the
+            # calendar-date portion before the first space.
+            date_only_value = date_raw_value.strip().split(" ", 1)[0]
+        day = self._to_date(date_only_value)
+        if not rule.time_source_fields:
+            return datetime.combine(day, datetime.min.time())
+
+        time_found = False
+        time_raw_value: object | None = None
+        for alias in rule.time_source_fields:
+            key = alias.strip().casefold()
+            if key in source and not self._is_blank(source[key]):
+                time_found, time_raw_value = True, source[key]
+                break
+        if not time_found:
+            return datetime.combine(day, datetime.min.time())
+
+        text = str(time_raw_value).strip()
+        for pattern in ("%H:%M:%S", "%H:%M"):
+            try:
+                clock = datetime.strptime(text, pattern).time()
+                return datetime.combine(day, clock)
+            except ValueError:
+                continue
+        raise ValueError(f"expected HH:MM or HH:MM:SS, got '{text}'")
 
     @staticmethod
     def _is_blank(value: object | None) -> bool:

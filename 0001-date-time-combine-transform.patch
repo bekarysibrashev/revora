@@ -1,0 +1,181 @@
+diff --git a/backend/app/modules/integrations/mapper.py b/backend/app/modules/integrations/mapper.py
+index 422f4cd..0e70c47 100644
+--- a/backend/app/modules/integrations/mapper.py
++++ b/backend/app/modules/integrations/mapper.py
+@@ -40,6 +40,8 @@ class CanonicalMapper:
+             "datetime": self._to_datetime,
+             "integer": self._to_integer,
+             "boolean": self._to_boolean,
++            # date_time_combine is handled specially in normalize() because it
++            # needs a second column's value, not just the primary one.
+         }
+ 
+     def normalize(self, record: SourceRecord) -> MappingResult:
+@@ -78,7 +80,12 @@ class CanonicalMapper:
+                 continue
+ 
+             try:
+-                output[target_field] = self.transforms[rule.transform](raw_value)
++                if rule.transform == "date_time_combine":
++                    output[target_field] = self._combine_date_time(
++                        normalized_headers, rule, raw_value
++                    )
++                else:
++                    output[target_field] = self.transforms[rule.transform](raw_value)
+             except (InvalidOperation, TypeError, ValueError) as exc:
+                 output[target_field] = None
+                 issues.append(
+@@ -104,6 +111,45 @@ class CanonicalMapper:
+                 return True, source[key]
+         return False, None
+ 
++    def _combine_date_time(
++        self,
++        source: dict[str, object],
++        rule: FieldMappingRule,
++        date_raw_value: object,
++    ) -> datetime:
++        """Take the calendar date from the primary column and the clock time
++        from `time_source_fields` (e.g. 1С often exports "Дата" as a full
++        timestamp and "Начало"/"Окончание" as separate "HH:MM" columns)."""
++
++        date_only_value = date_raw_value
++        if isinstance(date_raw_value, str) and " " in date_raw_value.strip():
++            # The "date" column sometimes already carries a full timestamp
++            # (e.g. 1С export "04.06.2026 15:32:21") - keep only the
++            # calendar-date portion before the first space.
++            date_only_value = date_raw_value.strip().split(" ", 1)[0]
++        day = self._to_date(date_only_value)
++        if not rule.time_source_fields:
++            return datetime.combine(day, datetime.min.time())
++
++        time_found = False
++        time_raw_value: object | None = None
++        for alias in rule.time_source_fields:
++            key = alias.strip().casefold()
++            if key in source and not self._is_blank(source[key]):
++                time_found, time_raw_value = True, source[key]
++                break
++        if not time_found:
++            return datetime.combine(day, datetime.min.time())
++
++        text = str(time_raw_value).strip()
++        for pattern in ("%H:%M:%S", "%H:%M"):
++            try:
++                clock = datetime.strptime(text, pattern).time()
++                return datetime.combine(day, clock)
++            except ValueError:
++                continue
++        raise ValueError(f"expected HH:MM or HH:MM:SS, got '{text}'")
++
+     @staticmethod
+     def _is_blank(value: object | None) -> bool:
+         return value is None or (isinstance(value, str) and not value.strip())
+diff --git a/backend/app/modules/integrations/schemas.py b/backend/app/modules/integrations/schemas.py
+index b181b10..2b6bfe6 100644
+--- a/backend/app/modules/integrations/schemas.py
++++ b/backend/app/modules/integrations/schemas.py
+@@ -6,7 +6,9 @@ from uuid import UUID
+ 
+ from pydantic import BaseModel, ConfigDict, Field, field_validator
+ 
+-TransformName = Literal["string", "decimal", "date", "datetime", "integer", "boolean"]
++TransformName = Literal[
++    "string", "decimal", "date", "datetime", "integer", "boolean", "date_time_combine"
++]
+ 
+ 
+ class FieldMappingRule(BaseModel):
+@@ -16,6 +18,10 @@ class FieldMappingRule(BaseModel):
+     required: bool = False
+     transform: TransformName = "string"
+     default: object | None = None
++    # Only used when transform == "date_time_combine": the row's date portion
++    # comes from source_fields, and the time-of-day portion comes from one of
++    # these columns (e.g. a "Дата"+"Начало" pair exported as two columns by 1С).
++    time_source_fields: list[str] | None = None
+ 
+     @field_validator("source_fields")
+     @classmethod
+diff --git a/backend/tests/test_integration_mapper.py b/backend/tests/test_integration_mapper.py
+index bc22dbd..eba1b0c 100644
+--- a/backend/tests/test_integration_mapper.py
++++ b/backend/tests/test_integration_mapper.py
+@@ -1,4 +1,4 @@
+-from datetime import date
++from datetime import date, datetime
+ from decimal import Decimal
+ 
+ from app.modules.integrations.adapter import SourceRecord
+@@ -126,3 +126,71 @@ def test_mapping_rejects_a_different_source_entity() -> None:
+ 
+     assert not result.is_valid
+     assert result.issues[0].code == "SOURCE_ENTITY_MISMATCH"
++
++
++def appointment_mapping() -> MappingDefinition:
++    return MappingDefinition(
++        source_entity="appointments_export",
++        target_entity="appointment",
++        fields={
++            "starts_at": FieldMappingRule(
++                source_fields=["Дата"],
++                time_source_fields=["Начало"],
++                required=True,
++                transform="date_time_combine",
++            ),
++        },
++    )
++
++
++def test_date_time_combine_merges_a_timestamp_column_with_a_clock_column() -> None:
++    # 1С often exports a full "Дата" timestamp (which is really the record's
++    # creation time) alongside a separate "Начало"/"Окончание" clock-time
++    # column for the actual appointment slot. We want the calendar date from
++    # the first and the time-of-day from the second.
++    record = SourceRecord(
++        source_entity="appointments_export",
++        payload={"Дата": "04.06.2026 15:32:21", "Начало": "15:27"},
++    )
++
++    result = CanonicalMapper(appointment_mapping()).normalize(record)
++
++    assert result.is_valid
++    assert result.data["starts_at"] == datetime(2026, 6, 4, 15, 27)
++
++
++def test_date_time_combine_accepts_a_plain_date_source_column() -> None:
++    record = SourceRecord(
++        source_entity="appointments_export",
++        payload={"Дата": "04.06.2026", "Начало": "09:05:00"},
++    )
++
++    result = CanonicalMapper(appointment_mapping()).normalize(record)
++
++    assert result.is_valid
++    assert result.data["starts_at"] == datetime(2026, 6, 4, 9, 5)
++
++
++def test_date_time_combine_falls_back_to_midnight_when_time_column_missing() -> None:
++    record = SourceRecord(
++        source_entity="appointments_export",
++        payload={"Дата": "04.06.2026"},
++    )
++
++    result = CanonicalMapper(appointment_mapping()).normalize(record)
++
++    assert result.is_valid
++    assert result.data["starts_at"] == datetime(2026, 6, 4, 0, 0)
++
++
++def test_date_time_combine_reports_an_unparseable_time_value() -> None:
++    record = SourceRecord(
++        source_entity="appointments_export",
++        payload={"Дата": "04.06.2026", "Начало": "не время"},
++    )
++
++    result = CanonicalMapper(appointment_mapping()).normalize(record)
++
++    assert not result.is_valid
++    assert result.issues[0].code == "VALUE_TRANSFORM_FAILED"
++    assert result.issues[0].field_name == "starts_at"

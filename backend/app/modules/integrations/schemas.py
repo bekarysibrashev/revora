@@ -6,7 +6,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-TransformName = Literal["string", "decimal", "date", "datetime", "integer", "boolean"]
+TransformName = Literal[
+    "string", "decimal", "date", "datetime", "integer", "boolean", "date_time_combine"
+]
 
 
 class FieldMappingRule(BaseModel):
@@ -16,6 +18,10 @@ class FieldMappingRule(BaseModel):
     required: bool = False
     transform: TransformName = "string"
     default: object | None = None
+    # Only used when transform == "date_time_combine": the row's date portion
+    # comes from source_fields, and the time-of-day portion comes from one of
+    # these columns (e.g. a "Дата"+"Начало" pair exported as two columns by 1С).
+    time_source_fields: list[str] | None = None
 
     @field_validator("source_fields")
     @classmethod

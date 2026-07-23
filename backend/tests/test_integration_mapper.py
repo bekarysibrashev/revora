@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from app.modules.integrations.adapter import SourceRecord
@@ -126,3 +126,71 @@ def test_mapping_rejects_a_different_source_entity() -> None:
 
     assert not result.is_valid
     assert result.issues[0].code == "SOURCE_ENTITY_MISMATCH"
+
+
+def appointment_mapping() -> MappingDefinition:
+    return MappingDefinition(
+        source_entity="appointments_export",
+        target_entity="appointment",
+        fields={
+            "starts_at": FieldMappingRule(
+                source_fields=["Дата"],
+                time_source_fields=["Начало"],
+                required=True,
+                transform="date_time_combine",
+            ),
+        },
+    )
+
+
+def test_date_time_combine_merges_a_timestamp_column_with_a_clock_column() -> None:
+    # 1С often exports a full "Дата" timestamp (which is really the record's
+    # creation time) alongside a separate "Начало"/"Окончание" clock-time
+    # column for the actual appointment slot. We want the calendar date from
+    # the first and the time-of-day from the second.
+    record = SourceRecord(
+        source_entity="appointments_export",
+        payload={"Дата": "04.06.2026 15:32:21", "Начало": "15:27"},
+    )
+
+    result = CanonicalMapper(appointment_mapping()).normalize(record)
+
+    assert result.is_valid
+    assert result.data["starts_at"] == datetime(2026, 6, 4, 15, 27)
+
+
+def test_date_time_combine_accepts_a_plain_date_source_column() -> None:
+    record = SourceRecord(
+        source_entity="appointments_export",
+        payload={"Дата": "04.06.2026", "Начало": "09:05:00"},
+    )
+
+    result = CanonicalMapper(appointment_mapping()).normalize(record)
+
+    assert result.is_valid
+    assert result.data["starts_at"] == datetime(2026, 6, 4, 9, 5)
+
+
+def test_date_time_combine_falls_back_to_midnight_when_time_column_missing() -> None:
+    record = SourceRecord(
+        source_entity="appointments_export",
+        payload={"Дата": "04.06.2026"},
+    )
+
+    result = CanonicalMapper(appointment_mapping()).normalize(record)
+
+    assert result.is_valid
+    assert result.data["starts_at"] == datetime(2026, 6, 4, 0, 0)
+
+
+def test_date_time_combine_reports_an_unparseable_time_value() -> None:
+    record = SourceRecord(
+        source_entity="appointments_export",
+        payload={"Дата": "04.06.2026", "Начало": "не время"},
+    )
+
+    result = CanonicalMapper(appointment_mapping()).normalize(record)
+
+    assert not result.is_valid
+    assert result.issues[0].code == "VALUE_TRANSFORM_FAILED"
+    assert result.issues[0].field_name == "starts_at"
