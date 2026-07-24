@@ -56,7 +56,19 @@ async def receive_kcell_callback(
     required = ("type", "user", "phone", "start", "duration", "callid", "status")
     if any(not values.get(field) for field in required):
         raise AppError("INVALID_KCELL_PAYLOAD", "Kcell request has required fields missing", 400)
-    tenant = await session.scalar(select(Tenant).where(Tenant.slug == settings.kcell_tenant_slug, Tenant.is_active.is_(True)))
+    tenant = await session.scalar(
+        select(Tenant).where(
+            Tenant.slug == settings.kcell_tenant_slug, Tenant.is_active.is_(True)
+        )
+    )
+    # The first Render deployment may have created a tenant with a custom slug.
+    # A single-clinic deployment is unambiguous, so accept its only active tenant.
+    if tenant is None:
+        active_tenants = list(
+            (await session.scalars(select(Tenant).where(Tenant.is_active.is_(True)))).all()
+        )
+        if len(active_tenants) == 1:
+            tenant = active_tenants[0]
     if tenant is None:
         raise AppError("KCELL_TENANT_NOT_FOUND", "Kcell tenant is not configured", 503)
     await session.execute(text("SELECT set_config('app.tenant_id', :tenant_id, true)"), {"tenant_id": str(tenant.id)})
