@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=15, ge=1, le=1440)
     refresh_token_expire_days: int = Field(default=30, ge=1, le=365)
 
+    # Kcell sends this value in every webhook request. It is set only in Render.
+    kcell_crm_token: SecretStr = SecretStr("")
+    kcell_tenant_slug: str = "demo"
+
     # Отдельный секрет для /platform/* (создание новых клиник) — не JWT, не
     # per-tenant роль. Видит только оператор платформы. Та же логика защиты
     # от дефолтного значения в проде, что и у остальных секретов ниже.

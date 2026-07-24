@@ -45,6 +45,8 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     duration_seconds: Mapped[int | None]
     outcome: Mapped[str | None] = mapped_column(String(50))
+    external_user: Mapped[str | None] = mapped_column(String(150), index=True)
+    recording_url: Mapped[str | None] = mapped_column(Text)
 
 
 class ServiceDirection(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):

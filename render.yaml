@@ -36,6 +36,10 @@ services:
         sync: false
       - key: DEMO_OWNER_PASSWORD
         sync: false
+      - key: KCELL_CRM_TOKEN
+        sync: false
+      - key: KCELL_TENANT_SLUG
+        value: demo
 
   - type: web
     name: revora-web-bekarysibrashev

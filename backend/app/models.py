@@ -3,6 +3,7 @@
 from app.modules.auth.models import RefreshToken, User, UserBranch
 from app.modules.admin.models import AuditLog
 from app.modules.ai.models import AIClassificationFeedback, AIInsight, AIInsightRead
+from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityRuleSet
 from app.modules.doctors.models import Doctor, DoctorCompensationRule, DoctorRating
 from app.modules.finance.models import (
     AccountBalance, BankStatementUpload, CashFlowFact, ExpenseCategory, ExpenseFact,
@@ -18,6 +19,7 @@ from app.modules.integrations.models import (
 )
 from app.modules.marketing.models import AttributionFact, MarketingSpendFact
 from app.modules.sales.models import Appointment, Call, Lead, Patient, ServiceDirection, TreatmentPlan
+from app.modules.kcell.models import KcellWebhookReceipt
 from app.modules.tenancy.models import Branch, Tenant
 
 __all__ = [name for name in globals() if not name.startswith("_")]
