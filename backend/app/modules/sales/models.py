@@ -46,6 +46,7 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     duration_seconds: Mapped[int | None]
     outcome: Mapped[str | None] = mapped_column(String(50))
     external_user: Mapped[str | None] = mapped_column(String(150), index=True)
+    phone_masked: Mapped[str | None] = mapped_column(String(30))
     recording_url: Mapped[str | None] = mapped_column(Text)
 
 

@@ -28,6 +28,11 @@ def _parse_start(value: str) -> datetime:
         raise AppError("INVALID_KCELL_PAYLOAD", "Invalid Kcell call start time", 400) from exc
 
 
+def _mask_phone(value: str) -> str:
+    digits = "".join(character for character in value if character.isdigit())
+    return f"***{digits[-4:]}" if len(digits) >= 4 else "***"
+
+
 @router.post("")
 @router.post("/history")
 async def receive_kcell_callback(
@@ -74,7 +79,7 @@ async def receive_kcell_callback(
     await session.execute(text("SELECT set_config('app.tenant_id', :tenant_id, true)"), {"tenant_id": str(tenant.id)})
     call = await session.scalar(select(Call).where(Call.tenant_id == tenant.id, Call.external_id == str(values["callid"])))
     if call is None:
-        call = Call(tenant_id=tenant.id, external_id=str(values["callid"]), phone_hash=phone_hash(str(values["phone"])), direction=str(values["type"]), started_at=_parse_start(str(values["start"])), duration_seconds=int(values["duration"]), outcome=str(values["status"]), external_user=str(values["user"]), recording_url=str(values.get("link") or "") or None)
+        call = Call(tenant_id=tenant.id, external_id=str(values["callid"]), phone_hash=phone_hash(str(values["phone"])), phone_masked=_mask_phone(str(values["phone"])), direction=str(values["type"]), started_at=_parse_start(str(values["start"])), duration_seconds=int(values["duration"]), outcome=str(values["status"]), external_user=str(values["user"]), recording_url=str(values.get("link") or "") or None)
         session.add(call)
         await session.flush()
         rules = await session.scalar(select(CallQualityRuleSet).where(CallQualityRuleSet.tenant_id == tenant.id, CallQualityRuleSet.is_active.is_(True)).order_by(CallQualityRuleSet.version.desc()))
@@ -83,6 +88,7 @@ async def receive_kcell_callback(
     else:
         call.duration_seconds = int(values["duration"])
         call.outcome = str(values["status"])
+        call.phone_masked = _mask_phone(str(values["phone"]))
         call.recording_url = str(values.get("link") or "") or call.recording_url
     payload = {key: value for key, value in values.items() if key != "crm_token"}
     receipt = await session.scalar(select(KcellWebhookReceipt).where(KcellWebhookReceipt.tenant_id == tenant.id, KcellWebhookReceipt.call_id == str(values["callid"]), KcellWebhookReceipt.command == "history"))

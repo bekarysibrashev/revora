@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityRuleSet
-from app.modules.ai.call_quality.schemas import CallQualityStatusResponse, RuleSetRequest, RuleSetResponse
+from app.modules.ai.call_quality.schemas import CallListItem, CallListResponse, CallQualityStatusResponse, RuleSetRequest, RuleSetResponse
 from app.modules.auth.models import User, UserRole
 from app.modules.sales.models import Call
 
@@ -36,6 +36,40 @@ class CallQualityService:
         self.session.add(item)
         await self.session.flush()
         return self._response(item)
+
+    async def list_calls(self, user: User, limit: int) -> CallListResponse:
+        self._owner(user)
+        statement = (
+            select(Call, CallQualityAnalysis)
+            .outerjoin(
+                CallQualityAnalysis,
+                (CallQualityAnalysis.call_id == Call.id)
+                & (CallQualityAnalysis.tenant_id == user.tenant_id),
+            )
+            .where(Call.tenant_id == user.tenant_id)
+            .order_by(Call.started_at.desc())
+            .limit(limit)
+        )
+        rows = (await self.session.execute(statement)).all()
+        items = [
+            CallListItem(
+                id=call.id,
+                started_at=call.started_at,
+                direction=call.direction,
+                employee=call.external_user,
+                phone_masked=call.phone_masked,
+                duration_seconds=call.duration_seconds,
+                outcome=call.outcome,
+                recording_url=call.recording_url,
+                analysis_status=analysis.status if analysis else None,
+                score=analysis.score if analysis else None,
+            )
+            for call, analysis in rows
+        ]
+        total = await self.session.scalar(
+            select(func.count()).select_from(Call).where(Call.tenant_id == user.tenant_id)
+        ) or 0
+        return CallListResponse(items=items, total=total)
 
     @staticmethod
     def _response(item: CallQualityRuleSet) -> RuleSetResponse:

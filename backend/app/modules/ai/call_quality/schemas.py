@@ -31,3 +31,21 @@ class CallQualityStatusResponse(BaseModel):
     calls_received: int
     analyses_ready: int
     integration_status: str
+
+
+class CallListItem(BaseModel):
+    id: UUID
+    started_at: datetime
+    direction: str
+    employee: str | None
+    phone_masked: str | None
+    duration_seconds: int | None
+    outcome: str | None
+    recording_url: str | None
+    analysis_status: str | None
+    score: int | None
+
+
+class CallListResponse(BaseModel):
+    items: list[CallListItem]
+    total: int
