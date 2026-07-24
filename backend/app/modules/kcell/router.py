@@ -28,8 +28,9 @@ def _parse_start(value: str) -> datetime:
         raise AppError("INVALID_KCELL_PAYLOAD", "Invalid Kcell call start time", 400) from exc
 
 
+@router.post("")
 @router.post("/history")
-async def receive_history(
+async def receive_kcell_callback(
     request: Request,
     session: Session,
     settings: Annotated[Settings, Depends(get_settings)],
@@ -39,11 +40,19 @@ async def receive_history(
     values = {key: items[-1] for key, items in parse_qs(raw_body, keep_blank_values=True).items()}
     if not values and request.headers.get("content-type", "").startswith("application/json"):
         values = await request.json()
-    if values.get("cmd") != "history":
-        raise AppError("INVALID_KCELL_COMMAND", "Expected Kcell history command", 400)
     expected_token = settings.kcell_crm_token.get_secret_value()
     if not expected_token or not hmac.compare_digest(str(values.get("crm_token", "")), expected_token):
         raise AppError("INVALID_KCELL_TOKEN", "Invalid Kcell token", 401)
+    command = str(values.get("cmd", ""))
+    # The Kcell CRM address is shared by all enabled scenarios. These two
+    # scenarios are enabled by default in the Kcell panel, so acknowledge them
+    # even though Revora does not yet use the live pop-up card functionality.
+    if command == "event":
+        return {"status": "ok"}
+    if command == "contact":
+        return {"contact_name": "", "responsible": ""}
+    if command != "history":
+        raise AppError("INVALID_KCELL_COMMAND", "Unsupported Kcell command", 400)
     required = ("type", "user", "phone", "start", "duration", "callid", "status")
     if any(not values.get(field) for field in required):
         raise AppError("INVALID_KCELL_PAYLOAD", "Kcell request has required fields missing", 400)
