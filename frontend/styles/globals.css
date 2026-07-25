@@ -20,3 +20,41 @@
 @media(max-width:1050px){.metric-grid{grid-template-columns:1fr 1fr}.two-col{grid-template-columns:1fr}.user-form{grid-template-columns:1fr 1fr}.operational{grid-template-columns:1fr 1fr}}
 @media(max-width:760px){.login-page{grid-template-columns:1fr}.login-brand{display:none}.app-shell{display:block}.sidebar{position:fixed;left:-260px;width:238px;transition:left .2s}.sidebar.open{left:0}.backdrop{display:block;position:fixed;inset:0;background:#0008;border:0;z-index:25}.mobile-only{display:block}.topbar{padding:0 15px}.status{display:none}.content{padding:24px 15px}.page-header{align-items:flex-start;flex-direction:column}.metric-grid,.metric-grid.three,.report-grid{grid-template-columns:1fr 1fr}.form-grid,.user-form{grid-template-columns:1fr}.import-result{align-items:flex-start;flex-direction:column;gap:6px}}
 @media(max-width:500px){.metric-grid,.metric-grid.three,.report-grid{grid-template-columns:1fr}.filters{width:100%}.filters label{flex:1}.filters input{width:100%}.top-title small{display:none}.operational,.status-list{grid-template-columns:1fr 1fr}.inline-form{flex-direction:column}.inline-form input{min-width:0}}
+
+.analytics-tabs{margin-top:-8px}
+.health-badge{display:inline-flex;align-items:center;width:max-content;padding:5px 8px;border-radius:999px;background:#eef0ec;color:var(--muted);font-size:9px;font-style:normal;font-weight:800;letter-spacing:.02em;white-space:nowrap}
+.health-badge.ready{background:#e4f2e9;color:#216643}
+.health-badge.stale,.health-badge.warning{background:#f7eedc;color:#8a5b11}
+.health-badge.empty,.health-badge.critical{background:#fae9e6;color:#9a3831}
+.health-badge.unknown{background:#eef0ec;color:#656a64}
+.quality-issues{display:grid;gap:9px}
+.quality-issue{display:flex;align-items:center;justify-content:space-between;gap:18px;border:1px solid var(--line);border-left:3px solid #c49139;border-radius:8px;padding:15px 17px}
+.quality-issue.critical{border-left-color:var(--bad)}
+.quality-issue>div{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px 10px}
+.quality-issue strong{font-size:12px}
+.quality-issue p{grid-column:1/-1;margin:0;color:var(--muted);font-size:11px}
+.quality-issue>b{font-size:22px;font-variant-numeric:tabular-nums}
+.quality-empty{display:flex;align-items:center;gap:12px;padding:18px;border-radius:8px;background:#edf6f1;color:#285f48}
+.quality-empty>span{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#d5ebdf;font-weight:900}
+.quality-empty strong{font-size:12px}
+.quality-empty p{margin:4px 0 0;font-size:11px}
+.connection-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.connection-card{display:flex;flex-direction:column;gap:6px;padding:15px;border:1px solid var(--line);border-radius:8px}
+.connection-card>span{color:var(--brand);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
+.connection-card>strong{font-size:12px}
+.connection-card>small{color:var(--muted);font-size:10px}
+.metric-catalog{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.metric-definition{background:#fff;border:1px solid var(--line);border-radius:10px;padding:20px}
+.metric-definition-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.metric-definition-head>span{color:var(--brand);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
+.metric-definition h2{font-size:16px;margin:14px 0 7px}
+.metric-definition>p{min-height:34px;margin:0;color:var(--muted);font-size:11px;line-height:1.55}
+.formula{margin:15px 0;padding:12px;background:var(--canvas);border-radius:7px}
+.formula small,.formula strong{display:block}
+.formula small{margin-bottom:5px;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.07em}
+.formula strong{font-size:11px;line-height:1.45}
+.dataset-chips{display:flex;flex-wrap:wrap;gap:6px}
+.dataset-chips span{padding:5px 7px;border-radius:5px;background:var(--brand-soft);color:var(--brand);font-size:9px;font-weight:700}
+.dataset-chips span.missing{background:#fae9e6;color:#9a3831;text-decoration:line-through}
+@media(max-width:900px){.connection-grid{grid-template-columns:1fr 1fr}.metric-catalog{grid-template-columns:1fr}}
+@media(max-width:600px){.connection-grid{grid-template-columns:1fr}.quality-issue{align-items:flex-start}.quality-issue>div{display:flex;flex-direction:column;align-items:flex-start}}

@@ -10,4 +10,4 @@ export function Metric({ label, value, note, tone }: { label: string; value: str
 export function DataState({ loading, error, children }: { loading: boolean; error: unknown; children: ReactNode }) { if (loading) return <div className="panel center-state">Собираем показатели…</div>; if (error) return <div className="panel error-box">{error instanceof Error ? error.message : "Не удалось загрузить данные"}</div>; return <>{children}</>; }
 export function AsOf({ value }: { value?: string | null }) { return <p className="as-of">Данные актуальны на: {value ? new Date(value).toLocaleString("ru-RU") : "нет загруженных данных"}</p>; }
 export function money(value: string | number | null | undefined) { return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "KZT", maximumFractionDigits: 0 }).format(Number(value || 0)); }
-export function percent(value: string | number | null | undefined) { return `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`; }
+export function percent(value: string | number | null | undefined) { return `${(Number(value || 0) * 100).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`; }

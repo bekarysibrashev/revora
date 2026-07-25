@@ -15,6 +15,7 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestIdMiddleware
 from app.core.errors import AppError
 from app.modules.admin.router import router as admin_router
+from app.modules.analytics.router import router as analytics_router
 from app.modules.auth.router import router as auth_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.ai.call_quality.router import router as call_quality_router
@@ -96,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(auth_router, prefix=settings.api_v1_prefix)
     application.include_router(tenancy_router, prefix=settings.api_v1_prefix)
     application.include_router(admin_router, prefix=settings.api_v1_prefix)
+    application.include_router(analytics_router, prefix=settings.api_v1_prefix)
     application.include_router(integrations_router, prefix=settings.api_v1_prefix)
     application.include_router(finance_router, prefix=settings.api_v1_prefix)
     application.include_router(sales_router, prefix=settings.api_v1_prefix)
