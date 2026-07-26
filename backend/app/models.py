@@ -20,6 +20,8 @@ from app.modules.integrations.models import (
 from app.modules.marketing.models import AttributionFact, MarketingSpendFact
 from app.modules.sales.models import Appointment, Call, Lead, Patient, ServiceDirection, TreatmentPlan
 from app.modules.kcell.models import KcellWebhookReceipt
+from app.modules.losses.models import LossOpportunity
+from app.modules.ml.models import MLDatasetSnapshot, MLExperiment, MLModelVersion, MLPrediction
 from app.modules.tenancy.models import Branch, Tenant
 
 __all__ = [name for name in globals() if not name.startswith("_")]

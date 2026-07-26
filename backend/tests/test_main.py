@@ -95,3 +95,7 @@ def test_domain_analytics_routes_are_in_openapi() -> None:
     assert "/api/v1/dashboard/ceo" in paths
     assert "/api/v1/analytics/quality" in paths
     assert "/api/v1/analytics/metrics" in paths
+    assert "/api/v1/losses/map" in paths
+    assert "/api/v1/losses/refresh" in paths
+    assert "/api/v1/ml/no-show/readiness" in paths
+    assert "/api/v1/ml/no-show/snapshots" in paths
