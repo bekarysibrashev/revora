@@ -44,10 +44,19 @@ class FakeMetaClient:
                 impressions=1000,
                 reach=700,
                 clicks=50,
+                unique_clicks=45,
                 link_clicks=40,
+                outbound_clicks=35,
+                landing_page_views=30,
+                leads=4,
+                purchases=0,
                 conversations_started=5,
                 messaging_connections=6,
+                video_plays=100,
+                video_thruplays=20,
                 actions=[],
+                action_values=[],
+                outbound_clicks_raw=[],
             )
         ]
 
@@ -63,7 +72,9 @@ class FakeMetaRepository:
         self.rows.extend(rows)
         return len(rows)
 
-    async def meta_campaign_totals(self, tenant_id, date_from, date_to):
+    async def meta_campaign_totals(
+        self, tenant_id, date_from, date_to, account_external_id=None
+    ):
         return [
             MetaCampaignTotals(
                 account_external_id="act_1",
@@ -74,9 +85,16 @@ class FakeMetaRepository:
                 spend=Decimal("100"),
                 impressions=2000,
                 clicks=100,
+                unique_clicks=90,
                 link_clicks=80,
+                outbound_clicks=70,
+                landing_page_views=60,
+                leads=10,
+                purchases=1,
                 conversations_started=20,
                 messaging_connections=22,
+                video_plays=500,
+                video_thruplays=100,
             )
         ]
 
@@ -120,6 +138,7 @@ def test_meta_client_extracts_conversations_from_actions() -> None:
 
     assert row.spend == Decimal("10.13")
     assert row.link_clicks == 31
+    assert row.unique_clicks == 0
     assert row.conversations_started == 7
     assert row.messaging_connections == 8
 

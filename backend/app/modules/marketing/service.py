@@ -10,6 +10,7 @@ from app.modules.marketing.schemas import (
     MarketingOverviewResponse,
     MarketingSourcePerformance,
     MetaAdsAccountResponse,
+    MetaAccountPerformance,
     MetaAdsOverviewResponse,
     MetaAdsStatusResponse,
     MetaAdsSyncResponse,
@@ -119,12 +120,29 @@ class MarketingService:
         )
 
     async def meta_overview(
-        self, user: User, date_from: date, date_to: date
+        self,
+        user: User,
+        date_from: date,
+        date_to: date,
+        account_id: str | None = None,
     ) -> MetaAdsOverviewResponse:
         self._require_marketing_role(user)
         self._validate_dates(date_from, date_to, maximum_days=366)
-        rows = await self.repository.meta_campaign_totals(
-            user.tenant_id, date_from, date_to
+        all_rows = await self.repository.meta_campaign_totals(
+            user.tenant_id, date_from, date_to, None
+        )
+        accounts = await self.repository.list_meta_accounts(user.tenant_id)
+        known_accounts = {item.external_account_id for item in accounts}
+        if account_id and account_id not in known_accounts:
+            raise AppError(
+                "META_ACCOUNT_NOT_FOUND",
+                "The selected Meta Ads account has no data in this tenant",
+                404,
+            )
+        rows = (
+            [row for row in all_rows if row.account_external_id == account_id]
+            if account_id
+            else all_rows
         )
         currencies = {row.currency for row in rows}
         if len(currencies) > 1:
@@ -143,9 +161,16 @@ class MarketingService:
                 spend=row.spend,
                 impressions=row.impressions,
                 clicks=row.clicks,
+                unique_clicks=row.unique_clicks,
                 link_clicks=row.link_clicks,
+                outbound_clicks=row.outbound_clicks,
+                landing_page_views=row.landing_page_views,
+                leads=row.leads,
+                purchases=row.purchases,
                 conversations_started=row.conversations_started,
                 messaging_connections=row.messaging_connections,
+                video_plays=row.video_plays,
+                video_thruplays=row.video_thruplays,
                 ctr=self._ratio(row.clicks, row.impressions),
                 cpc=self._ratio(row.spend, row.clicks),
                 cost_per_conversation=self._ratio(
@@ -157,18 +182,67 @@ class MarketingService:
         total_spend = sum((row.spend for row in rows), Decimal("0"))
         impressions = sum(row.impressions for row in rows)
         clicks = sum(row.clicks for row in rows)
+        unique_clicks = sum(row.unique_clicks for row in rows)
+        link_clicks = sum(row.link_clicks for row in rows)
+        outbound_clicks = sum(row.outbound_clicks for row in rows)
+        landing_page_views = sum(row.landing_page_views for row in rows)
+        leads = sum(row.leads for row in rows)
+        purchases = sum(row.purchases for row in rows)
         conversations = sum(row.conversations_started for row in rows)
-        accounts = await self.repository.list_meta_accounts(user.tenant_id)
+        messaging_connections = sum(row.messaging_connections for row in rows)
+        video_plays = sum(row.video_plays for row in rows)
+        video_thruplays = sum(row.video_thruplays for row in rows)
+        account_groups: dict[str, list] = {}
+        for row in all_rows:
+            account_groups.setdefault(row.account_external_id, []).append(row)
+        account_performance = []
+        for external_id, account_rows in account_groups.items():
+            account_spend = sum((row.spend for row in account_rows), Decimal("0"))
+            account_impressions = sum(row.impressions for row in account_rows)
+            account_clicks = sum(row.clicks for row in account_rows)
+            account_conversations = sum(
+                row.conversations_started for row in account_rows
+            )
+            account_performance.append(
+                MetaAccountPerformance(
+                    account_external_id=external_id,
+                    account_name=account_rows[0].account_name,
+                    currency=account_rows[0].currency,
+                    spend=account_spend,
+                    impressions=account_impressions,
+                    clicks=account_clicks,
+                    conversations_started=account_conversations,
+                    leads=sum(row.leads for row in account_rows),
+                    ctr=self._ratio(account_clicks, account_impressions),
+                    cpc=self._ratio(account_spend, account_clicks),
+                    cost_per_conversation=self._ratio(
+                        account_spend, account_conversations
+                    ),
+                )
+            )
         timestamps = [item.last_synced_at for item in accounts if item.last_synced_at]
         return MetaAdsOverviewResponse(
             total_spend=total_spend,
             currency=next(iter(currencies)) if currencies else None,
             impressions=impressions,
             clicks=clicks,
+            unique_clicks=unique_clicks,
+            link_clicks=link_clicks,
+            outbound_clicks=outbound_clicks,
+            landing_page_views=landing_page_views,
+            leads=leads,
+            purchases=purchases,
             conversations_started=conversations,
+            messaging_connections=messaging_connections,
+            video_plays=video_plays,
+            video_thruplays=video_thruplays,
             ctr=self._ratio(clicks, impressions),
             cpc=self._ratio(total_spend, clicks),
             cost_per_conversation=self._ratio(total_spend, conversations),
+            selected_account_id=account_id,
+            accounts=sorted(
+                account_performance, key=lambda item: item.spend, reverse=True
+            ),
             campaigns=campaigns,
             date_from=date_from,
             date_to=date_to,

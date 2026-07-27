@@ -34,9 +34,16 @@ class MetaCampaignTotals:
     spend: Decimal
     impressions: int
     clicks: int
+    unique_clicks: int
     link_clicks: int
+    outbound_clicks: int
+    landing_page_views: int
+    leads: int
+    purchases: int
     conversations_started: int
     messaging_connections: int
+    video_plays: int
+    video_thruplays: int
 
 
 class MarketingRepository:
@@ -133,10 +140,19 @@ class MarketingRepository:
                 "impressions": row.impressions,
                 "reach": row.reach,
                 "clicks": row.clicks,
+                "unique_clicks": row.unique_clicks,
                 "link_clicks": row.link_clicks,
+                "outbound_clicks": row.outbound_clicks,
+                "landing_page_views": row.landing_page_views,
+                "leads": row.leads,
+                "purchases": row.purchases,
                 "conversations_started": row.conversations_started,
                 "messaging_connections": row.messaging_connections,
+                "video_plays": row.video_plays,
+                "video_thruplays": row.video_thruplays,
                 "actions": row.actions,
+                "action_values": row.action_values,
+                "outbound_clicks_raw": row.outbound_clicks_raw,
             }
             for row in rows
         ]
@@ -154,10 +170,19 @@ class MarketingRepository:
                 "impressions": statement.excluded.impressions,
                 "reach": statement.excluded.reach,
                 "clicks": statement.excluded.clicks,
+                "unique_clicks": statement.excluded.unique_clicks,
                 "link_clicks": statement.excluded.link_clicks,
+                "outbound_clicks": statement.excluded.outbound_clicks,
+                "landing_page_views": statement.excluded.landing_page_views,
+                "leads": statement.excluded.leads,
+                "purchases": statement.excluded.purchases,
                 "conversations_started": statement.excluded.conversations_started,
                 "messaging_connections": statement.excluded.messaging_connections,
+                "video_plays": statement.excluded.video_plays,
+                "video_thruplays": statement.excluded.video_thruplays,
                 "actions": statement.excluded.actions,
+                "action_values": statement.excluded.action_values,
+                "outbound_clicks_raw": statement.excluded.outbound_clicks_raw,
                 "updated_at": func.now(),
             },
         )
@@ -176,11 +201,14 @@ class MarketingRepository:
         )
 
     async def meta_campaign_totals(
-        self, tenant_id: UUID, date_from: date, date_to: date
+        self,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        account_external_id: str | None = None,
     ) -> list[MetaCampaignTotals]:
-        rows = (
-            await self.session.execute(
-                select(
+        statement = (
+            select(
                     MetaAdsAccount.external_account_id,
                     MetaAdsAccount.name,
                     MetaAdsAccount.currency,
@@ -189,10 +217,17 @@ class MarketingRepository:
                     func.sum(MetaCampaignDailyMetric.spend),
                     func.sum(MetaCampaignDailyMetric.impressions),
                     func.sum(MetaCampaignDailyMetric.clicks),
+                    func.sum(MetaCampaignDailyMetric.unique_clicks),
                     func.sum(MetaCampaignDailyMetric.link_clicks),
+                    func.sum(MetaCampaignDailyMetric.outbound_clicks),
+                    func.sum(MetaCampaignDailyMetric.landing_page_views),
+                    func.sum(MetaCampaignDailyMetric.leads),
+                    func.sum(MetaCampaignDailyMetric.purchases),
                     func.sum(MetaCampaignDailyMetric.conversations_started),
                     func.sum(MetaCampaignDailyMetric.messaging_connections),
-                )
+                    func.sum(MetaCampaignDailyMetric.video_plays),
+                    func.sum(MetaCampaignDailyMetric.video_thruplays),
+            )
                 .join(
                     MetaAdsAccount,
                     MetaAdsAccount.id == MetaCampaignDailyMetric.account_id,
@@ -210,8 +245,12 @@ class MarketingRepository:
                     MetaCampaignDailyMetric.campaign_name,
                 )
                 .order_by(func.sum(MetaCampaignDailyMetric.spend).desc())
+        )
+        if account_external_id:
+            statement = statement.where(
+                MetaAdsAccount.external_account_id == account_external_id
             )
-        ).all()
+        rows = (await self.session.execute(statement)).all()
         return [
             MetaCampaignTotals(
                 account_external_id=row[0],
@@ -222,9 +261,16 @@ class MarketingRepository:
                 spend=Decimal(row[5] or 0),
                 impressions=int(row[6] or 0),
                 clicks=int(row[7] or 0),
-                link_clicks=int(row[8] or 0),
-                conversations_started=int(row[9] or 0),
-                messaging_connections=int(row[10] or 0),
+                unique_clicks=int(row[8] or 0),
+                link_clicks=int(row[9] or 0),
+                outbound_clicks=int(row[10] or 0),
+                landing_page_views=int(row[11] or 0),
+                leads=int(row[12] or 0),
+                purchases=int(row[13] or 0),
+                conversations_started=int(row[14] or 0),
+                messaging_connections=int(row[15] or 0),
+                video_plays=int(row[16] or 0),
+                video_thruplays=int(row[17] or 0),
             )
             for row in rows
         ]

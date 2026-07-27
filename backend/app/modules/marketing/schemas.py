@@ -61,9 +61,30 @@ class MetaCampaignPerformance(BaseModel):
     spend: Decimal
     impressions: int
     clicks: int
+    unique_clicks: int
     link_clicks: int
+    outbound_clicks: int
+    landing_page_views: int
+    leads: int
+    purchases: int
     conversations_started: int
     messaging_connections: int
+    video_plays: int
+    video_thruplays: int
+    ctr: Decimal | None
+    cpc: Decimal | None
+    cost_per_conversation: Decimal | None
+
+
+class MetaAccountPerformance(BaseModel):
+    account_external_id: str
+    account_name: str
+    currency: str
+    spend: Decimal
+    impressions: int
+    clicks: int
+    conversations_started: int
+    leads: int
     ctr: Decimal | None
     cpc: Decimal | None
     cost_per_conversation: Decimal | None
@@ -74,10 +95,21 @@ class MetaAdsOverviewResponse(BaseModel):
     currency: str | None
     impressions: int
     clicks: int
+    unique_clicks: int
+    link_clicks: int
+    outbound_clicks: int
+    landing_page_views: int
+    leads: int
+    purchases: int
     conversations_started: int
+    messaging_connections: int
+    video_plays: int
+    video_thruplays: int
     ctr: Decimal | None
     cpc: Decimal | None
     cost_per_conversation: Decimal | None
+    selected_account_id: str | None
+    accounts: list[MetaAccountPerformance]
     campaigns: list[MetaCampaignPerformance]
     date_from: date
     date_to: date

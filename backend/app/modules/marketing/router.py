@@ -43,8 +43,9 @@ async def meta_ads_overview(
     date_to: date,
     user: CurrentUser,
     service: MarketingServiceDependency,
+    account_id: Annotated[str | None, Query(max_length=50)] = None,
 ) -> MetaAdsOverviewResponse:
-    return await service.meta_overview(user, date_from, date_to)
+    return await service.meta_overview(user, date_from, date_to, account_id)
 
 
 @router.post("/meta/sync", response_model=MetaAdsSyncResponse)

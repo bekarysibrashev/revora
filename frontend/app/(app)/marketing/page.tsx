@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { api } from "@/shared/api-client";
 import {
@@ -47,10 +47,33 @@ type MetaOverview = {
   currency: string | null;
   impressions: number;
   clicks: number;
+  unique_clicks: number;
+  link_clicks: number;
+  outbound_clicks: number;
+  landing_page_views: number;
+  leads: number;
+  purchases: number;
   conversations_started: number;
+  messaging_connections: number;
+  video_plays: number;
+  video_thruplays: number;
   ctr: string | null;
   cpc: string | null;
   cost_per_conversation: string | null;
+  selected_account_id: string | null;
+  accounts: {
+    account_external_id: string;
+    account_name: string;
+    currency: string;
+    spend: string;
+    impressions: number;
+    clicks: number;
+    conversations_started: number;
+    leads: number;
+    ctr: string | null;
+    cpc: string | null;
+    cost_per_conversation: string | null;
+  }[];
   campaigns: {
     account_external_id: string;
     account_name: string;
@@ -60,7 +83,16 @@ type MetaOverview = {
     spend: string;
     impressions: number;
     clicks: number;
+    unique_clicks: number;
+    link_clicks: number;
+    outbound_clicks: number;
+    landing_page_views: number;
+    leads: number;
+    purchases: number;
     conversations_started: number;
+    messaging_connections: number;
+    video_plays: number;
+    video_thruplays: number;
     ctr: string | null;
     cpc: string | null;
     cost_per_conversation: string | null;
@@ -92,7 +124,12 @@ function ratio(value: string | null) {
 
 export default function MarketingPage() {
   const search = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const query = queryString(search);
+  const selectedAccount = search.get("meta_account_id") || "";
+  const metaQuery = new URLSearchParams(query);
+  if (selectedAccount) metaQuery.set("account_id", selectedAccount);
   const queryClient = useQueryClient();
   const overview = useQuery({
     queryKey: ["marketing", query],
@@ -103,9 +140,18 @@ export default function MarketingPage() {
     queryFn: () => api<MetaStatus>("/marketing/meta/status"),
   });
   const meta = useQuery({
-    queryKey: ["meta-overview", query],
-    queryFn: () => api<MetaOverview>(`/marketing/meta/overview?${query}`),
+    queryKey: ["meta-overview", metaQuery.toString()],
+    queryFn: () =>
+      api<MetaOverview>(`/marketing/meta/overview?${metaQuery.toString()}`),
   });
+
+  function chooseMetaAccount(value: string) {
+    const params = new URLSearchParams(search.toString());
+    value
+      ? params.set("meta_account_id", value)
+      : params.delete("meta_account_id");
+    router.push(`${pathname}?${params.toString()}`);
+  }
   const sync = useMutation({
     mutationFn: () =>
       api<SyncResult>(`/marketing/meta/sync?${query}`, { method: "POST" }),
@@ -176,6 +222,29 @@ export default function MarketingPage() {
       <DataState loading={meta.isLoading} error={meta.error}>
         {meta.data && (
           <>
+            <section className="panel">
+              <div className="panel-head">
+                <div>
+                  <h2>Рекламный кабинет</h2>
+                  <p>Фильтр применяется ко всем показателям и кампаниям ниже.</p>
+                </div>
+                <select
+                  aria-label="Рекламный кабинет Meta"
+                  value={selectedAccount}
+                  onChange={(event) => chooseMetaAccount(event.target.value)}
+                >
+                  <option value="">Все кабинеты</option>
+                  {metaStatus.data?.accounts.map((account) => (
+                    <option
+                      key={account.external_account_id}
+                      value={account.external_account_id}
+                    >
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
             <section className="metric-grid">
               <Metric
                 label="Расход Meta"
@@ -199,6 +268,67 @@ export default function MarketingPage() {
                 }`}
               />
             </section>
+            <section className="metric-grid">
+              <Metric
+                label="Уникальные клики"
+                value={meta.data.unique_clicks.toLocaleString("ru-RU")}
+              />
+              <Metric
+                label="Переходы по ссылке"
+                value={meta.data.link_clicks.toLocaleString("ru-RU")}
+              />
+              <Metric
+                label="Просмотры страницы"
+                value={meta.data.landing_page_views.toLocaleString("ru-RU")}
+              />
+              <Metric
+                label="Лиды Meta"
+                value={meta.data.leads.toLocaleString("ru-RU")}
+                note={`Покупки: ${meta.data.purchases.toLocaleString("ru-RU")}`}
+              />
+              <Metric
+                label="Запуски видео"
+                value={meta.data.video_plays.toLocaleString("ru-RU")}
+                note={`ThruPlay: ${meta.data.video_thruplays.toLocaleString("ru-RU")}`}
+              />
+            </section>
+            {!selectedAccount && meta.data.accounts.length > 1 && (
+              <section className="panel">
+                <h2>Сравнение кабинетов</h2>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Кабинет</th>
+                        <th>Расход</th>
+                        <th>Показы</th>
+                        <th>Клики</th>
+                        <th>CTR</th>
+                        <th>Диалоги</th>
+                        <th>Цена диалога</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {meta.data.accounts.map((account) => (
+                        <tr key={account.account_external_id}>
+                          <td><strong>{account.account_name}</strong></td>
+                          <td>{currency(account.spend, account.currency)}</td>
+                          <td>{account.impressions.toLocaleString("ru-RU")}</td>
+                          <td>{account.clicks.toLocaleString("ru-RU")}</td>
+                          <td>{ratio(account.ctr)}</td>
+                          <td>{account.conversations_started.toLocaleString("ru-RU")}</td>
+                          <td>
+                            {account.cost_per_conversation
+                              ? currency(account.cost_per_conversation, account.currency)
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
             <section className="panel">
               <h2>Кампании Meta</h2>
               <div className="table-wrap">
