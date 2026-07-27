@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     kcell_crm_token: SecretStr = SecretStr("")
     kcell_tenant_slug: str = "demo"
 
+    # Meta Marketing API is read-only. Secrets live only in the backend runtime.
+    meta_access_token: SecretStr = SecretStr("")
+    meta_ad_account_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    meta_graph_api_version: str = "v25.0"
+    meta_tenant_slug: str = "demo"
+
     # Отдельный секрет для /platform/* (создание новых клиник) — не JWT, не
     # per-tenant роль. Видит только оператор платформы. Та же логика защиты
     # от дефолтного значения в проде, что и у остальных секретов ниже.
@@ -76,6 +82,17 @@ class Settings(BaseSettings):
             if value.lstrip().startswith("["):
                 return json.loads(value)
             return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+    @field_validator("meta_ad_account_ids", mode="before")
+    @classmethod
+    def split_meta_ad_account_ids(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [
+                account.strip()
+                for account in value.split(",")
+                if account.strip()
+            ]
         return value
 
     @model_validator(mode="after")

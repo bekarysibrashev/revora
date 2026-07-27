@@ -17,7 +17,12 @@ from app.modules.integrations.models import (
     RecordLineage,
     SyncRun,
 )
-from app.modules.marketing.models import AttributionFact, MarketingSpendFact
+from app.modules.marketing.models import (
+    AttributionFact,
+    MarketingSpendFact,
+    MetaAdsAccount,
+    MetaCampaignDailyMetric,
+)
 from app.modules.sales.models import Appointment, Call, Lead, Patient, ServiceDirection, TreatmentPlan
 from app.modules.kcell.models import KcellWebhookReceipt
 from app.modules.losses.models import LossOpportunity

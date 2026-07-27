@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends, Query
 
 from app.modules.auth.dependencies import CurrentUser
 from app.modules.marketing.dependencies import get_marketing_service
-from app.modules.marketing.schemas import MarketingOverviewResponse
+from app.modules.marketing.schemas import (
+    MarketingOverviewResponse,
+    MetaAdsOverviewResponse,
+    MetaAdsStatusResponse,
+    MetaAdsSyncResponse,
+)
 from app.modules.marketing.service import MarketingService
 
 router = APIRouter(prefix="/marketing", tags=["marketing"])
@@ -22,3 +27,31 @@ async def marketing_overview(
     branch_id: Annotated[UUID | None, Query()] = None,
 ) -> MarketingOverviewResponse:
     return await service.overview(user, date_from, date_to, branch_id)
+
+
+@router.get("/meta/status", response_model=MetaAdsStatusResponse)
+async def meta_ads_status(
+    user: CurrentUser,
+    service: MarketingServiceDependency,
+) -> MetaAdsStatusResponse:
+    return await service.meta_status(user)
+
+
+@router.get("/meta/overview", response_model=MetaAdsOverviewResponse)
+async def meta_ads_overview(
+    date_from: date,
+    date_to: date,
+    user: CurrentUser,
+    service: MarketingServiceDependency,
+) -> MetaAdsOverviewResponse:
+    return await service.meta_overview(user, date_from, date_to)
+
+
+@router.post("/meta/sync", response_model=MetaAdsSyncResponse)
+async def synchronize_meta_ads(
+    date_from: date,
+    date_to: date,
+    user: CurrentUser,
+    service: MarketingServiceDependency,
+) -> MetaAdsSyncResponse:
+    return await service.sync_meta(user, date_from, date_to)

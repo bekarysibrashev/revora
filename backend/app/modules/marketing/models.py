@@ -1,9 +1,9 @@
 """Marketing spend and cross-channel attribution facts."""
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
-from sqlalchemy import Date, ForeignKey, Numeric, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base, TenantScopedMixin, TimestampMixin, UUIDPrimaryKeyMixin
 
@@ -24,3 +24,48 @@ class AttributionFact(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Ba
     revenue_fact_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("revenue_facts.id", ondelete="CASCADE"))
     source: Mapped[str] = mapped_column(String(50)); confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
     attributed_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2)); currency: Mapped[str] = mapped_column(String(3), default="KZT")
+
+
+class MetaAdsAccount(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    __tablename__ = "meta_ads_accounts"
+    __table_args__ = (UniqueConstraint("tenant_id", "external_account_id"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    external_account_id: Mapped[str] = mapped_column(String(50))
+    name: Mapped[str] = mapped_column(String(250))
+    account_status: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3))
+    timezone_name: Mapped[str] = mapped_column(String(100))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class MetaCampaignDailyMetric(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    __tablename__ = "meta_campaign_daily_metrics"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "account_id", "campaign_external_id", "metric_date"
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("meta_ads_accounts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    campaign_external_id: Mapped[str] = mapped_column(String(80), index=True)
+    campaign_name: Mapped[str] = mapped_column(String(250))
+    metric_date: Mapped[date] = mapped_column(Date, index=True)
+    spend: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    impressions: Mapped[int] = mapped_column(Integer)
+    reach: Mapped[int] = mapped_column(Integer)
+    clicks: Mapped[int] = mapped_column(Integer)
+    link_clicks: Mapped[int] = mapped_column(Integer)
+    conversations_started: Mapped[int] = mapped_column(Integer)
+    messaging_connections: Mapped[int] = mapped_column(Integer)
+    actions: Mapped[list] = mapped_column(JSONB, default=list)
