@@ -48,6 +48,20 @@ services:
         value: v25.0
       - key: META_TENANT_SLUG
         value: test1
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://api.openai.com/v1
+      - key: CALL_TRANSCRIPTION_MODEL
+        value: gpt-4o-transcribe-diarize
+      - key: CALL_ANALYSIS_MODEL
+        value: gpt-5.6-terra
+      - key: CALL_MIN_DURATION_SECONDS
+        value: "7"
+      - key: CALL_MAX_AUDIO_BYTES
+        value: "25000000"
+      - key: CALL_ANALYSIS_TIMEOUT_SECONDS
+        value: "120"
 
   - type: web
     name: revora-web-bekarysibrashev

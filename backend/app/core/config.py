@@ -49,6 +49,22 @@ class Settings(BaseSettings):
     meta_graph_api_version: str = "v25.0"
     meta_tenant_slug: str = "demo"
 
+    # LLM analyst. The API key never reaches the browser or tenant data tables.
+    openai_api_key: SecretStr = SecretStr("")
+    openai_model: str = "gpt-5.6-terra"
+    openai_base_url: str = "https://api.openai.com/v1"
+    ai_request_timeout_seconds: int = Field(default=45, ge=5, le=120)
+    ai_max_tool_rounds: int = Field(default=4, ge=1, le=8)
+    ai_messages_per_minute: int = Field(default=10, ge=1, le=60)
+
+    # Automatic call intelligence. Audio and transcripts are transient.
+    call_transcription_model: str = "gpt-4o-transcribe-diarize"
+    call_analysis_model: str = "gpt-5.6-terra"
+    call_min_duration_seconds: int = Field(default=7, ge=1, le=60)
+    call_max_audio_bytes: int = Field(default=25_000_000, ge=1_000_000, le=100_000_000)
+    call_analysis_timeout_seconds: int = Field(default=120, ge=15, le=300)
+    call_analysis_max_attempts: int = Field(default=3, ge=1, le=10)
+
     # Отдельный секрет для /platform/* (создание новых клиник) — не JWT, не
     # per-tenant роль. Видит только оператор платформы. Та же логика защиты
     # от дефолтного значения в проде, что и у остальных секретов ниже.

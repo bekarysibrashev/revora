@@ -7,9 +7,13 @@ import { DataState, Metric, PageHeader } from "@/shared/ui";
 
 type Criterion = { name: string; weight: number; description: string };
 type RuleSet = { id: string; version: number; name: string; success_definition: string; partial_success_definition: string; loss_definition: string; criteria: Criterion[]; loss_reasons: string[] };
-type Status = { rule_set: RuleSet | null; calls_received: number; analyses_ready: number; integration_status: string };
-type CallItem = { id: string; started_at: string; direction: string; employee: string | null; phone_masked: string | null; duration_seconds: number | null; outcome: string | null; recording_url: string | null; analysis_status: string | null; score: number | null };
+type Status = { rule_set: RuleSet | null; calls_received: number; analyses_ready: number; integration_status: string; queued: number; processing: number; needs_review: number; failed: number };
+type CallItem = { id: string; started_at: string; direction: string; employee: string | null; phone_masked: string | null; duration_seconds: number | null; outcome: string | null; recording_url: string | null; analysis_status: string | null; score: number | null; result: string | null; summary: string | null; needs_review: boolean; error_code: string | null };
 type Calls = { items: CallItem[]; total: number };
+type Evidence = { criterion: string; timestamp_from: number; timestamp_to: number; description: string };
+type Analysis = { id:string;call_id:string;status:string;result:string|null;score:number|null;summary:string|null;criteria_scores:Array<{name:string;score:number;weight:number;explanation:string}>;strengths:string[];loss_reasons:string[];recommendations:string[];flags:Record<string,boolean>;evidence:Evidence[];languages:string[];mixed_language:boolean|null;confidence:number|null;needs_review:boolean;attempt_count:number;error_code:string|null;model_version:string|null;completed_at:string|null };
+type Operators = { items:Array<{employee:string;calls_analyzed:number;average_score:number;successful_calls:number;success_rate:number;needs_review:number}> };
+type ManualTest = { call_id:string;analysis_id:string;status:string };
 
 const defaults = {
   name: "Стандарт обработки звонков",
@@ -29,28 +33,50 @@ const defaults = {
 
 const directionLabel = (value: string) => value === "in" ? "Входящий" : value === "out" ? "Исходящий" : value;
 const outcomeLabel = (value: string | null) => ({ Success: "Состоялся", Missed: "Пропущен", Cancel: "Отменён", Busy: "Занято", NotAvailable: "Недоступен", NotAllowed: "Запрещён", NotFound: "Не найден" }[value || ""] || value || "—");
-const analysisLabel = (value: string | null) => ({ pending: "Ожидает анализа", processing: "Анализируется", ready: "Готов", failed: "Ошибка" }[value || ""] || "Правила не заданы");
+const analysisLabel = (value: string | null) => ({ pending: "Ожидает", queued: "В очереди", retrying: "Повторная попытка", waiting_for_recording: "Ждёт запись", processing: "Анализируется", ready: "Готов", needs_review: "Нужна проверка", skipped_short: "Короче 8 сек.", failed: "Ошибка" }[value || ""] || "Правила не заданы");
 const durationLabel = (seconds: number | null) => seconds == null ? "—" : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
 export default function AiPage() {
   const client = useQueryClient();
-  const status = useQuery({ queryKey: ["call-quality-status"], queryFn: () => api<Status>("/call-quality/status") });
-  const calls = useQuery({ queryKey: ["call-quality-calls"], queryFn: () => api<Calls>("/call-quality/calls?limit=100") });
+  const status = useQuery({ queryKey: ["call-quality-status"], queryFn: () => api<Status>("/call-quality/status"), refetchInterval: 5000 });
+  const calls = useQuery({ queryKey: ["call-quality-calls"], queryFn: () => api<Calls>("/call-quality/calls?limit=100"), refetchInterval: 5000 });
+  const operators = useQuery({ queryKey:["call-quality-operators"], queryFn:()=>api<Operators>("/call-quality/operators"), refetchInterval:10000 });
   const current = status.data?.rule_set;
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<typeof defaults>(defaults);
+  const [selectedCall, setSelectedCall] = useState<string|null>(null);
+  const [audioFile, setAudioFile] = useState<File|null>(null);
+  const [operatorName, setOperatorName] = useState("Тестовый оператор");
+  const analysis = useQuery({ queryKey:["call-analysis",selectedCall], queryFn:()=>api<Analysis>(`/call-quality/calls/${selectedCall}/analysis`), enabled:Boolean(selectedCall), refetchInterval: query => ["queued","processing","retrying","pending"].includes(query.state.data?.status || "") ? 3000 : false });
   const save = useMutation({ mutationFn: () => api<RuleSet>("/call-quality/rule-sets", { method: "POST", body: JSON.stringify(form) }), onSuccess: () => { client.invalidateQueries({ queryKey: ["call-quality-status"] }); setEditing(false); } });
+  const upload = useMutation({ mutationFn: () => {
+    if (!audioFile) throw new Error("Выберите аудиофайл");
+    return api<ManualTest>("/call-quality/manual-tests",{method:"POST",headers:{"Content-Type":audioFile.type || "audio/mpeg","X-Filename":audioFile.name,"X-Operator-Name":operatorName},body:audioFile});
+  },onSuccess:data=>{setSelectedCall(data.call_id);setAudioFile(null);client.invalidateQueries({queryKey:["call-quality-calls"]});client.invalidateQueries({queryKey:["call-quality-status"]});}});
+  const reanalyze = useMutation({mutationFn:(callId:string)=>api<Analysis>(`/call-quality/calls/${callId}/reanalyze`,{method:"POST"}),onSuccess:data=>{setSelectedCall(data.call_id);client.invalidateQueries({queryKey:["call-analysis",data.call_id]});}});
   const begin = () => { setForm(current || defaults); setEditing(true); };
 
   return <>
     <PageHeader title="Контроль звонков" subtitle="Журнал Kcell и оценка работы администраторов" action={<button className="primary" onClick={begin}>{current ? "Изменить стандарт" : "Настроить стандарт"}</button>} />
     <DataState loading={status.isLoading} error={status.error}>
-      <section className="metric-grid three">
+      <section className="metric-grid">
         <Metric label="Звонков получено" value={String(status.data?.calls_received || 0)} />
         <Metric label="ИИ проанализировал" value={String(status.data?.analyses_ready || 0)} />
+        <Metric label="В очереди" value={String((status.data?.queued || 0)+(status.data?.processing || 0))} note={status.data?.needs_review ? `Проверить вручную: ${status.data.needs_review}` : undefined} />
         <Metric label="Интеграция Kcell" value={status.data?.integration_status === "connected" ? "Подключена" : "Ожидает подключения"} tone={status.data?.integration_status === "connected" ? "good" : undefined} />
       </section>
     </DataState>
+
+    <section className="panel call-manual-test">
+      <div className="panel-head"><div><h2>Ручная проверка AI</h2><p>Дополнительный режим для спорного звонка или тестовой MP3. Автоматические Kcell-звонки загружать не нужно.</p></div></div>
+      <div className="call-upload-row">
+        <label>Оператор<input value={operatorName} maxLength={150} onChange={event=>setOperatorName(event.target.value)} /></label>
+        <label className="file-drop">Аудиозапись<input type="file" accept=".mp3,.m4a,.wav,.ogg,.webm,audio/*" onChange={event=>setAudioFile(event.target.files?.[0]||null)} /><span>{audioFile?.name || "Выберите MP3, M4A, WAV, OGG или WEBM"}</span></label>
+        <button className="primary" disabled={!audioFile||upload.isPending} onClick={()=>upload.mutate()}>{upload.isPending?"ИИ анализирует…":"Проверить звонок"}</button>
+      </div>
+      {upload.error&&<p className="error-box">{upload.error instanceof Error?upload.error.message:"Не удалось загрузить запись"}</p>}
+      {upload.data&&<p className={upload.data.status==="failed"?"error-box":"success-box"}>{upload.data.status==="failed"?"Анализ завершился ошибкой — откройте отчёт для кода ошибки.":"Анализ завершён. Откройте сформированный отчёт."}</p>}
+    </section>
 
     <section className="panel">
       <div className="panel-head"><div><h2>Последние звонки</h2><p>Автоматически получены из виртуальной АТС Kcell</p></div></div>
@@ -59,11 +85,19 @@ export default function AiPage() {
           {calls.data?.items.map(call => <tr key={call.id}>
             <td>{new Date(call.started_at).toLocaleString("ru-RU")}</td><td>{directionLabel(call.direction)}</td><td>{call.employee || "—"}</td><td>{call.phone_masked || "Скрыт"}</td><td>{durationLabel(call.duration_seconds)}</td><td>{outcomeLabel(call.outcome)}</td>
             <td>{call.recording_url ? <a className="good" href={call.recording_url} target="_blank" rel="noreferrer">Прослушать</a> : "Нет записи"}</td>
-            <td>{call.score != null ? `${call.score}/100` : analysisLabel(call.analysis_status)}</td>
+            <td><button className={`analysis-status ${call.analysis_status||""}`} onClick={()=>setSelectedCall(call.id)}>{call.score != null ? `${call.score}/100 · ${analysisLabel(call.analysis_status)}` : analysisLabel(call.analysis_status)}</button></td>
           </tr>)}
           {!calls.data?.items.length && <tr><td className="empty" colSpan={8}>Звонки пока не получены</td></tr>}
         </tbody></table></div>
       </DataState>
+    </section>
+
+    <section className="panel">
+      <div className="panel-head"><div><h2>Успеваемость операторов</h2><p>Рейтинг строится только по завершённым AI-отчётам</p></div></div>
+      <DataState loading={operators.isLoading} error={operators.error}><div className="table-wrap"><table><thead><tr><th>Оператор</th><th>Звонков</th><th>Средняя оценка</th><th>Успешных</th><th>Конверсия</th><th>Проверить</th></tr></thead><tbody>
+        {operators.data?.items.map(item=><tr key={item.employee}><td>{item.employee}</td><td>{item.calls_analyzed}</td><td>{item.average_score}/100</td><td>{item.successful_calls}</td><td>{item.success_rate}%</td><td>{item.needs_review}</td></tr>)}
+        {!operators.data?.items.length&&<tr><td className="empty" colSpan={6}>Готовых отчётов пока нет</td></tr>}
+      </tbody></table></div></DataState>
     </section>
 
     {current && <section className="panel"><p className="eyebrow">Активна версия {current.version}</p><h2>{current.name}</h2><p><strong>Успешный звонок:</strong> {current.success_definition}</p><div className="table-wrap"><table><thead><tr><th>Критерий</th><th>Вес</th><th>Что проверяет ИИ</th></tr></thead><tbody>{current.criteria.map(item => <tr key={item.name}><td>{item.name}</td><td>{item.weight}%</td><td>{item.description}</td></tr>)}</tbody></table></div></section>}
@@ -79,6 +113,18 @@ export default function AiPage() {
       <label>Причины потери — каждая с новой строки<textarea value={form.loss_reasons.join("\n")} onChange={event => setForm({ ...form, loss_reasons: event.target.value.split("\n").map(value => value.trim()).filter(Boolean) })} /></label>
       {save.error && <p className="error-box">{save.error instanceof Error ? save.error.message : "Не удалось сохранить"}</p>}
       <button className="primary" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Сохраняем…" : "Сохранить новую версию"}</button>
+    </section></div>}
+
+    {selectedCall&&<div className="modal-backdrop"><section className="panel modal call-report"><div className="page-header"><div><h2>AI-отчёт по звонку</h2><p>Полная расшифровка не сохраняется</p></div><button className="icon-button" onClick={()=>setSelectedCall(null)}>×</button></div>
+      <DataState loading={analysis.isLoading} error={analysis.error}>{analysis.data&&<>
+        <div className="call-report-head"><strong>{analysis.data.score==null?"—":`${analysis.data.score}/100`}</strong><div><span className={`health-badge ${analysis.data.needs_review?"warning":"ready"}`}>{analysisLabel(analysis.data.status)}</span><p>{analysis.data.summary||"Отчёт ещё формируется"}</p></div></div>
+        {analysis.data.languages.length>0&&<p className="hint">Языки: {analysis.data.languages.join(", ")}{analysis.data.mixed_language?" · смешанная речь":""} · уверенность: {analysis.data.confidence==null?"—":`${Math.round(analysis.data.confidence*100)}%`}</p>}
+        {analysis.data.criteria_scores.length>0&&<div className="call-criteria">{analysis.data.criteria_scores.map(item=><article key={item.name}><div><strong>{item.name}</strong><b>{item.score}/100</b></div><small>Вес {item.weight}%</small><p>{item.explanation}</p></article>)}</div>}
+        <div className="two-col"><div><h3>Сильные стороны</h3><ul>{analysis.data.strengths.map(item=><li key={item}>{item}</li>)}</ul></div><div><h3>Что улучшить</h3><ul>{analysis.data.recommendations.map(item=><li key={item}>{item}</li>)}</ul></div></div>
+        {analysis.data.evidence.length>0&&<div><h3>Основания оценки</h3><div className="call-evidence">{analysis.data.evidence.map((item,index)=><article key={`${item.criterion}-${index}`}><strong>{durationLabel(Math.round(item.timestamp_from))}–{durationLabel(Math.round(item.timestamp_to))} · {item.criterion}</strong><p>{item.description}</p></article>)}</div></div>}
+        {analysis.data.error_code&&<p className="error-box">Код ошибки: {analysis.data.error_code}</p>}
+        {calls.data?.items.find(item=>item.id===selectedCall)?.recording_url&&<button className="primary small" disabled={reanalyze.isPending} onClick={()=>reanalyze.mutate(selectedCall)}>{reanalyze.isPending?"Ставим в очередь…":"Проверить повторно"}</button>}
+      </>}</DataState>
     </section></div>}
   </>;
 }

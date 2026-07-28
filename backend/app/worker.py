@@ -12,7 +12,7 @@ celery_app = Celery(
     "revora",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.modules.ai.insights.jobs"],
+    include=["app.modules.ai.insights.jobs", "app.modules.ai.call_quality.jobs"],
 )
 celery_app.conf.update(
     task_serializer="json",
@@ -28,6 +28,10 @@ celery_app.conf.update(
         "generate-v1-insights-daily": {
             "task": "revora.generate_insights",
             "schedule": 60 * 60 * 24,
+        },
+        "enqueue-pending-call-analyses": {
+            "task": "revora.enqueue_pending_call_analyses",
+            "schedule": 60,
         }
     },
 )

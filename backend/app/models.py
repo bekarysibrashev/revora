@@ -2,7 +2,14 @@
 
 from app.modules.auth.models import RefreshToken, User, UserBranch
 from app.modules.admin.models import AuditLog
-from app.modules.ai.models import AIClassificationFeedback, AIInsight, AIInsightRead
+from app.modules.ai.models import (
+    AIClassificationFeedback,
+    AIInsight,
+    AIInsightRead,
+    AIChatSession,
+    AIChatMessage,
+    AILLMCallAudit,
+)
 from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityRuleSet
 from app.modules.doctors.models import Doctor, DoctorCompensationRule, DoctorRating
 from app.modules.finance.models import (

@@ -19,6 +19,7 @@ from app.modules.analytics.router import router as analytics_router
 from app.modules.auth.router import router as auth_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.ai.call_quality.router import router as call_quality_router
+from app.modules.ai.analyst.router import router as analyst_router
 from app.modules.kcell.router import router as kcell_router
 from app.modules.losses.router import router as losses_router
 from app.modules.ml.router import router as ml_router
@@ -107,6 +108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(marketing_router, prefix=settings.api_v1_prefix)
     application.include_router(dashboard_router, prefix=settings.api_v1_prefix)
     application.include_router(call_quality_router, prefix=settings.api_v1_prefix)
+    application.include_router(analyst_router, prefix=settings.api_v1_prefix)
     application.include_router(kcell_router, prefix=settings.api_v1_prefix)
     application.include_router(losses_router, prefix=settings.api_v1_prefix)
     application.include_router(ml_router, prefix=settings.api_v1_prefix)

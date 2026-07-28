@@ -102,3 +102,8 @@ def test_domain_analytics_routes_are_in_openapi() -> None:
     assert "/api/v1/losses/refresh" in paths
     assert "/api/v1/ml/no-show/readiness" in paths
     assert "/api/v1/ml/no-show/snapshots" in paths
+    assert "/api/v1/ai/analyst/sessions" in paths
+    assert "/api/v1/ai/analyst/sessions/{session_id}/messages" in paths
+    assert "/api/v1/call-quality/manual-tests" in paths
+    assert "/api/v1/call-quality/calls/{call_id}/analysis" in paths
+    assert "/api/v1/call-quality/operators" in paths

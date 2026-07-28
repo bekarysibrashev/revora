@@ -18,6 +18,7 @@ const items: { href: string; label: string; mark: string; roles: Role[] }[] = [
   { href: "/losses", label: "Карта потерь", mark: "₸", roles: ["owner", "manager", "administrator"] },
   { href: "/data-science", label: "Data Science Lab", mark: "DS", roles: ["owner", "manager"] },
   { href: "/reports", label: "Отчёты", mark: "Р", roles: ["owner", "manager"] },
+  { href: "/analyst", label: "AI-аналитик", mark: "AI", roles: ["owner", "manager", "administrator", "sales_manager"] },
   { href: "/ai", label: "Контроль звонков", mark: "✦", roles: ["owner"] },
   { href: "/admin", label: "Настройки", mark: "Н", roles: ["owner"] },
 ];

@@ -20,5 +20,8 @@ node_modules/
 htmlcov/
 .coverage
 
+# Local call recordings may contain sensitive speech and must never be committed.
+/test_audio/
+
 # OS
 .DS_Store

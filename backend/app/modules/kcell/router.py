@@ -12,6 +12,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
 from app.core.errors import AppError
 from app.core.security import phone_hash
+from app.modules.ai.call_quality.defaults import ensure_default_rule_set
 from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityRuleSet
 from app.modules.kcell.models import KcellWebhookReceipt
 from app.modules.sales.models import Call
@@ -82,14 +83,54 @@ async def receive_kcell_callback(
         call = Call(tenant_id=tenant.id, external_id=str(values["callid"]), phone_hash=phone_hash(str(values["phone"])), phone_masked=_mask_phone(str(values["phone"])), direction=str(values["type"]), started_at=_parse_start(str(values["start"])), duration_seconds=int(values["duration"]), outcome=str(values["status"]), external_user=str(values["user"]), recording_url=str(values.get("link") or "") or None)
         session.add(call)
         await session.flush()
-        rules = await session.scalar(select(CallQualityRuleSet).where(CallQualityRuleSet.tenant_id == tenant.id, CallQualityRuleSet.is_active.is_(True)).order_by(CallQualityRuleSet.version.desc()))
+        rules = await ensure_default_rule_set(session, tenant.id)
         if rules is not None:
-            session.add(CallQualityAnalysis(tenant_id=tenant.id, call_id=call.id, rule_set_id=rules.id, status="pending"))
+            duration = int(values["duration"])
+            recording_url = str(values.get("link") or "") or None
+            analysis_status = (
+                "skipped_short"
+                if duration <= settings.call_min_duration_seconds
+                else "queued" if recording_url else "waiting_for_recording"
+            )
+            session.add(CallQualityAnalysis(
+                tenant_id=tenant.id,
+                call_id=call.id,
+                rule_set_id=rules.id,
+                status=analysis_status,
+                queued_at=datetime.now(UTC) if analysis_status == "queued" else None,
+                completed_at=datetime.now(UTC) if analysis_status == "skipped_short" else None,
+            ))
     else:
         call.duration_seconds = int(values["duration"])
         call.outcome = str(values["status"])
         call.phone_masked = _mask_phone(str(values["phone"]))
         call.recording_url = str(values.get("link") or "") or call.recording_url
+        analysis = await session.scalar(
+            select(CallQualityAnalysis).where(
+                CallQualityAnalysis.tenant_id == tenant.id,
+                CallQualityAnalysis.call_id == call.id,
+            )
+        )
+        if analysis is None:
+            rules = await ensure_default_rule_set(session, tenant.id)
+            if rules is not None:
+                analysis = CallQualityAnalysis(
+                    tenant_id=tenant.id,
+                    call_id=call.id,
+                    rule_set_id=rules.id,
+                    status="pending",
+                )
+                session.add(analysis)
+        if analysis is not None and analysis.status in {"pending", "waiting_for_recording", "skipped_short"}:
+            if call.duration_seconds <= settings.call_min_duration_seconds:
+                analysis.status = "skipped_short"
+                analysis.completed_at = datetime.now(UTC)
+            elif call.recording_url:
+                analysis.status = "queued"
+                analysis.queued_at = datetime.now(UTC)
+                analysis.completed_at = None
+            else:
+                analysis.status = "waiting_for_recording"
     payload = {key: value for key, value in values.items() if key != "crm_token"}
     receipt = await session.scalar(select(KcellWebhookReceipt).where(KcellWebhookReceipt.tenant_id == tenant.id, KcellWebhookReceipt.call_id == str(values["callid"]), KcellWebhookReceipt.command == "history"))
     if receipt is None:

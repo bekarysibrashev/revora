@@ -30,6 +30,7 @@ def test_domain_schema_is_registered() -> None:
         "revenue_facts", "expense_facts", "raw_bank_transactions", "cash_flow_facts",
         "marketing_spend_facts", "attribution_facts", "integration_connections",
         "sync_runs", "ai_insights", "ai_insight_reads", "audit_log",
+        "ai_chat_sessions", "ai_chat_messages", "ai_llm_call_audit",
     }
     assert expected.issubset(Base.metadata.tables)
 
