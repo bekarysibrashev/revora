@@ -52,10 +52,16 @@ services:
         sync: false
       - key: OPENAI_BASE_URL
         value: https://api.openai.com/v1
+      - key: CALL_AI_PROVIDER
+        value: groq
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_BASE_URL
+        value: https://api.groq.com/openai/v1
       - key: CALL_TRANSCRIPTION_MODEL
-        value: gpt-4o-transcribe-diarize
+        value: whisper-large-v3-turbo
       - key: CALL_ANALYSIS_MODEL
-        value: gpt-5.6-terra
+        value: openai/gpt-oss-20b
       - key: CALL_MIN_DURATION_SECONDS
         value: "7"
       - key: CALL_MAX_AUDIO_BYTES

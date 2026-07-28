@@ -10,6 +10,9 @@ def test_defaults_are_suitable_for_local_development() -> None:
     assert settings.app_env == "development"
     assert settings.timezone == "Asia/Almaty"
     assert settings.api_v1_prefix == "/api/v1"
+    assert settings.call_ai_provider == "groq"
+    assert settings.call_transcription_model == "whisper-large-v3-turbo"
+    assert settings.call_analysis_model == "openai/gpt-oss-20b"
 
 
 def test_render_postgres_url_uses_asyncpg_driver() -> None:

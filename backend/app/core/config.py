@@ -58,8 +58,12 @@ class Settings(BaseSettings):
     ai_messages_per_minute: int = Field(default=10, ge=1, le=60)
 
     # Automatic call intelligence. Audio and transcripts are transient.
-    call_transcription_model: str = "gpt-4o-transcribe-diarize"
-    call_analysis_model: str = "gpt-5.6-terra"
+    # Groq is used separately from the role-scoped OpenAI business analyst.
+    call_ai_provider: Literal["openai", "groq"] = "groq"
+    groq_api_key: SecretStr = SecretStr("")
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    call_transcription_model: str = "whisper-large-v3-turbo"
+    call_analysis_model: str = "openai/gpt-oss-20b"
     call_min_duration_seconds: int = Field(default=7, ge=1, le=60)
     call_max_audio_bytes: int = Field(default=25_000_000, ge=1_000_000, le=100_000_000)
     call_analysis_timeout_seconds: int = Field(default=120, ge=15, le=300)

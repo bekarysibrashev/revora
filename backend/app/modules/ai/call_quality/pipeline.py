@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.modules.ai.call_quality.audio import RecordingLoader
 from app.modules.ai.call_quality.intelligence import (
+    CallIntelligenceClient,
     CallIntelligenceError,
     CallReport,
+    GroqCallIntelligenceClient,
     OpenAICallIntelligenceClient,
 )
 from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityRuleSet
@@ -28,17 +30,30 @@ class CallQualityPipeline:
         settings: Settings,
         *,
         loader: RecordingLoader | None = None,
-        client: OpenAICallIntelligenceClient | None = None,
+        client: CallIntelligenceClient | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
         self.loader = loader or RecordingLoader(settings)
-        self.client = client or OpenAICallIntelligenceClient(
+        self.client = client or self._default_client(settings)
+
+    @staticmethod
+    def _default_client(settings: Settings) -> CallIntelligenceClient:
+        common = {
+            "transcription_model": settings.call_transcription_model,
+            "analysis_model": settings.call_analysis_model,
+            "timeout_seconds": settings.call_analysis_timeout_seconds,
+        }
+        if settings.call_ai_provider == "groq":
+            return GroqCallIntelligenceClient(
+                api_key=settings.groq_api_key.get_secret_value(),
+                base_url=settings.groq_base_url,
+                **common,
+            )
+        return OpenAICallIntelligenceClient(
             api_key=settings.openai_api_key.get_secret_value(),
             base_url=settings.openai_base_url,
-            transcription_model=settings.call_transcription_model,
-            analysis_model=settings.call_analysis_model,
-            timeout_seconds=settings.call_analysis_timeout_seconds,
+            **common,
         )
 
     async def run(self, tenant_id: UUID, analysis_id: UUID) -> bool:
