@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
+from urllib.parse import quote
 
 
 def test_health_endpoint_and_request_id() -> None:
@@ -107,3 +108,8 @@ def test_domain_analytics_routes_are_in_openapi() -> None:
     assert "/api/v1/call-quality/manual-tests" in paths
     assert "/api/v1/call-quality/calls/{call_id}/analysis" in paths
     assert "/api/v1/call-quality/operators" in paths
+
+
+def test_cyrillic_manual_upload_metadata_can_be_header_encoded() -> None:
+    assert quote("Тестовый оператор", safe="").isascii()
+    assert quote("звонок 1.mp3", safe="").isascii()

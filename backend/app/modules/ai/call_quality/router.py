@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import unquote
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,8 +92,8 @@ async def manual_test(
         chunks.append(chunk)
     if not size:
         raise AppError("AUDIO_EMPTY", "Audio file is empty", 422)
-    filename = Path(request.headers.get("x-filename", "manual-test.mp3")).name[:200]
-    employee = request.headers.get("x-operator-name", "Ручной тест").strip()[:150] or "Ручной тест"
+    filename = Path(unquote(request.headers.get("x-filename", "manual-test.mp3"))).name[:200]
+    employee = unquote(request.headers.get("x-operator-name", "")).strip()[:150] or "Ручной тест"
     rules = await ensure_default_rule_set(session, user.tenant_id)
     if rules is None:
         raise AppError("CALL_RULE_SET_MISSING", "A call quality rule set could not be created", 409)

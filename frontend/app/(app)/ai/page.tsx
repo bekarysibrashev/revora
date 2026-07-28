@@ -51,7 +51,7 @@ export default function AiPage() {
   const save = useMutation({ mutationFn: () => api<RuleSet>("/call-quality/rule-sets", { method: "POST", body: JSON.stringify(form) }), onSuccess: () => { client.invalidateQueries({ queryKey: ["call-quality-status"] }); setEditing(false); } });
   const upload = useMutation({ mutationFn: () => {
     if (!audioFile) throw new Error("Выберите аудиофайл");
-    return api<ManualTest>("/call-quality/manual-tests",{method:"POST",headers:{"Content-Type":audioFile.type || "audio/mpeg","X-Filename":audioFile.name,"X-Operator-Name":operatorName},body:audioFile});
+    return api<ManualTest>("/call-quality/manual-tests",{method:"POST",headers:{"Content-Type":audioFile.type || "audio/mpeg","X-Filename":encodeURIComponent(audioFile.name),"X-Operator-Name":encodeURIComponent(operatorName)},body:audioFile});
   },onSuccess:data=>{setSelectedCall(data.call_id);setAudioFile(null);client.invalidateQueries({queryKey:["call-quality-calls"]});client.invalidateQueries({queryKey:["call-quality-status"]});}});
   const reanalyze = useMutation({mutationFn:(callId:string)=>api<Analysis>(`/call-quality/calls/${callId}/reanalyze`,{method:"POST"}),onSuccess:data=>{setSelectedCall(data.call_id);client.invalidateQueries({queryKey:["call-analysis",data.call_id]});}});
   const begin = () => { setForm(current || defaults); setEditing(true); };
