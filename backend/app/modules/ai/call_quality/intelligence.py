@@ -2,10 +2,14 @@
 from dataclasses import dataclass
 from copy import deepcopy
 import json
+import logging
 from typing import Any, Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+
+logger = logging.getLogger(__name__)
 
 
 class CallIntelligenceError(RuntimeError):
@@ -161,8 +165,6 @@ def report_schema_for(rules: dict) -> dict[str, Any]:
         if isinstance(item, dict) and item.get("name")
     ]
     scores = schema["properties"]["criteria_scores"]
-    scores["minItems"] = len(names)
-    scores["maxItems"] = len(names)
     if names:
         scores["items"]["properties"]["name"] = {
             "type": "string",
@@ -276,6 +278,12 @@ class OpenAICallIntelligenceClient:
         if response.status_code >= 500:
             raise CallIntelligenceError(f"{prefix}_UNAVAILABLE", "AI provider is unavailable", retryable=True)
         if response.status_code >= 400:
+            logger.warning(
+                "OpenAI rejected %s request status=%s detail=%s",
+                prefix.lower(),
+                response.status_code,
+                _provider_error_detail(response),
+            )
             raise CallIntelligenceError(f"{prefix}_REJECTED", f"AI provider rejected the request ({response.status_code})", retryable=False)
 
     @staticmethod
@@ -444,8 +452,26 @@ class GroqCallIntelligenceClient:
                 f"{prefix}_UNAVAILABLE", "Groq is unavailable", retryable=True
             )
         if response.status_code >= 400:
+            logger.warning(
+                "Groq rejected %s request status=%s detail=%s",
+                prefix.lower(),
+                response.status_code,
+                _provider_error_detail(response),
+            )
             raise CallIntelligenceError(
                 f"{prefix}_REJECTED",
                 f"Groq rejected the request ({response.status_code})",
                 retryable=False,
             )
+
+
+def _provider_error_detail(response: httpx.Response) -> str:
+    """Return a bounded provider error message without headers or credentials."""
+    try:
+        body = response.json()
+        detail = body.get("error", {}).get("message") or body.get("message")
+        if detail:
+            return str(detail)[:500]
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return response.text[:500]

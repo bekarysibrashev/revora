@@ -79,7 +79,11 @@ async def test_openai_call_client_uses_diarization_and_structured_private_report
         assert body["store"] is False
         assert body["text"]["format"]["type"] == "json_schema"
         scores = body["text"]["format"]["schema"]["properties"]["criteria_scores"]
-        assert scores["minItems"] == scores["maxItems"] == 2
+        assert scores["items"]["properties"]["name"]["enum"] == [
+            "Приветствие",
+            "Запись",
+        ]
+        assert "minItems" not in scores and "maxItems" not in scores
         return httpx.Response(200, json={
             "output": [{
                 "type": "message",
