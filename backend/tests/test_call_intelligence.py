@@ -16,6 +16,15 @@ from app.modules.ai.call_quality.models import CallQualityAnalysis
 from app.modules.ai.call_quality.pipeline import CallQualityPipeline
 
 
+def rule_payload() -> dict:
+    return {
+        "criteria": [
+            {"name": "Приветствие", "weight": 25},
+            {"name": "Запись", "weight": 75},
+        ]
+    }
+
+
 def report_payload(*, score: int = 91, confidence: float = 0.9) -> dict:
     return {
         "result": "success",
@@ -69,6 +78,8 @@ async def test_openai_call_client_uses_diarization_and_structured_private_report
         body = json.loads(request.content)
         assert body["store"] is False
         assert body["text"]["format"]["type"] == "json_schema"
+        scores = body["text"]["format"]["schema"]["properties"]["criteria_scores"]
+        assert scores["minItems"] == scores["maxItems"] == 2
         return httpx.Response(200, json={
             "output": [{
                 "type": "message",
@@ -87,7 +98,7 @@ async def test_openai_call_client_uses_diarization_and_structured_private_report
     transcript = await client.transcribe(
         b"fake-mp3", filename="test.mp3", content_type="audio/mpeg"
     )
-    report = await client.analyze(transcript, {"criteria": []})
+    report = await client.analyze(transcript, rule_payload())
     assert transcript.segments[1].text == "Ертең запись бар ма?"
     assert report.mixed_language is True and report.languages == ["ru", "kk"]
     assert len(requests) == 2
@@ -113,6 +124,11 @@ async def test_groq_call_client_uses_whisper_and_structured_private_report() -> 
         assert request.url.path.endswith("/chat/completions")
         assert body["model"] == "openai/gpt-oss-20b"
         assert body["response_format"]["type"] == "json_schema"
+        scores = body["response_format"]["json_schema"]["schema"]["properties"]["criteria_scores"]
+        assert scores["items"]["properties"]["name"]["enum"] == [
+            "Приветствие",
+            "Запись",
+        ]
         return httpx.Response(200, json={
             "choices": [{
                 "message": {
@@ -132,7 +148,7 @@ async def test_groq_call_client_uses_whisper_and_structured_private_report() -> 
     transcript = await client.transcribe(
         b"fake-mp3", filename="test.mp3", content_type="audio/mpeg"
     )
-    report = await client.analyze(transcript, {"criteria": []})
+    report = await client.analyze(transcript, rule_payload())
     assert transcript.segments[0].speaker == "UNKNOWN"
     assert transcript.segments[1].text == "Ертең жазылуға бола ма?"
     assert report.mixed_language is True

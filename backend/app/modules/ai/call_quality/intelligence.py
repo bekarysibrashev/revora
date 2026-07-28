@@ -1,5 +1,6 @@
 """Transient speech recognition and structured call-quality analysis."""
 from dataclasses import dataclass
+from copy import deepcopy
 import json
 from typing import Any, Protocol
 
@@ -145,9 +146,29 @@ The conversation may freely mix Russian and Kazakh within a sentence. Preserve i
 Infer operator and customer speakers only from conversational evidence. If uncertain, set needs_review=true and lower confidence.
 Segments marked UNKNOWN have not been diarized. Never pretend their speaker identity is known; set both speaker roles to UNKNOWN and needs_review=true.
 Evaluate only the supplied rule set. Never invent actions or words. Every negative finding needs timestamped evidence.
+Return exactly one criteria_scores item for every supplied criterion. Copy each criterion name exactly, without translating, shortening, or rephrasing it.
 Evidence descriptions must be paraphrases, never verbatim personal data or phone numbers.
 Do not output a transcript, quotations, names, phone numbers, medical diagnoses, or other personal data.
 Use result=unclear when audio/transcription evidence is insufficient."""
+
+
+def report_schema_for(rules: dict) -> dict[str, Any]:
+    """Bind the structured response to the clinic's exact criterion names."""
+    schema = deepcopy(REPORT_SCHEMA)
+    names = [
+        str(item["name"])
+        for item in rules.get("criteria", [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    scores = schema["properties"]["criteria_scores"]
+    scores["minItems"] = len(names)
+    scores["maxItems"] = len(names)
+    if names:
+        scores["items"]["properties"]["name"] = {
+            "type": "string",
+            "enum": names,
+        }
+    return schema
 
 
 @dataclass
@@ -216,7 +237,7 @@ class OpenAICallIntelligenceClient:
                     "type": "json_schema",
                     "name": "call_quality_report",
                     "strict": True,
-                    "schema": REPORT_SCHEMA,
+                    "schema": report_schema_for(rules),
                 },
             },
             "max_output_tokens": 3000,
@@ -369,7 +390,7 @@ class GroqCallIntelligenceClient:
                 "json_schema": {
                     "name": "call_quality_report",
                     "strict": True,
-                    "schema": REPORT_SCHEMA,
+                    "schema": report_schema_for(rules),
                 },
             },
             "max_completion_tokens": 3000,

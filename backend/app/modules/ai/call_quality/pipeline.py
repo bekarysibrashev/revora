@@ -56,12 +56,23 @@ class CallQualityPipeline:
             **common,
         )
 
-    async def run(self, tenant_id: UUID, analysis_id: UUID) -> bool:
-        """Process one report. Return True only when a transient retry is needed."""
+    async def _set_tenant_context(self, tenant_id: UUID) -> None:
         await self.session.execute(
             text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
             {"tenant_id": str(tenant_id)},
         )
+
+    async def _commit_for_tenant(self, tenant_id: UUID) -> None:
+        # set_config(..., true) is transaction-local and is cleared by every
+        # commit. Disable autoflush while restoring it so PostgreSQL RLS sees
+        # the tenant before SQLAlchemy sends pending UPDATE statements.
+        with self.session.no_autoflush:
+            await self._set_tenant_context(tenant_id)
+        await self.session.commit()
+
+    async def run(self, tenant_id: UUID, analysis_id: UUID) -> bool:
+        """Process one report. Return True only when a transient retry is needed."""
+        await self._set_tenant_context(tenant_id)
         analysis = await self.session.scalar(
             select(CallQualityAnalysis)
             .where(
@@ -86,11 +97,11 @@ class CallQualityPipeline:
         if call.duration_seconds is not None and call.duration_seconds <= self.settings.call_min_duration_seconds:
             analysis.status = "skipped_short"
             analysis.completed_at = datetime.now(UTC)
-            await self.session.commit()
+            await self._commit_for_tenant(tenant_id)
             return False
         if not call.recording_url:
             analysis.status = "waiting_for_recording"
-            await self.session.commit()
+            await self._commit_for_tenant(tenant_id)
             return False
 
         analysis.status = "processing"
@@ -98,7 +109,7 @@ class CallQualityPipeline:
         analysis.attempt_count += 1
         analysis.error_code = None
         analysis.error_message = None
-        await self.session.commit()
+        await self._commit_for_tenant(tenant_id)
 
         audio = transcript = None
         try:
@@ -113,7 +124,7 @@ class CallQualityPipeline:
                 await self.loader.delete_if_temporary(call.recording_url)
                 if call.recording_url.startswith("minio://"):
                     call.recording_url = None
-                await self.session.commit()
+                await self._commit_for_tenant(tenant_id)
                 return False
             report = await self.client.analyze(
                 transcript,
@@ -131,14 +142,11 @@ class CallQualityPipeline:
             await self.loader.delete_if_temporary(call.recording_url)
             if call.recording_url.startswith("minio://"):
                 call.recording_url = None
-            await self.session.commit()
+            await self._commit_for_tenant(tenant_id)
             return False
         except CallIntelligenceError as exc:
             await self.session.rollback()
-            await self.session.execute(
-                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
-                {"tenant_id": str(tenant_id)},
-            )
+            await self._set_tenant_context(tenant_id)
             analysis = await self.session.scalar(
                 select(CallQualityAnalysis)
                 .where(
@@ -167,10 +175,7 @@ class CallQualityPipeline:
         content_type: str,
     ) -> str:
         """Run a manual test in the API process without persisting audio or transcript."""
-        await self.session.execute(
-            text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
-            {"tenant_id": str(tenant_id)},
-        )
+        await self._set_tenant_context(tenant_id)
         analysis = await self.session.scalar(
             select(CallQualityAnalysis)
             .where(
@@ -201,7 +206,7 @@ class CallQualityPipeline:
         analysis.status = "processing"
         analysis.processing_started_at = datetime.now(UTC)
         analysis.attempt_count += 1
-        await self.session.commit()
+        await self._commit_for_tenant(tenant_id)
 
         transcript = None
         try:
@@ -212,7 +217,7 @@ class CallQualityPipeline:
             if transcript.duration <= self.settings.call_min_duration_seconds:
                 analysis.status = "skipped_short"
                 analysis.completed_at = datetime.now(UTC)
-                await self.session.commit()
+                await self._commit_for_tenant(tenant_id)
                 return analysis.status
             report = await self.client.analyze(
                 transcript,
@@ -226,14 +231,11 @@ class CallQualityPipeline:
                 },
             )
             self._validate_and_apply(analysis, report, rules, transcript.duration)
-            await self.session.commit()
+            await self._commit_for_tenant(tenant_id)
             return analysis.status
         except CallIntelligenceError as exc:
             await self.session.rollback()
-            await self.session.execute(
-                text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
-                {"tenant_id": str(tenant_id)},
-            )
+            await self._set_tenant_context(tenant_id)
             analysis = await self.session.scalar(
                 select(CallQualityAnalysis).where(
                     CallQualityAnalysis.tenant_id == tenant_id,
@@ -320,5 +322,5 @@ class CallQualityPipeline:
                     call.recording_url = None
                 except Exception:
                     pass
-        await self.session.commit()
+        await self._commit_for_tenant(analysis.tenant_id)
         return should_retry
