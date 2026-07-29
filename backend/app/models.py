@@ -35,5 +35,12 @@ from app.modules.kcell.models import KcellWebhookReceipt
 from app.modules.losses.models import LossOpportunity
 from app.modules.ml.models import MLDatasetSnapshot, MLExperiment, MLModelVersion, MLPrediction
 from app.modules.tenancy.models import Branch, Tenant
+from app.modules.whatsapp.models import (
+    WhatsAppAIUsage,
+    WhatsAppChannel,
+    WhatsAppConversation,
+    WhatsAppKnowledgeItem,
+    WhatsAppMessage,
+)
 
 __all__ = [name for name in globals() if not name.startswith("_")]

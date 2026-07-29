@@ -68,6 +68,30 @@ services:
         value: "25000000"
       - key: CALL_ANALYSIS_TIMEOUT_SECONDS
         value: "120"
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_DATA_KEY
+        sync: false
+      - key: WHATSAPP_TENANT_SLUG
+        value: test1
+      - key: WHATSAPP_GRAPH_API_VERSION
+        value: v25.0
+      - key: WHATSAPP_AI_PROVIDER
+        value: rules
+      - key: WHATSAPP_AI_MODEL
+        value: openai/gpt-oss-20b
+      - key: WHATSAPP_AI_AUTO_SEND
+        value: "false"
+      - key: WHATSAPP_MONTHLY_BUDGET_KZT
+        value: "10000"
+      - key: WHATSAPP_MAX_CONTEXT_MESSAGES
+        value: "12"
+      - key: WHATSAPP_USD_KZT_RATE
+        value: "550"
 
   - type: web
     name: revora-web-bekarysibrashev

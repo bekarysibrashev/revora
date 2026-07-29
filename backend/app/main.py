@@ -29,6 +29,8 @@ from app.modules.integrations.router import router as integrations_router
 from app.modules.marketing.router import router as marketing_router
 from app.modules.sales.router import router as sales_router
 from app.modules.tenancy.router import router as tenancy_router
+from app.modules.whatsapp.router import router as whatsapp_router
+from app.modules.whatsapp.router import webhook_router as whatsapp_webhook_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -112,6 +114,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(kcell_router, prefix=settings.api_v1_prefix)
     application.include_router(losses_router, prefix=settings.api_v1_prefix)
     application.include_router(ml_router, prefix=settings.api_v1_prefix)
+    application.include_router(whatsapp_router, prefix=settings.api_v1_prefix)
+    application.include_router(whatsapp_webhook_router, prefix=settings.api_v1_prefix)
 
     return application
 

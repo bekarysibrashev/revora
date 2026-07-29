@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 import json
+from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -68,6 +69,20 @@ class Settings(BaseSettings):
     call_max_audio_bytes: int = Field(default=25_000_000, ge=1_000_000, le=100_000_000)
     call_analysis_timeout_seconds: int = Field(default=120, ge=15, le=300)
     call_analysis_max_attempts: int = Field(default=3, ge=1, le=10)
+
+    # WhatsApp AI assistant. Production sending stays disabled until explicitly enabled.
+    whatsapp_verify_token: SecretStr = SecretStr("")
+    whatsapp_app_secret: SecretStr = SecretStr("")
+    whatsapp_access_token: SecretStr = SecretStr("")
+    whatsapp_data_key: SecretStr = SecretStr("")
+    whatsapp_tenant_slug: str = "demo"
+    whatsapp_graph_api_version: str = "v25.0"
+    whatsapp_ai_provider: Literal["rules", "groq", "openai"] = "rules"
+    whatsapp_ai_model: str = "openai/gpt-oss-20b"
+    whatsapp_ai_auto_send: bool = False
+    whatsapp_monthly_budget_kzt: int = Field(default=10_000, ge=0, le=1_000_000)
+    whatsapp_max_context_messages: int = Field(default=12, ge=2, le=30)
+    whatsapp_usd_kzt_rate: Decimal = Field(default=550, gt=0, le=5000)
 
     # Отдельный секрет для /platform/* (создание новых клиник) — не JWT, не
     # per-tenant роль. Видит только оператор платформы. Та же логика защиты
