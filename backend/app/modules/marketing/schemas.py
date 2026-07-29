@@ -73,7 +73,12 @@ class MetaCampaignPerformance(BaseModel):
     video_thruplays: int
     ctr: Decimal | None
     cpc: Decimal | None
+    cpm: Decimal | None
+    cost_per_lead: Decimal | None
     cost_per_conversation: Decimal | None
+    click_to_conversation_rate: Decimal | None
+    landing_page_view_rate: Decimal | None
+    video_thruplay_rate: Decimal | None
 
 
 class MetaAccountPerformance(BaseModel):
@@ -88,6 +93,29 @@ class MetaAccountPerformance(BaseModel):
     ctr: Decimal | None
     cpc: Decimal | None
     cost_per_conversation: Decimal | None
+
+
+class MetaPeriodComparison(BaseModel):
+    previous_date_from: date
+    previous_date_to: date
+    total_spend: Decimal
+    conversations_started: int
+    leads: int
+    cost_per_conversation: Decimal | None
+    spend_change: Decimal | None
+    conversations_change: Decimal | None
+    leads_change: Decimal | None
+    cost_per_conversation_change: Decimal | None
+
+
+class MetaCampaignAlert(BaseModel):
+    severity: str
+    code: str
+    account_external_id: str
+    campaign_external_id: str
+    campaign_name: str
+    title: str
+    description: str
 
 
 class MetaAdsOverviewResponse(BaseModel):
@@ -107,8 +135,15 @@ class MetaAdsOverviewResponse(BaseModel):
     video_thruplays: int
     ctr: Decimal | None
     cpc: Decimal | None
+    cpm: Decimal | None
+    cost_per_lead: Decimal | None
     cost_per_conversation: Decimal | None
+    click_to_conversation_rate: Decimal | None
+    landing_page_view_rate: Decimal | None
+    video_thruplay_rate: Decimal | None
     selected_account_id: str | None
+    comparison: MetaPeriodComparison
+    alerts: list[MetaCampaignAlert]
     accounts: list[MetaAccountPerformance]
     campaigns: list[MetaCampaignPerformance]
     date_from: date

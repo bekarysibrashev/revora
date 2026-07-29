@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -166,7 +167,51 @@ async def test_meta_overview_calculates_business_metrics() -> None:
     assert response.total_spend == Decimal("100")
     assert response.ctr == Decimal("0.05")
     assert response.cpc == Decimal("1")
+    assert response.cpm == Decimal("50")
+    assert response.cost_per_lead == Decimal("10")
     assert response.cost_per_conversation == Decimal("5")
+    assert response.click_to_conversation_rate == Decimal("0.25")
+    assert response.landing_page_view_rate == Decimal(
+        "0.8571428571428571428571428571"
+    )
+    assert response.video_thruplay_rate == Decimal("0.2")
+    assert response.comparison.spend_change == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_meta_overview_flags_spend_without_results_and_compares_periods() -> None:
+    class AlertRepository(FakeMetaRepository):
+        async def meta_campaign_totals(
+            self, tenant_id, date_from, date_to, account_external_id=None
+        ):
+            rows = await super().meta_campaign_totals(
+                tenant_id, date_from, date_to, account_external_id
+            )
+            if date_to < date(2026, 7, 1):
+                return [
+                    replace(
+                        rows[0],
+                        spend=Decimal("50"),
+                        conversations_started=10,
+                        leads=5,
+                    )
+                ]
+            return [
+                replace(
+                    rows[0],
+                    spend=Decimal("100"),
+                    conversations_started=0,
+                    leads=0,
+                )
+            ]
+
+    response = await MarketingService(AlertRepository()).meta_overview(
+        make_user(), date(2026, 7, 1), date(2026, 7, 27)
+    )
+
+    assert response.comparison.spend_change == Decimal("1")
+    assert response.comparison.conversations_change == Decimal("-1")
+    assert response.alerts[0].code == "SPEND_WITHOUT_RESULTS"
 
 
 @pytest.mark.asyncio

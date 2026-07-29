@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -14,7 +14,9 @@ from app.modules.marketing.schemas import (
     MetaAdsOverviewResponse,
     MetaAdsStatusResponse,
     MetaAdsSyncResponse,
+    MetaCampaignAlert,
     MetaCampaignPerformance,
+    MetaPeriodComparison,
 )
 
 
@@ -144,6 +146,21 @@ class MarketingService:
             if account_id
             else all_rows
         )
+        period_days = (date_to - date_from).days + 1
+        previous_date_to = date_from - timedelta(days=1)
+        previous_date_from = previous_date_to - timedelta(days=period_days - 1)
+        all_previous_rows = await self.repository.meta_campaign_totals(
+            user.tenant_id, previous_date_from, previous_date_to, None
+        )
+        previous_rows = (
+            [
+                row
+                for row in all_previous_rows
+                if row.account_external_id == account_id
+            ]
+            if account_id
+            else all_previous_rows
+        )
         currencies = {row.currency for row in rows}
         if len(currencies) > 1:
             raise AppError(
@@ -173,8 +190,19 @@ class MarketingService:
                 video_thruplays=row.video_thruplays,
                 ctr=self._ratio(row.clicks, row.impressions),
                 cpc=self._ratio(row.spend, row.clicks),
+                cpm=self._ratio(row.spend * 1000, row.impressions),
+                cost_per_lead=self._ratio(row.spend, row.leads),
                 cost_per_conversation=self._ratio(
                     row.spend, row.conversations_started
+                ),
+                click_to_conversation_rate=self._ratio(
+                    row.conversations_started, row.link_clicks
+                ),
+                landing_page_view_rate=self._ratio(
+                    row.landing_page_views, row.outbound_clicks
+                ),
+                video_thruplay_rate=self._ratio(
+                    row.video_thruplays, row.video_plays
                 ),
             )
             for row in rows
@@ -192,6 +220,17 @@ class MarketingService:
         messaging_connections = sum(row.messaging_connections for row in rows)
         video_plays = sum(row.video_plays for row in rows)
         video_thruplays = sum(row.video_thruplays for row in rows)
+        previous_spend = sum(
+            (row.spend for row in previous_rows), Decimal("0")
+        )
+        previous_conversations = sum(
+            row.conversations_started for row in previous_rows
+        )
+        previous_leads = sum(row.leads for row in previous_rows)
+        previous_cost_per_conversation = self._ratio(
+            previous_spend, previous_conversations
+        )
+        cost_per_conversation = self._ratio(total_spend, conversations)
         account_groups: dict[str, list] = {}
         for row in all_rows:
             account_groups.setdefault(row.account_external_id, []).append(row)
@@ -221,6 +260,9 @@ class MarketingService:
                 )
             )
         timestamps = [item.last_synced_at for item in accounts if item.last_synced_at]
+        alerts = self._campaign_alerts(
+            campaigns, cost_per_conversation
+        )
         return MetaAdsOverviewResponse(
             total_spend=total_spend,
             currency=next(iter(currencies)) if currencies else None,
@@ -238,8 +280,36 @@ class MarketingService:
             video_thruplays=video_thruplays,
             ctr=self._ratio(clicks, impressions),
             cpc=self._ratio(total_spend, clicks),
-            cost_per_conversation=self._ratio(total_spend, conversations),
+            cpm=self._ratio(total_spend * 1000, impressions),
+            cost_per_lead=self._ratio(total_spend, leads),
+            cost_per_conversation=cost_per_conversation,
+            click_to_conversation_rate=self._ratio(
+                conversations, link_clicks
+            ),
+            landing_page_view_rate=self._ratio(
+                landing_page_views, outbound_clicks
+            ),
+            video_thruplay_rate=self._ratio(
+                video_thruplays, video_plays
+            ),
             selected_account_id=account_id,
+            comparison=MetaPeriodComparison(
+                previous_date_from=previous_date_from,
+                previous_date_to=previous_date_to,
+                total_spend=previous_spend,
+                conversations_started=previous_conversations,
+                leads=previous_leads,
+                cost_per_conversation=previous_cost_per_conversation,
+                spend_change=self._change(total_spend, previous_spend),
+                conversations_change=self._change(
+                    conversations, previous_conversations
+                ),
+                leads_change=self._change(leads, previous_leads),
+                cost_per_conversation_change=self._change(
+                    cost_per_conversation, previous_cost_per_conversation
+                ),
+            ),
+            alerts=alerts,
             accounts=sorted(
                 account_performance, key=lambda item: item.spend, reverse=True
             ),
@@ -274,3 +344,78 @@ class MarketingService:
         if not denominator:
             return None
         return Decimal(numerator) / Decimal(denominator)
+
+    @staticmethod
+    def _change(current, previous) -> Decimal | None:
+        if current is None or previous is None or not previous:
+            return None
+        return (Decimal(current) - Decimal(previous)) / Decimal(previous)
+
+    @staticmethod
+    def _campaign_alerts(
+        campaigns: list[MetaCampaignPerformance],
+        average_cost_per_conversation: Decimal | None,
+    ) -> list[MetaCampaignAlert]:
+        alerts: list[MetaCampaignAlert] = []
+        for campaign in campaigns:
+            common = {
+                "account_external_id": campaign.account_external_id,
+                "campaign_external_id": campaign.campaign_external_id,
+                "campaign_name": campaign.campaign_name,
+            }
+            if (
+                campaign.spend > 0
+                and campaign.conversations_started == 0
+                and campaign.leads == 0
+            ):
+                alerts.append(
+                    MetaCampaignAlert(
+                        severity="critical",
+                        code="SPEND_WITHOUT_RESULTS",
+                        title="Расход без обращений",
+                        description=(
+                            f"Кампания потратила {campaign.spend} "
+                            f"{campaign.currency}, но Meta не зафиксировала "
+                            "ни диалогов, ни лидов."
+                        ),
+                        **common,
+                    )
+                )
+                continue
+            if (
+                average_cost_per_conversation
+                and campaign.cost_per_conversation
+                and campaign.conversations_started >= 3
+                and campaign.cost_per_conversation
+                > average_cost_per_conversation * Decimal("1.5")
+            ):
+                alerts.append(
+                    MetaCampaignAlert(
+                        severity="warning",
+                        code="HIGH_CONVERSATION_COST",
+                        title="Диалог заметно дороже среднего",
+                        description=(
+                            "Цена диалога этой кампании более чем на 50% "
+                            "выше среднего по выбранному периоду."
+                        ),
+                        **common,
+                    )
+                )
+            if (
+                campaign.outbound_clicks >= 10
+                and campaign.landing_page_views == 0
+            ):
+                alerts.append(
+                    MetaCampaignAlert(
+                        severity="warning",
+                        code="LANDING_TRACKING_GAP",
+                        title="Переходы есть, просмотров страницы нет",
+                        description=(
+                            "Проверьте посадочную страницу и Pixel: Meta "
+                            "фиксирует исходящие клики, но не видит загрузку страницы."
+                        ),
+                        **common,
+                    )
+                )
+        order = {"critical": 0, "warning": 1}
+        return sorted(alerts, key=lambda item: order.get(item.severity, 2))

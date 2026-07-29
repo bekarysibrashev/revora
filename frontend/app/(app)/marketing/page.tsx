@@ -59,8 +59,34 @@ type MetaOverview = {
   video_thruplays: number;
   ctr: string | null;
   cpc: string | null;
+  cpm: string | null;
+  cost_per_lead: string | null;
   cost_per_conversation: string | null;
+  click_to_conversation_rate: string | null;
+  landing_page_view_rate: string | null;
+  video_thruplay_rate: string | null;
   selected_account_id: string | null;
+  comparison: {
+    previous_date_from: string;
+    previous_date_to: string;
+    total_spend: string;
+    conversations_started: number;
+    leads: number;
+    cost_per_conversation: string | null;
+    spend_change: string | null;
+    conversations_change: string | null;
+    leads_change: string | null;
+    cost_per_conversation_change: string | null;
+  };
+  alerts: {
+    severity: string;
+    code: string;
+    account_external_id: string;
+    campaign_external_id: string;
+    campaign_name: string;
+    title: string;
+    description: string;
+  }[];
   accounts: {
     account_external_id: string;
     account_name: string;
@@ -95,7 +121,12 @@ type MetaOverview = {
     video_thruplays: number;
     ctr: string | null;
     cpc: string | null;
+    cpm: string | null;
+    cost_per_lead: string | null;
     cost_per_conversation: string | null;
+    click_to_conversation_rate: string | null;
+    landing_page_view_rate: string | null;
+    video_thruplay_rate: string | null;
   }[];
   data_as_of: string | null;
 };
@@ -120,6 +151,22 @@ function ratio(value: string | null) {
     : `${(Number(value) * 100).toLocaleString("ru-RU", {
         maximumFractionDigits: 2,
       })}%`;
+}
+
+function change(value: string | null, inverse = false) {
+  if (value === null) return "Нет данных за прошлый период";
+  const numeric = Number(value) * 100;
+  const sign = numeric > 0 ? "+" : "";
+  const direction = inverse
+    ? numeric <= 0
+      ? "лучше"
+      : "хуже"
+    : numeric >= 0
+      ? "выше"
+      : "ниже";
+  return `${sign}${numeric.toLocaleString("ru-RU", {
+    maximumFractionDigits: 1,
+  })}% · ${direction} прошлого периода`;
 }
 
 export default function MarketingPage() {
@@ -249,6 +296,7 @@ export default function MarketingPage() {
               <Metric
                 label="Расход Meta"
                 value={currency(meta.data.total_spend, meta.data.currency || "USD")}
+                note={change(meta.data.comparison.spend_change, true)}
               />
               <Metric
                 label="Показы"
@@ -258,7 +306,7 @@ export default function MarketingPage() {
               <Metric
                 label="WhatsApp-диалоги"
                 value={meta.data.conversations_started.toLocaleString("ru-RU")}
-                note={`Цена диалога: ${
+                note={`${change(meta.data.comparison.conversations_change)} · Цена: ${
                   meta.data.cost_per_conversation
                     ? currency(
                         meta.data.cost_per_conversation,
@@ -266,6 +314,40 @@ export default function MarketingPage() {
                       )
                     : "—"
                 }`}
+              />
+            </section>
+            <section className="metric-grid">
+              <Metric
+                label="CPM · 1 000 показов"
+                value={
+                  meta.data.cpm
+                    ? currency(meta.data.cpm, meta.data.currency || "USD")
+                    : "—"
+                }
+              />
+              <Metric
+                label="CPC · клик"
+                value={
+                  meta.data.cpc
+                    ? currency(meta.data.cpc, meta.data.currency || "USD")
+                    : "—"
+                }
+              />
+              <Metric
+                label="CPL · лид"
+                value={
+                  meta.data.cost_per_lead
+                    ? currency(
+                        meta.data.cost_per_lead,
+                        meta.data.currency || "USD",
+                      )
+                    : "—"
+                }
+                note={change(meta.data.comparison.leads_change)}
+              />
+              <Metric
+                label="Клик → диалог"
+                value={ratio(meta.data.click_to_conversation_rate)}
               />
             </section>
             <section className="metric-grid">
@@ -280,6 +362,7 @@ export default function MarketingPage() {
               <Metric
                 label="Просмотры страницы"
                 value={meta.data.landing_page_views.toLocaleString("ru-RU")}
+                note={`Дошли после клика: ${ratio(meta.data.landing_page_view_rate)}`}
               />
               <Metric
                 label="Лиды Meta"
@@ -289,9 +372,28 @@ export default function MarketingPage() {
               <Metric
                 label="Запуски видео"
                 value={meta.data.video_plays.toLocaleString("ru-RU")}
-                note={`ThruPlay: ${meta.data.video_thruplays.toLocaleString("ru-RU")}`}
+                note={`ThruPlay: ${meta.data.video_thruplays.toLocaleString("ru-RU")} · ${ratio(meta.data.video_thruplay_rate)}`}
               />
             </section>
+            {!!meta.data.alerts.length && (
+              <section className="insights">
+                <h2>Что требует внимания в Meta Ads</h2>
+                {meta.data.alerts.map((alert) => (
+                  <article
+                    key={`${alert.code}:${alert.account_external_id}:${alert.campaign_external_id}`}
+                    className={`insight ${alert.severity}`}
+                  >
+                    <span>!</span>
+                    <div>
+                      <strong>
+                        {alert.title} · {alert.campaign_name}
+                      </strong>
+                      <p>{alert.description}</p>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            )}
             {!selectedAccount && meta.data.accounts.length > 1 && (
               <section className="panel">
                 <h2>Сравнение кабинетов</h2>
@@ -341,6 +443,8 @@ export default function MarketingPage() {
                       <th>Показы</th>
                       <th>Клики</th>
                       <th>CTR</th>
+                      <th>CPM</th>
+                      <th>CPL</th>
                       <th>Диалоги</th>
                       <th>Цена диалога</th>
                     </tr>
@@ -359,6 +463,19 @@ export default function MarketingPage() {
                         <td>{campaign.clicks.toLocaleString("ru-RU")}</td>
                         <td>{ratio(campaign.ctr)}</td>
                         <td>
+                          {campaign.cpm
+                            ? currency(campaign.cpm, campaign.currency)
+                            : "—"}
+                        </td>
+                        <td>
+                          {campaign.cost_per_lead
+                            ? currency(
+                                campaign.cost_per_lead,
+                                campaign.currency,
+                              )
+                            : "—"}
+                        </td>
+                        <td>
                           {campaign.conversations_started.toLocaleString("ru-RU")}
                         </td>
                         <td>
@@ -373,7 +490,7 @@ export default function MarketingPage() {
                     ))}
                     {!meta.data.campaigns.length && (
                       <tr>
-                        <td colSpan={8} className="empty">
+                        <td colSpan={10} className="empty">
                           Нажмите «Синхронизировать Meta», чтобы загрузить данные
                           выбранного периода.
                         </td>
