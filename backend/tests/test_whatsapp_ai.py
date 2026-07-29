@@ -2,6 +2,8 @@ from hashlib import sha256
 import hmac
 from io import BytesIO
 
+import httpx
+import pytest
 from openpyxl import Workbook
 
 from app.modules.whatsapp.ai import (
@@ -10,6 +12,10 @@ from app.modules.whatsapp.ai import (
     rules_decision,
 )
 from app.modules.whatsapp.knowledge_import import import_knowledge_workbook
+from app.modules.whatsapp.meta_client import (
+    MetaEmbeddedSignupClient,
+    MetaEmbeddedSignupError,
+)
 from app.modules.whatsapp.security import (
     decrypt_contact,
     encrypt_contact,
@@ -95,3 +101,75 @@ def test_workbook_rows_start_unapproved_and_promotions_stay_human_only() -> None
     assert len(rows) == 2
     assert next(row for row in rows if row.category == "FAQ_КОНСУЛЬТАЦИЯ").risk_level == "review"
     assert next(row for row in rows if row.category == "РАССЫЛКА КП").risk_level == "human_only"
+
+
+@pytest.mark.asyncio
+async def test_embedded_signup_exchanges_code_and_subscribes_verified_waba() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/oauth/access_token"):
+            assert request.url.params["client_id"] == "app-123"
+            assert request.url.params["client_secret"] == "app-secret"
+            assert request.url.params["code"] == "single-use-code"
+            return httpx.Response(
+                200,
+                json={"access_token": "channel-token", "expires_in": 3600},
+            )
+        if request.url.path.endswith("/waba-123/phone_numbers"):
+            assert request.headers["Authorization"] == "Bearer channel-token"
+            assert request.url.params["appsecret_proof"]
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "phone-123",
+                            "display_phone_number": "+7 777 000 11 22",
+                            "verified_name": "Revora Test",
+                        }
+                    ]
+                },
+            )
+        if request.url.path.endswith("/waba-123/subscribed_apps"):
+            return httpx.Response(200, json={"success": True})
+        return httpx.Response(404)
+
+    client = MetaEmbeddedSignupClient(
+        app_id="app-123",
+        app_secret="app-secret",
+        graph_version="v25.0",
+        transport=httpx.MockTransport(handler),
+    )
+
+    token, expires_in = await client.exchange_code("single-use-code")
+    phone = await client.verify_and_subscribe(
+        token=token,
+        waba_id="waba-123",
+        phone_number_id="phone-123",
+    )
+
+    assert expires_in == 3600
+    assert phone["verified_name"] == "Revora Test"
+    assert [request.method for request in requests] == ["GET", "GET", "POST"]
+
+
+@pytest.mark.asyncio
+async def test_embedded_signup_rejects_phone_from_another_waba() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": []})
+
+    client = MetaEmbeddedSignupClient(
+        app_id="app-123",
+        app_secret="app-secret",
+        graph_version="v25.0",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(MetaEmbeddedSignupError, match="does not belong"):
+        await client.verify_and_subscribe(
+            token="channel-token",
+            waba_id="waba-123",
+            phone_number_id="phone-123",
+        )

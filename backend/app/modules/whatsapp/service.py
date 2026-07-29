@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -17,6 +17,10 @@ from app.modules.whatsapp.ai import (
     rules_decision,
 )
 from app.modules.whatsapp.knowledge_import import import_knowledge_workbook
+from app.modules.whatsapp.meta_client import (
+    MetaEmbeddedSignupClient,
+    MetaEmbeddedSignupError,
+)
 from app.modules.whatsapp.models import (
     WhatsAppAIUsage,
     WhatsAppChannel,
@@ -32,6 +36,7 @@ from app.modules.whatsapp.schemas import (
     KnowledgeItemResponse,
     KnowledgeListResponse,
     SimulatorMessageResponse,
+    WhatsAppChannelResponse,
     WhatsAppStatusResponse,
     MessageItem,
 )
@@ -73,15 +78,53 @@ class WhatsAppService:
             )
         ) or 0
         spend = await self._monthly_spend(tenant)
-        required_secrets = (
-            self.settings.whatsapp_verify_token.get_secret_value(),
-            self.settings.whatsapp_app_secret.get_secret_value(),
-            self.settings.whatsapp_access_token.get_secret_value(),
-            self.settings.whatsapp_data_key.get_secret_value(),
+        connected_channels = await self.session.scalar(
+            select(func.count()).select_from(WhatsAppChannel).where(
+                WhatsAppChannel.tenant_id == tenant,
+                WhatsAppChannel.status == "connected",
+                WhatsAppChannel.access_token_ciphertext.is_not(None),
+            )
+        ) or 0
+        setup_values = {
+            "META_APP_ID": self.settings.meta_app_id,
+            "WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID": (
+                self.settings.whatsapp_embedded_signup_config_id
+            ),
+            "WHATSAPP_APP_SECRET": (
+                self.settings.whatsapp_app_secret.get_secret_value()
+            ),
+            "WHATSAPP_DATA_KEY": (
+                self.settings.whatsapp_data_key.get_secret_value()
+            ),
+            "WHATSAPP_VERIFY_TOKEN": (
+                self.settings.whatsapp_verify_token.get_secret_value()
+            ),
+        }
+        connection_missing = [
+            name for name, value in setup_values.items() if not value
+        ]
+        embedded_signup_ready = all(
+            setup_values[name]
+            for name in (
+                "META_APP_ID",
+                "WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID",
+                "WHATSAPP_APP_SECRET",
+                "WHATSAPP_DATA_KEY",
+            )
         )
+        configured = bool(
+            connected_channels
+            or self.settings.whatsapp_access_token.get_secret_value()
+        ) and not connection_missing
         return WhatsAppStatusResponse(
-            configured=all(bool(secret) for secret in required_secrets),
-            test_mode=not bool(self.settings.whatsapp_access_token.get_secret_value()),
+            configured=configured,
+            test_mode=not configured,
+            embedded_signup_ready=embedded_signup_ready,
+            meta_app_id=self.settings.meta_app_id or None,
+            embedded_signup_config_id=(
+                self.settings.whatsapp_embedded_signup_config_id or None
+            ),
+            connection_missing=connection_missing,
             ai_provider=self.settings.whatsapp_ai_provider,
             auto_send=self.settings.whatsapp_ai_auto_send,
             monthly_budget_kzt=self.settings.whatsapp_monthly_budget_kzt,
@@ -91,6 +134,75 @@ class WhatsAppService:
             waiting_for_human=waiting,
             knowledge_total=knowledge_total,
             knowledge_approved=knowledge_approved,
+        )
+
+    async def complete_embedded_signup(
+        self,
+        user: User,
+        *,
+        code: str,
+        waba_id: str,
+        phone_number_id: str,
+    ) -> WhatsAppChannelResponse:
+        self._owner(user)
+        app_id = self.settings.meta_app_id
+        app_secret = self.settings.whatsapp_app_secret.get_secret_value()
+        data_key = self.settings.whatsapp_data_key.get_secret_value()
+        if not app_id or not app_secret or not data_key:
+            raise AppError(
+                "WHATSAPP_EMBEDDED_SIGNUP_NOT_CONFIGURED",
+                "Meta App ID, App Secret and WhatsApp data key are required",
+                503,
+            )
+        try:
+            client = MetaEmbeddedSignupClient(
+                app_id=app_id,
+                app_secret=app_secret,
+                graph_version=self.settings.whatsapp_graph_api_version,
+            )
+            token, expires_in = await client.exchange_code(code)
+            phone = await client.verify_and_subscribe(
+                token=token,
+                waba_id=waba_id,
+                phone_number_id=phone_number_id,
+            )
+            encrypted_token = encrypt_contact(token, data_key)
+        except (MetaEmbeddedSignupError, WhatsAppDataProtectionError) as exc:
+            raise AppError(
+                "WHATSAPP_EMBEDDED_SIGNUP_FAILED",
+                str(exc),
+                502,
+            ) from exc
+        display_phone_number = phone["display_phone_number"]
+        verified_name = phone["verified_name"]
+        channel = await self._ensure_channel(
+            user.tenant_id,
+            phone_number_id,
+            verified_name or mask_contact(display_phone_number),
+            status="connected",
+        )
+        channel.waba_id = waba_id
+        channel.business_number_masked = mask_contact(display_phone_number)
+        channel.access_token_ciphertext = encrypted_token
+        channel.token_expires_at = (
+            datetime.now(UTC) + timedelta(seconds=expires_in)
+            if expires_in
+            else None
+        )
+        channel.connected_by_user_id = user.id
+        channel.connection_mode = "coexistence"
+        channel.status = "connected"
+        channel.bot_mode = "draft"
+        channel.is_active = True
+        await self.session.flush()
+        return WhatsAppChannelResponse(
+            id=channel.id,
+            waba_id=waba_id,
+            phone_number_id=phone_number_id,
+            display_name=channel.display_name,
+            business_number_masked=channel.business_number_masked,
+            status=channel.status,
+            connection_mode=channel.connection_mode,
         )
 
     async def conversations(self, user: User) -> ConversationListResponse:
@@ -244,7 +356,7 @@ class WhatsAppService:
         self.session.add(outbound)
         await self.session.flush()
         if not simulated and self.settings.whatsapp_ai_auto_send:
-            await self._send(channel.phone_number_id, contact_id, decision.reply)
+            await self._send(channel, contact_id, decision.reply)
             outbound.status = "sent"
             outbound.is_draft = False
             outbound.sent_at = now
@@ -297,7 +409,7 @@ class WhatsAppService:
                 item.contact_ciphertext,
                 self.settings.whatsapp_data_key.get_secret_value(),
             )
-            await self._send(channel.phone_number_id, contact, body)
+            await self._send(channel, contact, body)
             message.status = "sent"
             message.sent_at = now
         return MessageItem(
@@ -472,14 +584,28 @@ class WhatsAppService:
         )
         return decision, provider, cost
 
-    async def _send(self, phone_number_id: str, recipient: str, body: str) -> None:
+    async def _send(
+        self, channel: WhatsAppChannel, recipient: str, body: str
+    ) -> None:
         token = self.settings.whatsapp_access_token.get_secret_value()
+        if channel.access_token_ciphertext:
+            try:
+                token = decrypt_contact(
+                    channel.access_token_ciphertext,
+                    self.settings.whatsapp_data_key.get_secret_value(),
+                )
+            except WhatsAppDataProtectionError as exc:
+                raise AppError(
+                    "WHATSAPP_TOKEN_DECRYPTION_FAILED",
+                    "The WhatsApp channel token cannot be decrypted",
+                    503,
+                ) from exc
         if not token:
             raise AppError("WHATSAPP_NOT_CONFIGURED", "WhatsApp access token is missing", 503)
         try:
             async with httpx.AsyncClient(timeout=20) as client:
                 response = await client.post(
-                    f"https://graph.facebook.com/{self.settings.whatsapp_graph_api_version}/{phone_number_id}/messages",
+                    f"https://graph.facebook.com/{self.settings.whatsapp_graph_api_version}/{channel.phone_number_id}/messages",
                     headers={"Authorization": f"Bearer {token}"},
                     json={
                         "messaging_product": "whatsapp",

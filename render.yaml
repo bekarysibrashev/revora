@@ -76,6 +76,10 @@ services:
         sync: false
       - key: WHATSAPP_DATA_KEY
         sync: false
+      - key: META_APP_ID
+        value: "965678616515017"
+      - key: WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID
+        value: "2277685509673688"
       - key: WHATSAPP_TENANT_SLUG
         value: test1
       - key: WHATSAPP_GRAPH_API_VERSION

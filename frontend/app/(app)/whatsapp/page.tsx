@@ -8,6 +8,8 @@ import { DataState, Metric, PageHeader } from "@/shared/ui";
 
 type Status = {
   configured: boolean; test_mode: boolean; ai_provider: string; auto_send: boolean;
+  embedded_signup_ready: boolean; meta_app_id: string | null;
+  embedded_signup_config_id: string | null; connection_missing: string[];
   monthly_budget_kzt: number; estimated_spend_kzt: string; channels: number;
   open_conversations: number; waiting_for_human: number;
   knowledge_total: number; knowledge_approved: number;
@@ -31,6 +33,50 @@ type Simulation = {
   conversation_id: string; state: string; reply: string | null; handoff: boolean;
   handoff_reason: string | null; provider: string; cost_kzt: string;
 };
+type SignupAssets = { waba_id: string; phone_number_id: string; business_id?: string };
+type FacebookLoginResponse = { authResponse?: { code?: string } };
+
+declare global {
+  interface Window {
+    FB?: {
+      init(options: Record<string, unknown>): void;
+      login(
+        callback: (response: FacebookLoginResponse) => void,
+        options: Record<string, unknown>,
+      ): void;
+    };
+  }
+}
+
+let facebookSdkPromise: Promise<void> | null = null;
+
+function loadFacebookSdk(appId: string) {
+  if (window.FB) {
+    window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version: "v25.0" });
+    return Promise.resolve();
+  }
+  facebookSdkPromise ||= new Promise<void>((resolve, reject) => {
+    const existing = document.getElementById("facebook-jssdk");
+    const finish = () => {
+      if (!window.FB) return reject(new Error("Meta SDK не загрузился"));
+      window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version: "v25.0" });
+      resolve();
+    };
+    if (existing) {
+      existing.addEventListener("load", finish, { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.id = "facebook-jssdk";
+    script.src = "https://connect.facebook.net/en_US/sdk.js";
+    script.async = true;
+    script.defer = true;
+    script.onload = finish;
+    script.onerror = () => reject(new Error("Не удалось загрузить Meta SDK"));
+    document.body.appendChild(script);
+  });
+  return facebookSdkPromise;
+}
 
 const stateLabels: Record<string, string> = {
   bot_active: "ИИ активен",
@@ -50,6 +96,7 @@ export default function WhatsAppPage() {
   const [humanMessage, setHumanMessage] = useState("");
   const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [importResult, setImportResult] = useState("");
+  const [connectMessage, setConnectMessage] = useState("");
   const status = useQuery({ queryKey: ["wa-status"], queryFn: () => api<Status>("/whatsapp/status") });
   const conversations = useQuery({
     queryKey: ["wa-conversations"],
@@ -107,6 +154,105 @@ export default function WhatsAppPage() {
       ]);
     },
   });
+  const completeSignup = useMutation({
+    mutationFn: (payload: SignupAssets & { code: string }) =>
+      api<{ display_name: string; business_number_masked: string | null }>(
+        "/whatsapp/embedded-signup/complete",
+        { method: "POST", body: JSON.stringify(payload) },
+      ),
+    onSuccess: async (channel) => {
+      setConnectMessage(
+        `Подключено: ${channel.display_name} ${channel.business_number_masked || ""}`,
+      );
+      await refresh();
+    },
+    onError: (error) => {
+      setConnectMessage(error instanceof Error ? error.message : "Подключение не завершено");
+    },
+  });
+
+  async function startCoexistence() {
+    const appId = status.data?.meta_app_id;
+    const configId = status.data?.embedded_signup_config_id;
+    if (!appId || !configId || !status.data?.embedded_signup_ready) {
+      setConnectMessage("Сначала добавьте недостающие настройки Meta в Render Secrets.");
+      return;
+    }
+    setConnectMessage("Открываем безопасное окно Meta…");
+    await loadFacebookSdk(appId);
+    let code = "";
+    let assets: SignupAssets | null = null;
+    let completed = false;
+    const cleanup = () => {
+      window.removeEventListener("message", messageListener);
+      window.clearTimeout(timeout);
+    };
+    const finish = () => {
+      if (completed || !code || !assets) return;
+      completed = true;
+      cleanup();
+      completeSignup.mutate({ code, ...assets });
+    };
+    const messageListener = (event: MessageEvent) => {
+      try {
+        const origin = new URL(event.origin);
+        if (
+          origin.protocol !== "https:" ||
+          (origin.hostname !== "facebook.com" &&
+            !origin.hostname.endsWith(".facebook.com"))
+        ) return;
+        const payload =
+          typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+        if (payload?.type !== "WA_EMBEDDED_SIGNUP") return;
+        if (payload.event === "FINISH") {
+          const data = payload.data || {};
+          if (data.waba_id && data.phone_number_id) {
+            assets = {
+              waba_id: String(data.waba_id),
+              phone_number_id: String(data.phone_number_id),
+              business_id: data.business_id ? String(data.business_id) : undefined,
+            };
+            finish();
+          }
+        } else if (payload.event === "CANCEL" || payload.event === "ERROR") {
+          setConnectMessage(
+            payload.event === "CANCEL"
+              ? "Подключение отменено — WhatsApp не изменён."
+              : "Meta сообщила об ошибке подключения.",
+          );
+          cleanup();
+        }
+      } catch {
+        // Ignore unrelated window messages.
+      }
+    };
+    window.addEventListener("message", messageListener);
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      setConnectMessage("Время подключения истекло. Можно безопасно попробовать снова.");
+    }, 10 * 60 * 1000);
+    window.FB?.login(
+      (response) => {
+        code = response.authResponse?.code || "";
+        if (!code) {
+          cleanup();
+          setConnectMessage("Meta не выдала одноразовый код. Подключение отменено.");
+          return;
+        }
+        finish();
+      },
+      {
+        config_id: configId,
+        response_type: "code",
+        override_default_response_type: true,
+        extras: {
+          setup: {},
+          featureType: "whatsapp_business_app_onboarding",
+          sessionInfoVersion: "3",
+        },
+      },
+    );
+  }
 
   async function uploadKnowledge(file: File) {
     setImportResult("");
@@ -144,6 +290,23 @@ export default function WhatsAppPage() {
             <Metric label="Бюджет ИИ" value={`${Number(status.data.estimated_spend_kzt).toLocaleString("ru-RU")} ₸`} note={`Лимит: ${status.data.monthly_budget_kzt.toLocaleString("ru-RU")} ₸`} />
           </section>
           <section className="panel">
+            {user?.role === "owner" && <div className="wa-connect">
+              <div>
+                <strong>Подключение существующего WhatsApp Business</strong>
+                <p>Coexistence сохранит приложение на телефоне. После подключения Revora останется в режиме черновиков.</p>
+                {!status.data.embedded_signup_ready && <small>
+                  Не хватает настроек: {status.data.connection_missing.join(", ")}
+                </small>}
+                {connectMessage && <small>{connectMessage}</small>}
+              </div>
+              <button
+                className="primary"
+                disabled={!status.data.embedded_signup_ready || completeSignup.isPending}
+                onClick={() => void startCoexistence()}
+              >
+                {completeSignup.isPending ? "Подключаем…" : "Подключить через Coexistence"}
+              </button>
+            </div>}
             <div className="tabs">
               <button className={tab === "test" ? "active" : ""} onClick={() => setTab("test")}>Симулятор</button>
               <button className={tab === "dialogs" ? "active" : ""} onClick={() => setTab("dialogs")}>Диалоги</button>

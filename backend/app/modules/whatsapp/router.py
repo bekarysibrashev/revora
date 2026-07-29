@@ -18,6 +18,7 @@ from app.modules.tenancy.models import Tenant
 from app.modules.whatsapp.schemas import (
     ConversationDetailResponse,
     ConversationListResponse,
+    EmbeddedSignupCompleteRequest,
     HumanMessageRequest,
     KnowledgeApprovalRequest,
     KnowledgeImportResponse,
@@ -27,6 +28,7 @@ from app.modules.whatsapp.schemas import (
     SimulatorMessageRequest,
     SimulatorMessageResponse,
     WhatsAppStatusResponse,
+    WhatsAppChannelResponse,
 )
 from app.modules.whatsapp.security import valid_meta_signature
 from app.modules.whatsapp.service import WhatsAppService
@@ -42,6 +44,24 @@ async def status(
     user: CurrentUser, session: Session, settings: RuntimeSettings
 ) -> WhatsAppStatusResponse:
     return await WhatsAppService(session, settings).status(user)
+
+
+@router.post(
+    "/embedded-signup/complete",
+    response_model=WhatsAppChannelResponse,
+)
+async def complete_embedded_signup(
+    payload: EmbeddedSignupCompleteRequest,
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+) -> WhatsAppChannelResponse:
+    return await WhatsAppService(session, settings).complete_embedded_signup(
+        user,
+        code=payload.code,
+        waba_id=payload.waba_id,
+        phone_number_id=payload.phone_number_id,
+    )
 
 
 @router.get("/conversations", response_model=ConversationListResponse)

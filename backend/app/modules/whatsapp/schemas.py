@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 class WhatsAppStatusResponse(BaseModel):
     configured: bool
     test_mode: bool
+    embedded_signup_ready: bool
+    meta_app_id: str | None
+    embedded_signup_config_id: str | None
+    connection_missing: list[str]
     ai_provider: str
     auto_send: bool
     monthly_budget_kzt: int
@@ -94,3 +98,20 @@ class KnowledgeImportResponse(BaseModel):
     imported: int
     review_required: int
     human_only: int
+
+
+class EmbeddedSignupCompleteRequest(BaseModel):
+    code: str = Field(min_length=10, max_length=2000)
+    waba_id: str = Field(pattern=r"^\d{5,30}$")
+    phone_number_id: str = Field(pattern=r"^\d{5,30}$")
+    business_id: str | None = Field(default=None, pattern=r"^\d{5,30}$")
+
+
+class WhatsAppChannelResponse(BaseModel):
+    id: UUID
+    waba_id: str
+    phone_number_id: str
+    display_name: str
+    business_number_masked: str | None
+    status: str
+    connection_mode: str

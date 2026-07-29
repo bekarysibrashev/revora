@@ -18,6 +18,12 @@ class WhatsAppChannel(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Ba
     waba_id: Mapped[str | None] = mapped_column(String(80))
     display_name: Mapped[str] = mapped_column(String(150))
     business_number_masked: Mapped[str | None] = mapped_column(String(30))
+    access_token_ciphertext: Mapped[str | None] = mapped_column(Text)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    connected_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    connection_mode: Mapped[str] = mapped_column(String(30), default="manual")
     status: Mapped[str] = mapped_column(String(30), default="test")
     bot_mode: Mapped[str] = mapped_column(String(20), default="draft")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

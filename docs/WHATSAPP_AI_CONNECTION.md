@@ -40,6 +40,18 @@ Revora принимает сообщения WhatsApp Cloud API через за�
   для шифрования пациентов и сообщений;
 - `WHATSAPP_TENANT_SLUG` — slug клиники в Revora, например `test1`.
 
+Для Embedded Signup / Coexistence также используются публичные идентификаторы:
+
+- `META_APP_ID=965678616515017`;
+- `WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID=2277685509673688`.
+
+Владелец запускает подключение кнопкой **Подключить через Coexistence** в
+Revora. Facebook SDK открывает официальный интерфейс Meta с
+`featureType=whatsapp_business_app_onboarding`. Одноразовый код передаётся
+backend, обменивается на токен и больше не используется. Backend дополнительно
+проверяет принадлежность `phone_number_id` выбранному WABA и подписывает
+приложение на webhook. Токен канала хранится только в зашифрованном виде.
+
 Callback URL:
 
 `https://revora-api-bekarysibrashev.onrender.com/api/v1/webhooks/whatsapp`
