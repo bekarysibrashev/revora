@@ -75,8 +75,8 @@ class Settings(BaseSettings):
     whatsapp_app_secret: SecretStr = SecretStr("")
     whatsapp_access_token: SecretStr = SecretStr("")
     whatsapp_data_key: SecretStr = SecretStr("")
-    meta_app_id: str = ""
-    whatsapp_embedded_signup_config_id: str = ""
+    meta_app_id: str = "965678616515017"
+    whatsapp_embedded_signup_config_id: str = "2277685509673688"
     whatsapp_tenant_slug: str = "demo"
     whatsapp_graph_api_version: str = "v25.0"
     whatsapp_ai_provider: Literal["rules", "groq", "openai"] = "rules"
