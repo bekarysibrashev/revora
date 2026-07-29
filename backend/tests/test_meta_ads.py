@@ -32,10 +32,16 @@ def make_user(role: UserRole = UserRole.OWNER) -> User:
 
 
 class FakeMetaClient:
+    def __init__(self):
+        self.last_date_from = None
+        self.last_date_to = None
+
     async def account(self, account_id):
         return MetaAccountData(account_id, "San Dental", 1, "USD", "Asia/Almaty")
 
     async def campaign_days(self, account_id, date_from, date_to):
+        self.last_date_from = date_from
+        self.last_date_to = date_to
         return [
             MetaCampaignDay(
                 campaign_external_id="campaign-1",
@@ -147,15 +153,18 @@ def test_meta_client_extracts_conversations_from_actions() -> None:
 @pytest.mark.asyncio
 async def test_meta_sync_is_idempotent_repository_input() -> None:
     repository = FakeMetaRepository()
+    client = FakeMetaClient()
     response = await MarketingService(
         repository,
-        meta_client=FakeMetaClient(),
+        meta_client=client,
         meta_account_ids=["act_1", "act_2"],
     ).sync_meta(make_user(), date(2026, 7, 1), date(2026, 7, 27))
 
     assert response.accounts_synced == 2
     assert response.rows_written == 2
     assert len(repository.rows) == 2
+    assert client.last_date_from == date(2026, 6, 4)
+    assert client.last_date_to == date(2026, 7, 27)
 
 
 @pytest.mark.asyncio

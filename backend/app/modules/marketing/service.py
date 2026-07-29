@@ -95,6 +95,8 @@ class MarketingService:
         synced_at = datetime.now(UTC)
         rows_received = 0
         rows_written = 0
+        period_days = (date_to - date_from).days + 1
+        comparison_date_from = date_from - timedelta(days=period_days)
         try:
             for account_id in self.meta_account_ids:
                 account_data = await self.meta_client.account(account_id)
@@ -102,7 +104,7 @@ class MarketingService:
                     user.tenant_id, account_data, synced_at
                 )
                 rows = await self.meta_client.campaign_days(
-                    account_id, date_from, date_to
+                    account_id, comparison_date_from, date_to
                 )
                 rows_received += len(rows)
                 rows_written += await self.repository.upsert_meta_campaign_days(
