@@ -13,8 +13,10 @@ User внутри create_tenant_with_owner требует `SET LOCAL app.tenant_
 from uuid import UUID
 
 from sqlalchemy import delete, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.auth.models import User, UserBranch, UserRole
 from app.modules.tenancy.models import Branch, Tenant
 
@@ -40,20 +42,34 @@ class TenancyRepository:
         in-tenant edits. Remove those dependency layers first; the tenant
         foreign keys then cascade through every remaining module.
         """
-        await self._set_tenant_context(tenant.id)
-        for table_name in (
-            "ml_predictions",
-            "ml_model_versions",
-            "ml_experiments",
-            "call_quality_analyses",
-            "mapped_records",
-        ):
-            await self.session.execute(
-                text(f"DELETE FROM {table_name} WHERE tenant_id = :tenant_id"),
-                {"tenant_id": str(tenant.id)},
-            )
-        await self.session.execute(delete(Tenant).where(Tenant.id == tenant.id))
-        await self.session.flush()
+        try:
+            await self._set_tenant_context(tenant.id)
+            for table_name in (
+                "ml_predictions",
+                "ml_model_versions",
+                "ml_experiments",
+                "call_quality_analyses",
+                "record_lineage",
+            ):
+                exists = await self.session.scalar(
+                    text("SELECT to_regclass(:table_name)"),
+                    {"table_name": f"public.{table_name}"},
+                )
+                if exists is None:
+                    continue
+                await self.session.execute(
+                    text(f"DELETE FROM {table_name} WHERE tenant_id = :tenant_id"),
+                    {"tenant_id": str(tenant.id)},
+                )
+            await self.session.execute(delete(Tenant).where(Tenant.id == tenant.id))
+            await self.session.flush()
+        except SQLAlchemyError as exc:
+            await self.session.rollback()
+            raise AppError(
+                "TENANT_DELETE_FAILED",
+                "Не удалось удалить аккаунт из-за связанных записей. Обновите страницу и повторите попытку",
+                409,
+            ) from exc
 
     async def _set_tenant_context(self, tenant_id: UUID) -> None:
         await self.session.execute(

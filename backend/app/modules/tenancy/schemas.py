@@ -62,3 +62,7 @@ class TenantDeleteResponse(BaseModel):
     deleted: bool
     tenant_id: UUID
     tenant_slug: str
+
+
+class TenantDeleteRequest(BaseModel):
+    confirm_slug: str = Field(min_length=2, max_length=100)

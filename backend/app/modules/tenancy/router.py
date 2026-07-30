@@ -15,6 +15,7 @@ from app.modules.tenancy.dependencies import get_tenancy_service, require_platfo
 from app.modules.tenancy.schemas import (
     TenantCreateRequest,
     TenantCreateResponse,
+    TenantDeleteRequest,
     TenantDeleteResponse,
     TenantListResponse,
 )
@@ -47,3 +48,13 @@ async def delete_tenant(
     confirm_slug: str = Query(min_length=2, max_length=100),
 ) -> TenantDeleteResponse:
     return await service.delete_tenant(tenant_id, confirm_slug)
+
+
+@router.post("/tenants/{tenant_id}/delete", response_model=TenantDeleteResponse)
+async def delete_tenant_command(
+    tenant_id: UUID,
+    payload: TenantDeleteRequest,
+    service: TenancyServiceDependency,
+) -> TenantDeleteResponse:
+    """Browser/proxy-compatible destructive command with body confirmation."""
+    return await service.delete_tenant(tenant_id, payload.confirm_slug)

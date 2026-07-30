@@ -157,9 +157,12 @@ function PlatformDashboard({ token, onLock }: { token: string; onLock: () => voi
     setDeleteBusy(true);
     try {
       await platformApi(
-        `/platform/tenants/${deleteTarget.id}?confirm_slug=${encodeURIComponent(deleteConfirmation)}`,
+        `/platform/tenants/${deleteTarget.id}/delete`,
         token,
-        { method: "DELETE" },
+        {
+          method: "POST",
+          body: JSON.stringify({ confirm_slug: deleteConfirmation }),
+        },
       );
       setDeleteTarget(null);
       setDeleteConfirmation("");
