@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     jwt_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
     access_token_expire_minutes: int = Field(default=15, ge=1, le=1440)
     refresh_token_expire_days: int = Field(default=30, ge=1, le=365)
+    login_max_attempts: int = Field(default=5, ge=3, le=10)
+    login_lock_minutes: int = Field(default=15, ge=1, le=1440)
 
     # Kcell sends this value in every webhook request. It is set only in Render.
     kcell_crm_token: SecretStr = SecretStr("")

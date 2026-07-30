@@ -10,7 +10,9 @@ User внутри create_tenant_with_owner требует `SET LOCAL app.tenant_
 репозиторий её просто переиспользует за HTTP-слоем, не дублирует логику.
 """
 
-from sqlalchemy import select, text
+from uuid import UUID
+
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.models import User, UserBranch, UserRole
@@ -28,7 +30,32 @@ class TenancyRepository:
         result = await self.session.scalars(select(Tenant).order_by(Tenant.created_at.desc()))
         return list(result)
 
-    async def _set_tenant_context(self, tenant_id: object) -> None:
+    async def get_tenant(self, tenant_id: UUID) -> Tenant | None:
+        return await self.session.scalar(select(Tenant).where(Tenant.id == tenant_id))
+
+    async def delete_tenant(self, tenant: Tenant) -> None:
+        """Delete a tenant and every owned row.
+
+        A few child relations intentionally use RESTRICT to protect normal
+        in-tenant edits. Remove those dependency layers first; the tenant
+        foreign keys then cascade through every remaining module.
+        """
+        await self._set_tenant_context(tenant.id)
+        for table_name in (
+            "ml_predictions",
+            "ml_model_versions",
+            "ml_experiments",
+            "call_quality_analyses",
+            "mapped_records",
+        ):
+            await self.session.execute(
+                text(f"DELETE FROM {table_name} WHERE tenant_id = :tenant_id"),
+                {"tenant_id": str(tenant.id)},
+            )
+        await self.session.execute(delete(Tenant).where(Tenant.id == tenant.id))
+        await self.session.flush()
+
+    async def _set_tenant_context(self, tenant_id: UUID) -> None:
         await self.session.execute(
             text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
             {"tenant_id": str(tenant_id)},

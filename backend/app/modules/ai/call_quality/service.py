@@ -56,8 +56,34 @@ class CallQualityService:
         await self.session.flush()
         return self._response(item)
 
-    async def list_calls(self, user: User, limit: int) -> CallListResponse:
+    async def list_calls(
+        self,
+        user: User,
+        *,
+        page: int,
+        page_size: int,
+        extension: str | None = None,
+        direction: str | None = None,
+        outcome: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> CallListResponse:
         self._owner(user)
+        filters = [Call.tenant_id == user.tenant_id]
+        if extension:
+            filters.append(Call.external_user == extension)
+        if direction:
+            filters.append(Call.direction == direction)
+        if outcome:
+            filters.append(Call.outcome == outcome)
+        if date_from:
+            filters.append(
+                Call.started_at >= datetime.combine(date_from, time.min, tzinfo=UTC)
+            )
+        if date_to:
+            filters.append(
+                Call.started_at <= datetime.combine(date_to, time.max, tzinfo=UTC)
+            )
         statement = (
             select(Call, CallQualityAnalysis)
             .outerjoin(
@@ -65,9 +91,10 @@ class CallQualityService:
                 (CallQualityAnalysis.call_id == Call.id)
                 & (CallQualityAnalysis.tenant_id == user.tenant_id),
             )
-            .where(Call.tenant_id == user.tenant_id)
+            .where(*filters)
             .order_by(Call.started_at.desc())
-            .limit(limit)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         )
         rows = (await self.session.execute(statement)).all()
         items = [
@@ -90,9 +117,31 @@ class CallQualityService:
             for call, analysis in rows
         ]
         total = await self.session.scalar(
-            select(func.count()).select_from(Call).where(Call.tenant_id == user.tenant_id)
+            select(func.count()).select_from(Call).where(*filters)
         ) or 0
-        return CallListResponse(items=items, total=total)
+        option_rows = (
+            await self.session.execute(
+                select(Call.external_user, Call.direction, Call.outcome)
+                .where(Call.tenant_id == user.tenant_id)
+                .distinct()
+            )
+        ).all()
+        return CallListResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            pages=max(1, (total + page_size - 1) // page_size),
+            available_extensions=sorted(
+                {row.external_user for row in option_rows if row.external_user}
+            ),
+            available_directions=sorted(
+                {row.direction for row in option_rows if row.direction}
+            ),
+            available_outcomes=sorted(
+                {row.outcome for row in option_rows if row.outcome}
+            ),
+        )
 
     async def analysis(self, user: User, call_id: UUID) -> CallAnalysisResponse:
         self._owner(user)

@@ -56,3 +56,9 @@ class TenantCreateResponse(BaseModel):
     tenant: TenantResponse
     branch_code: str
     owner_email: str
+
+
+class TenantDeleteResponse(BaseModel):
+    deleted: bool
+    tenant_id: UUID
+    tenant_slug: str

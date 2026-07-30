@@ -2,12 +2,15 @@
 scoped to any single tenant — this is what lets an operator create the very
 first tenant a clinic has)."""
 
+from uuid import UUID
+
 from app.core.errors import AppError
 from app.core.security import hash_password
 from app.modules.tenancy.repository import TenancyRepository
 from app.modules.tenancy.schemas import (
     TenantCreateRequest,
     TenantCreateResponse,
+    TenantDeleteResponse,
     TenantListResponse,
     TenantResponse,
 )
@@ -41,4 +44,24 @@ class TenancyService:
             tenant=TenantResponse.model_validate(tenant),
             branch_code=payload.branch_code,
             owner_email=payload.owner_email,
+        )
+
+    async def delete_tenant(
+        self, tenant_id: UUID, confirm_slug: str
+    ) -> TenantDeleteResponse:
+        tenant = await self.repository.get_tenant(tenant_id)
+        if tenant is None:
+            raise AppError("TENANT_NOT_FOUND", "Clinic account not found", 404)
+        if confirm_slug.strip().lower() != tenant.slug:
+            raise AppError(
+                "TENANT_DELETE_CONFIRMATION_MISMATCH",
+                "Enter the clinic code exactly to confirm deletion",
+                422,
+            )
+        tenant_slug = tenant.slug
+        await self.repository.delete_tenant(tenant)
+        return TenantDeleteResponse(
+            deleted=True,
+            tenant_id=tenant.id,
+            tenant_slug=tenant_slug,
         )

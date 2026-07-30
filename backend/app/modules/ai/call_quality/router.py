@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import unquote
 from uuid import UUID, uuid4
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -33,9 +33,28 @@ async def get_status(user: CurrentUser, session: Session) -> CallQualityStatusRe
 
 @router.get("/calls", response_model=CallListResponse)
 async def list_calls(
-    user: CurrentUser, session: Session, limit: int = 100
+    user: CurrentUser,
+    session: Session,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    extension: str | None = None,
+    direction: str | None = None,
+    outcome: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> CallListResponse:
-    return await CallQualityService(session).list_calls(user, max(1, min(limit, 500)))
+    if date_from and date_to and date_from > date_to:
+        raise AppError("INVALID_DATE_RANGE", "date_from must not be after date_to", 422)
+    return await CallQualityService(session).list_calls(
+        user,
+        page=page,
+        page_size=page_size,
+        extension=extension,
+        direction=direction,
+        outcome=outcome,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 @router.post("/rule-sets", response_model=RuleSetResponse, status_code=status.HTTP_201_CREATED)
 async def create_rule_set(payload: RuleSetRequest, user: CurrentUser, session: Session) -> RuleSetResponse:

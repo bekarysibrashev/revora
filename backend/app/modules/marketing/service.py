@@ -15,6 +15,7 @@ from app.modules.marketing.schemas import (
     MetaAdsStatusResponse,
     MetaAdsSyncResponse,
     MetaCampaignAlert,
+    MetaBudgetRecommendation,
     MetaCampaignPerformance,
     MetaPeriodComparison,
 )
@@ -265,6 +266,7 @@ class MarketingService:
         alerts = self._campaign_alerts(
             campaigns, cost_per_conversation
         )
+        recommendations = self._budget_recommendations(campaigns)
         return MetaAdsOverviewResponse(
             total_spend=total_spend,
             currency=next(iter(currencies)) if currencies else None,
@@ -312,6 +314,7 @@ class MarketingService:
                 ),
             ),
             alerts=alerts,
+            recommendations=recommendations,
             accounts=sorted(
                 account_performance, key=lambda item: item.spend, reverse=True
             ),
@@ -421,3 +424,94 @@ class MarketingService:
                 )
         order = {"critical": 0, "warning": 1}
         return sorted(alerts, key=lambda item: order.get(item.severity, 2))
+
+    @classmethod
+    def _budget_recommendations(
+        cls, campaigns: list[MetaCampaignPerformance]
+    ) -> list[MetaBudgetRecommendation]:
+        """Rank campaigns using only attributable Meta outcomes.
+
+        Until CRM/1C attribution is connected, a "result" means a WhatsApp
+        conversation when available, otherwise a Meta lead. Recommendations
+        are deliberately conservative and never pretend clicks are revenue.
+        """
+        rows: list[dict] = []
+        for campaign in campaigns:
+            metric = (
+                "WhatsApp-диалоги"
+                if campaign.conversations_started > 0
+                else "лиды Meta"
+            )
+            results = (
+                campaign.conversations_started
+                if campaign.conversations_started > 0
+                else campaign.leads
+            )
+            rows.append(
+                {
+                    "campaign": campaign,
+                    "metric": metric,
+                    "results": results,
+                    "cost": cls._ratio(campaign.spend, results),
+                }
+            )
+        productive = [row for row in rows if row["results"] > 0 and row["cost"]]
+        benchmark = (
+            sum((row["campaign"].spend for row in productive), Decimal("0"))
+            / sum(row["results"] for row in productive)
+            if productive
+            else None
+        )
+        scored: list[tuple[float, dict, str, int, str]] = []
+        for row in rows:
+            campaign = row["campaign"]
+            results = row["results"]
+            cost = row["cost"]
+            if campaign.spend <= 0:
+                score, action, change, reason = 0, "insufficient_data", 0, (
+                    "Нет расходов за выбранный период — оценивать эффективность рано."
+                )
+            elif results == 0:
+                score, action, change, reason = 0, "pause", -100, (
+                    "Есть расход, но Meta не зафиксировала ни диалогов, ни лидов. "
+                    "Остановите кампанию и проверьте креатив, оффер и отслеживание."
+                )
+            elif not benchmark or not cost:
+                score, action, change, reason = 50, "keep", 0, (
+                    "Есть первые результаты, но пока недостаточно данных для перераспределения."
+                )
+            else:
+                efficiency = float(benchmark / cost)
+                score = max(1, min(100, round(50 * efficiency)))
+                if results >= 3 and efficiency >= 1.25:
+                    action, change, reason = "increase", 20, (
+                        f"Цена результата на {round((1 - float(cost / benchmark)) * 100)}% "
+                        "ниже среднего. Увеличивайте бюджет постепенно и контролируйте цену."
+                    )
+                elif efficiency <= 0.7:
+                    action, change, reason = "reduce", -20, (
+                        f"Цена результата на {round((float(cost / benchmark) - 1) * 100)}% "
+                        "выше среднего. Перенесите часть бюджета в более сильную кампанию."
+                    )
+                else:
+                    action, change, reason = "keep", 0, (
+                        "Эффективность близка к средней. Сохраните бюджет и продолжайте наблюдение."
+                    )
+            scored.append((score, row, action, change, reason))
+        scored.sort(key=lambda item: (item[0], item[1]["results"]), reverse=True)
+        return [
+            MetaBudgetRecommendation(
+                rank=index,
+                action=action,
+                account_external_id=row["campaign"].account_external_id,
+                campaign_external_id=row["campaign"].campaign_external_id,
+                campaign_name=row["campaign"].campaign_name,
+                score=score,
+                result_metric=row["metric"],
+                results=row["results"],
+                cost_per_result=row["cost"],
+                suggested_budget_change_percent=change,
+                reason=reason,
+            )
+            for index, (score, row, action, change, reason) in enumerate(scored, 1)
+        ]

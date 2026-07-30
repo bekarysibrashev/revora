@@ -92,6 +92,9 @@ function PlatformDashboard({ token, onLock }: { token: string; onLock: () => voi
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CreateResult | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Tenant | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const [tenantName, setTenantName] = useState("");
   const [tenantSlug, setTenantSlug] = useState("");
@@ -148,6 +151,26 @@ function PlatformDashboard({ token, onLock }: { token: string; onLock: () => voi
     }
   }
 
+  async function deleteTenant() {
+    if (!deleteTarget || deleteConfirmation !== deleteTarget.slug) return;
+    setError("");
+    setDeleteBusy(true);
+    try {
+      await platformApi(
+        `/platform/tenants/${deleteTarget.id}?confirm_slug=${encodeURIComponent(deleteConfirmation)}`,
+        token,
+        { method: "DELETE" },
+      );
+      setDeleteTarget(null);
+      setDeleteConfirmation("");
+      await loadTenants();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось удалить клинику");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   return (
     <div style={{ maxWidth: 980, margin: "0 auto", padding: "34px 24px 60px" }}>
       <PageHeader
@@ -199,7 +222,7 @@ function PlatformDashboard({ token, onLock }: { token: string; onLock: () => voi
         )}
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Название</th><th>Код</th><th>Статус</th><th>Создана</th></tr></thead>
+            <thead><tr><th>Название</th><th>Код</th><th>Статус</th><th>Создана</th><th></th></tr></thead>
             <tbody>
               {tenants?.map(t => (
                 <tr key={t.id}>
@@ -207,15 +230,62 @@ function PlatformDashboard({ token, onLock }: { token: string; onLock: () => voi
                   <td>{t.slug}</td>
                   <td><span className={t.is_active ? "badge active" : "badge"}>{t.is_active ? "Активна" : "Отключена"}</span></td>
                   <td>{new Date(t.created_at).toLocaleDateString("ru-RU")}</td>
+                  <td className="table-action">
+                    <button
+                      className="danger small"
+                      onClick={() => {
+                        setDeleteTarget(t);
+                        setDeleteConfirmation("");
+                      }}
+                    >
+                      Удалить
+                    </button>
+                  </td>
                 </tr>
               ))}
               {tenants && tenants.length === 0 && (
-                <tr><td colSpan={4} className="empty">Пока нет ни одной клиники</td></tr>
+                <tr><td colSpan={5} className="empty">Пока нет ни одной клиники</td></tr>
               )}
             </tbody>
           </table>
         </div>
       </section>
+      {deleteTarget && (
+        <div className="modal-backdrop">
+          <section className="panel modal danger-modal">
+            <div className="page-header">
+              <div>
+                <p className="eyebrow">Необратимое действие</p>
+                <h2>Удалить «{deleteTarget.name}»?</h2>
+              </div>
+              <button className="icon-button" onClick={() => setDeleteTarget(null)}>×</button>
+            </div>
+            <p>
+              Будут удалены пользователи, пациенты, финансы, звонки, реклама,
+              WhatsApp, импортированные файлы и все остальные данные этой клиники.
+            </p>
+            <label>
+              Для подтверждения введите код <strong>{deleteTarget.slug}</strong>
+              <input
+                autoFocus
+                value={deleteConfirmation}
+                onChange={event => setDeleteConfirmation(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <div className="modal-actions">
+              <button onClick={() => setDeleteTarget(null)}>Отмена</button>
+              <button
+                className="danger-button"
+                disabled={deleteBusy || deleteConfirmation !== deleteTarget.slug}
+                onClick={deleteTenant}
+              >
+                {deleteBusy ? "Удаляем…" : "Удалить аккаунт и все данные"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

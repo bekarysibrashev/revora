@@ -8,12 +8,14 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
+from uuid import UUID
 
 from app.modules.tenancy.dependencies import get_tenancy_service, require_platform_admin
 from app.modules.tenancy.schemas import (
     TenantCreateRequest,
     TenantCreateResponse,
+    TenantDeleteResponse,
     TenantListResponse,
 )
 from app.modules.tenancy.service import TenancyService
@@ -36,3 +38,12 @@ async def create_tenant(
     payload: TenantCreateRequest, service: TenancyServiceDependency
 ) -> TenantCreateResponse:
     return await service.create_tenant(payload)
+
+
+@router.delete("/tenants/{tenant_id}", response_model=TenantDeleteResponse)
+async def delete_tenant(
+    tenant_id: UUID,
+    service: TenancyServiceDependency,
+    confirm_slug: str = Query(min_length=2, max_length=100),
+) -> TenantDeleteResponse:
+    return await service.delete_tenant(tenant_id, confirm_slug)

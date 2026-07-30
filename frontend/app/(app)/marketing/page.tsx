@@ -87,6 +87,19 @@ type MetaOverview = {
     title: string;
     description: string;
   }[];
+  recommendations: {
+    rank: number;
+    action: "increase" | "keep" | "reduce" | "pause" | "insufficient_data";
+    account_external_id: string;
+    campaign_external_id: string;
+    campaign_name: string;
+    score: number;
+    result_metric: string;
+    results: number;
+    cost_per_result: string | null;
+    suggested_budget_change_percent: number;
+    reason: string;
+  }[];
   accounts: {
     account_external_id: string;
     account_name: string;
@@ -168,6 +181,14 @@ function change(value: string | null, inverse = false) {
     maximumFractionDigits: 1,
   })}% · ${direction} прошлого периода`;
 }
+
+const recommendationLabel = {
+  increase: "Увеличить",
+  keep: "Оставить",
+  reduce: "Снизить",
+  pause: "Остановить",
+  insufficient_data: "Мало данных",
+};
 
 export default function MarketingPage() {
   const search = useSearchParams();
@@ -299,11 +320,6 @@ export default function MarketingPage() {
                 note={change(meta.data.comparison.spend_change, true)}
               />
               <Metric
-                label="Показы"
-                value={meta.data.impressions.toLocaleString("ru-RU")}
-              />
-              <Metric label="CTR" value={ratio(meta.data.ctr)} />
-              <Metric
                 label="WhatsApp-диалоги"
                 value={meta.data.conversations_started.toLocaleString("ru-RU")}
                 note={`${change(meta.data.comparison.conversations_change)} · Цена: ${
@@ -313,68 +329,65 @@ export default function MarketingPage() {
                         meta.data.currency || "USD",
                       )
                     : "—"
-                }`}
+                  }`}
               />
-            </section>
-            <section className="metric-grid">
               <Metric
-                label="CPM · 1 000 показов"
+                label="Цена диалога"
                 value={
-                  meta.data.cpm
-                    ? currency(meta.data.cpm, meta.data.currency || "USD")
+                  meta.data.cost_per_conversation
+                    ? currency(meta.data.cost_per_conversation, meta.data.currency || "USD")
                     : "—"
                 }
-              />
-              <Metric
-                label="CPC · клик"
-                value={
-                  meta.data.cpc
-                    ? currency(meta.data.cpc, meta.data.currency || "USD")
-                    : "—"
-                }
-              />
-              <Metric
-                label="CPL · лид"
-                value={
-                  meta.data.cost_per_lead
-                    ? currency(
-                        meta.data.cost_per_lead,
-                        meta.data.currency || "USD",
-                      )
-                    : "—"
-                }
-                note={change(meta.data.comparison.leads_change)}
-              />
-              <Metric
-                label="Клик → диалог"
-                value={ratio(meta.data.click_to_conversation_rate)}
-              />
-            </section>
-            <section className="metric-grid">
-              <Metric
-                label="Уникальные клики"
-                value={meta.data.unique_clicks.toLocaleString("ru-RU")}
-              />
-              <Metric
-                label="Переходы по ссылке"
-                value={meta.data.link_clicks.toLocaleString("ru-RU")}
-              />
-              <Metric
-                label="Просмотры страницы"
-                value={meta.data.landing_page_views.toLocaleString("ru-RU")}
-                note={`Дошли после клика: ${ratio(meta.data.landing_page_view_rate)}`}
+                note={change(meta.data.comparison.cost_per_conversation_change, true)}
               />
               <Metric
                 label="Лиды Meta"
                 value={meta.data.leads.toLocaleString("ru-RU")}
-                note={`Покупки: ${meta.data.purchases.toLocaleString("ru-RU")}`}
-              />
-              <Metric
-                label="Запуски видео"
-                value={meta.data.video_plays.toLocaleString("ru-RU")}
-                note={`ThruPlay: ${meta.data.video_thruplays.toLocaleString("ru-RU")} · ${ratio(meta.data.video_thruplay_rate)}`}
+                note={change(meta.data.comparison.leads_change)}
               />
             </section>
+            <section className="panel budget-advisor">
+              <div className="panel-head">
+                <div>
+                  <p className="eyebrow">Решение, а не набор цифр</p>
+                  <h2>Куда перераспределить бюджет</h2>
+                  <p>Кампании ранжируются по цене WhatsApp-диалога, а если диалогов нет — по цене лида Meta.</p>
+                </div>
+              </div>
+              <div className="recommendation-list">
+                {meta.data.recommendations.map((item) => (
+                  <article className={`recommendation-card ${item.action}`} key={`${item.account_external_id}:${item.campaign_external_id}`}>
+                    <div className="recommendation-rank">#{item.rank}</div>
+                    <div>
+                      <strong>{item.campaign_name}</strong>
+                      <small>{item.results} · {item.result_metric} · цена {item.cost_per_result ? currency(item.cost_per_result, meta.data.currency || "USD") : "—"}</small>
+                      <p>{item.reason}</p>
+                    </div>
+                    <div className="recommendation-decision">
+                      <span className={`decision ${item.action}`}>{recommendationLabel[item.action]}</span>
+                      <b>{item.suggested_budget_change_percent > 0 ? "+" : ""}{item.suggested_budget_change_percent}%</b>
+                      <small>оценка {item.score}/100</small>
+                    </div>
+                  </article>
+                ))}
+                {!meta.data.recommendations.length && <p className="empty">Синхронизируйте кампании, чтобы получить рекомендации.</p>}
+              </div>
+              <p className="advisor-note">Важно: пока нет связки с 1С, Revora оптимизирует рекламные диалоги и лиды, а не фактически оплаченные лечения. После интеграции добавим реальную выручку и ROMI.</p>
+            </section>
+            <details className="panel technical-metrics">
+              <summary>Технические показатели рекламы</summary>
+              <p>Нужны маркетологу для диагностики, но не для ежедневного решения владельца.</p>
+              <div className="metric-grid">
+                <Metric label="Показы" value={meta.data.impressions.toLocaleString("ru-RU")} />
+                <Metric label="CTR" value={ratio(meta.data.ctr)} />
+                <Metric label="CPC · клик" value={meta.data.cpc ? currency(meta.data.cpc, meta.data.currency || "USD") : "—"} />
+                <Metric label="CPM · 1 000 показов" value={meta.data.cpm ? currency(meta.data.cpm, meta.data.currency || "USD") : "—"} />
+                <Metric label="Клик → диалог" value={ratio(meta.data.click_to_conversation_rate)} />
+                <Metric label="Переходы по ссылке" value={meta.data.link_clicks.toLocaleString("ru-RU")} />
+                <Metric label="Просмотры страницы" value={meta.data.landing_page_views.toLocaleString("ru-RU")} note={`Дошли после клика: ${ratio(meta.data.landing_page_view_rate)}`} />
+                <Metric label="Просмотры видео" value={meta.data.video_plays.toLocaleString("ru-RU")} note={`ThruPlay: ${meta.data.video_thruplays.toLocaleString("ru-RU")}`} />
+              </div>
+            </details>
             {!!meta.data.alerts.length && (
               <section className="insights">
                 <h2>Что требует внимания в Meta Ads</h2>

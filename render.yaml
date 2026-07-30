@@ -36,6 +36,10 @@ services:
         sync: false
       - key: DEMO_OWNER_PASSWORD
         sync: false
+      - key: LOGIN_MAX_ATTEMPTS
+        value: "5"
+      - key: LOGIN_LOCK_MINUTES
+        value: "15"
       - key: KCELL_CRM_TOKEN
         sync: false
       - key: KCELL_TENANT_SLUG

@@ -44,6 +44,18 @@ class FakeAuthRepository:
         token.revoked_at = datetime.now(UTC)
         token.replaced_by_id = replacement_id
 
+    async def record_failed_login(self, user, *, max_attempts, lock_until):
+        user.failed_login_attempts = int(user.failed_login_attempts or 0) + 1
+        if user.failed_login_attempts >= max_attempts:
+            user.locked_until = lock_until
+            return True
+        return False
+
+    async def reset_login_failures(self, user):
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.last_login_at = datetime.now(UTC)
+
 
 @pytest.fixture
 def auth_service():
@@ -96,3 +108,31 @@ async def test_invalid_credentials_do_not_reveal_which_field_failed(auth_service
 
     assert error.value.code == "INVALID_CREDENTIALS"
     assert error.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_fifth_wrong_password_locks_login(auth_service) -> None:
+    service, repository = auth_service
+
+    for _ in range(4):
+        with pytest.raises(AppError) as error:
+            await service.login("san-dental", "owner@example.test", "wrong-password")
+        assert error.value.code == "INVALID_CREDENTIALS"
+
+    with pytest.raises(AppError) as error:
+        await service.login("san-dental", "owner@example.test", "wrong-password")
+
+    assert error.value.code == "LOGIN_LOCKED"
+    assert repository.user.failed_login_attempts == 5
+    assert repository.user.locked_until is not None
+
+
+@pytest.mark.asyncio
+async def test_successful_login_resets_failed_attempts(auth_service) -> None:
+    service, repository = auth_service
+    repository.user.failed_login_attempts = 3
+
+    await service.login("san-dental", "owner@example.test", "secure-password")
+
+    assert repository.user.failed_login_attempts == 0
+    assert repository.user.locked_until is None

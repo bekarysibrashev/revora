@@ -30,12 +30,42 @@ class AuthService:
     async def login(self, tenant_slug: str, email: str, password: str) -> TokenResponse:
         tenant = await self.repository.get_tenant_by_slug(tenant_slug)
         if tenant is None:
-            raise AppError("INVALID_CREDENTIALS", "Invalid credentials", 401)
+            raise AppError("INVALID_CREDENTIALS", "Неверный код клиники, почта или пароль", 401)
 
         await self.repository.set_tenant_context(tenant.id)
         user = await self.repository.get_user_by_email(tenant.id, email)
-        if user is None or not user.is_active or not verify_password(password, user.password_hash):
-            raise AppError("INVALID_CREDENTIALS", "Invalid credentials", 401)
+        now = datetime.now(UTC)
+        if user is not None and user.locked_until and user.locked_until > now:
+            retry_after = max(1, int((user.locked_until - now).total_seconds()))
+            raise AppError(
+                "LOGIN_LOCKED",
+                "Слишком много попыток. Вход временно заблокирован",
+                429,
+                {"retry_after_seconds": retry_after},
+            )
+        if user is None or not user.is_active:
+            raise AppError("INVALID_CREDENTIALS", "Неверный код клиники, почта или пароль", 401)
+        if not verify_password(password, user.password_hash):
+            lock_until = now + timedelta(minutes=self.settings.login_lock_minutes)
+            locked = await self.repository.record_failed_login(
+                user,
+                max_attempts=self.settings.login_max_attempts,
+                lock_until=lock_until,
+            )
+            if locked:
+                raise AppError(
+                    "LOGIN_LOCKED",
+                    f"Пять неверных попыток. Вход заблокирован на {self.settings.login_lock_minutes} минут",
+                    429,
+                    {"retry_after_seconds": self.settings.login_lock_minutes * 60},
+                )
+            remaining = self.settings.login_max_attempts - user.failed_login_attempts
+            raise AppError(
+                "INVALID_CREDENTIALS",
+                f"Неверный пароль. Осталось попыток: {remaining}",
+                401,
+            )
+        await self.repository.reset_login_failures(user)
         return await self._issue_pair(user)
 
     async def refresh(self, raw_token: str) -> TokenResponse:

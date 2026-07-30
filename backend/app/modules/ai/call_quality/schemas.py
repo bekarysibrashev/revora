@@ -57,6 +57,12 @@ class CallListItem(BaseModel):
 class CallListResponse(BaseModel):
     items: list[CallListItem]
     total: int
+    page: int
+    page_size: int
+    pages: int
+    available_extensions: list[str]
+    available_directions: list[str]
+    available_outcomes: list[str]
 
 
 class EvidenceResponse(BaseModel):

@@ -185,6 +185,9 @@ async def test_meta_overview_calculates_business_metrics() -> None:
     )
     assert response.video_thruplay_rate == Decimal("0.2")
     assert response.comparison.spend_change == Decimal("0")
+    assert response.recommendations[0].campaign_name == "Имплантация"
+    assert response.recommendations[0].result_metric == "WhatsApp-диалоги"
+    assert response.recommendations[0].cost_per_result == Decimal("5")
 
 
 @pytest.mark.asyncio
@@ -235,3 +238,50 @@ async def test_only_owner_can_trigger_meta_sync() -> None:
         )
 
     assert error.value.code == "FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_budget_recommendations_rank_and_reallocate() -> None:
+    class RankedRepository(FakeMetaRepository):
+        async def meta_campaign_totals(
+            self, tenant_id, date_from, date_to, account_external_id=None
+        ):
+            base = (await super().meta_campaign_totals(
+                tenant_id, date_from, date_to, account_external_id
+            ))[0]
+            if date_to < date(2026, 7, 1):
+                return []
+            return [
+                replace(
+                    base,
+                    campaign_external_id="best",
+                    campaign_name="Лучшая",
+                    spend=Decimal("60"),
+                    conversations_started=12,
+                ),
+                replace(
+                    base,
+                    campaign_external_id="weak",
+                    campaign_name="Слабая",
+                    spend=Decimal("120"),
+                    conversations_started=2,
+                ),
+                replace(
+                    base,
+                    campaign_external_id="empty",
+                    campaign_name="Без результата",
+                    spend=Decimal("50"),
+                    conversations_started=0,
+                    leads=0,
+                ),
+            ]
+
+    response = await MarketingService(RankedRepository()).meta_overview(
+        make_user(), date(2026, 7, 1), date(2026, 7, 27)
+    )
+
+    by_name = {item.campaign_name: item for item in response.recommendations}
+    assert response.recommendations[0].campaign_name == "Лучшая"
+    assert by_name["Лучшая"].action == "increase"
+    assert by_name["Слабая"].action == "reduce"
+    assert by_name["Без результата"].action == "pause"

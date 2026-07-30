@@ -118,6 +118,20 @@ class MetaCampaignAlert(BaseModel):
     description: str
 
 
+class MetaBudgetRecommendation(BaseModel):
+    rank: int
+    action: str
+    account_external_id: str
+    campaign_external_id: str
+    campaign_name: str
+    score: int
+    result_metric: str
+    results: int
+    cost_per_result: Decimal | None
+    suggested_budget_change_percent: int
+    reason: str
+
+
 class MetaAdsOverviewResponse(BaseModel):
     total_spend: Decimal
     currency: str | None
@@ -144,6 +158,7 @@ class MetaAdsOverviewResponse(BaseModel):
     selected_account_id: str | None
     comparison: MetaPeriodComparison
     alerts: list[MetaCampaignAlert]
+    recommendations: list[MetaBudgetRecommendation]
     accounts: list[MetaAccountPerformance]
     campaigns: list[MetaCampaignPerformance]
     date_from: date

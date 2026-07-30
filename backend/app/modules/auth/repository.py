@@ -63,3 +63,22 @@ class AuthRepository:
             .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
             .values(revoked_at=datetime.now(UTC))
         )
+
+    async def record_failed_login(
+        self, user: User, *, max_attempts: int, lock_until: datetime
+    ) -> bool:
+        user.failed_login_attempts = int(user.failed_login_attempts or 0) + 1
+        locked = user.failed_login_attempts >= max_attempts
+        if locked:
+            user.locked_until = lock_until
+        await self.session.flush()
+        # The login request intentionally raises after this update. Commit the
+        # security event so the request-level rollback cannot erase it.
+        await self.session.commit()
+        return locked
+
+    async def reset_login_failures(self, user: User) -> None:
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.last_login_at = datetime.now(UTC)
+        await self.session.flush()

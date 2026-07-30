@@ -9,7 +9,16 @@ type Criterion = { name: string; weight: number; description: string };
 type RuleSet = { id: string; version: number; name: string; success_definition: string; partial_success_definition: string; loss_definition: string; criteria: Criterion[]; loss_reasons: string[] };
 type Status = { rule_set: RuleSet | null; calls_received: number; analyses_ready: number; integration_status: string; queued: number; processing: number; needs_review: number; failed: number };
 type CallItem = { id: string; started_at: string; direction: string; employee: string | null; phone_masked: string | null; duration_seconds: number | null; outcome: string | null; recording_url: string | null; analysis_status: string | null; score: number | null; result: string | null; summary: string | null; needs_review: boolean; error_code: string | null };
-type Calls = { items: CallItem[]; total: number };
+type Calls = {
+  items: CallItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+  available_extensions: string[];
+  available_directions: string[];
+  available_outcomes: string[];
+};
 type Evidence = { criterion: string; timestamp_from: number; timestamp_to: number; description: string };
 type Analysis = { id:string;call_id:string;status:string;result:string|null;score:number|null;summary:string|null;criteria_scores:Array<{name:string;score:number;weight:number;explanation:string}>;strengths:string[];loss_reasons:string[];recommendations:string[];flags:Record<string,boolean>;evidence:Evidence[];languages:string[];mixed_language:boolean|null;confidence:number|null;needs_review:boolean;attempt_count:number;error_code:string|null;model_version:string|null;completed_at:string|null };
 type Operators = { items:Array<{employee:string;calls_analyzed:number;average_score:number;successful_calls:number;success_rate:number;needs_review:number}> };
@@ -38,8 +47,27 @@ const durationLabel = (seconds: number | null) => seconds == null ? "—" : `${M
 
 export default function AiPage() {
   const client = useQueryClient();
+  const [callPage, setCallPage] = useState(1);
+  const [extension, setExtension] = useState("");
+  const [direction, setDirection] = useState("");
+  const [outcome, setOutcome] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const callParams = new URLSearchParams({
+    page: String(callPage),
+    page_size: "10",
+  });
+  if (extension) callParams.set("extension", extension);
+  if (direction) callParams.set("direction", direction);
+  if (outcome) callParams.set("outcome", outcome);
+  if (dateFrom) callParams.set("date_from", dateFrom);
+  if (dateTo) callParams.set("date_to", dateTo);
   const status = useQuery({ queryKey: ["call-quality-status"], queryFn: () => api<Status>("/call-quality/status"), refetchInterval: 5000 });
-  const calls = useQuery({ queryKey: ["call-quality-calls"], queryFn: () => api<Calls>("/call-quality/calls?limit=100"), refetchInterval: 5000 });
+  const calls = useQuery({
+    queryKey: ["call-quality-calls", callParams.toString()],
+    queryFn: () => api<Calls>(`/call-quality/calls?${callParams.toString()}`),
+    refetchInterval: 5000,
+  });
   const operators = useQuery({ queryKey:["call-quality-operators"], queryFn:()=>api<Operators>("/call-quality/operators"), refetchInterval:10000 });
   const current = status.data?.rule_set;
   const [editing, setEditing] = useState(false);
@@ -80,6 +108,31 @@ export default function AiPage() {
 
     <section className="panel">
       <div className="panel-head"><div><h2>Последние звонки</h2><p>Автоматически получены из виртуальной АТС Kcell</p></div></div>
+      <div className="call-filters">
+        <label>Внутренний номер
+          <select value={extension} onChange={(event) => { setExtension(event.target.value); setCallPage(1); }}>
+            <option value="">Все номера</option>
+            {calls.data?.available_extensions.map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        <label>Направление
+          <select value={direction} onChange={(event) => { setDirection(event.target.value); setCallPage(1); }}>
+            <option value="">Все</option>
+            {calls.data?.available_directions.map((value) => <option key={value} value={value}>{directionLabel(value)}</option>)}
+          </select>
+        </label>
+        <label>Результат
+          <select value={outcome} onChange={(event) => { setOutcome(event.target.value); setCallPage(1); }}>
+            <option value="">Все</option>
+            {calls.data?.available_outcomes.map((value) => <option key={value} value={value}>{outcomeLabel(value)}</option>)}
+          </select>
+        </label>
+        <label>С даты<input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setCallPage(1); }} /></label>
+        <label>По дату<input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setCallPage(1); }} /></label>
+        {(extension || direction || outcome || dateFrom || dateTo) && (
+          <button className="quiet-button" onClick={() => { setExtension(""); setDirection(""); setOutcome(""); setDateFrom(""); setDateTo(""); setCallPage(1); }}>Сбросить</button>
+        )}
+      </div>
       <DataState loading={calls.isLoading} error={calls.error}>
         <div className="table-wrap"><table><thead><tr><th>Дата и время</th><th>Тип</th><th>Сотрудник</th><th>Клиент</th><th>Длительность</th><th>Результат</th><th>Запись</th><th>ИИ-анализ</th></tr></thead><tbody>
           {calls.data?.items.map(call => <tr key={call.id}>
@@ -89,6 +142,13 @@ export default function AiPage() {
           </tr>)}
           {!calls.data?.items.length && <tr><td className="empty" colSpan={8}>Звонки пока не получены</td></tr>}
         </tbody></table></div>
+        {!!calls.data?.total && (
+          <div className="pagination">
+            <button disabled={callPage <= 1} onClick={() => setCallPage((value) => value - 1)}>← Назад</button>
+            <span>Страница {calls.data.page} из {calls.data.pages} · {calls.data.total} звонков</span>
+            <button disabled={callPage >= calls.data.pages} onClick={() => setCallPage((value) => value + 1)}>Дальше →</button>
+          </div>
+        )}
       </DataState>
     </section>
 

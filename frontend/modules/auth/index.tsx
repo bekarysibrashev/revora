@@ -69,11 +69,22 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    function preventBackIntoSession(event: PageTransitionEvent) {
+      if (event.persisted && !sessionStorage.getItem("revora_session")) {
+        window.location.replace("/login");
+      }
+    }
+
+    window.addEventListener("pageshow", preventBackIntoSession);
+    return () => window.removeEventListener("pageshow", preventBackIntoSession);
+  }, []);
+
+  useEffect(() => {
     function handleExpiredSession() {
       clearStoredSession();
       queryClient.clear();
       setUser(null);
-      router.replace("/login");
+      window.location.replace("/login");
     }
 
     window.addEventListener(AUTH_EXPIRED_EVENT, handleExpiredSession);
@@ -114,7 +125,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     clearStoredSession();
     queryClient.clear();
     setUser(null);
-    router.replace("/login");
+    window.location.replace("/login");
   }
 
   return (
