@@ -31,7 +31,7 @@ services:
       - key: MINIO_SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://revora-web-bekarysibrashev.onrender.com
+        value: https://revora-web-bekarysibrashev.onrender.com,https://revoradent.netlify.app
       - key: DEMO_OWNER_EMAIL
         sync: false
       - key: DEMO_OWNER_PASSWORD
