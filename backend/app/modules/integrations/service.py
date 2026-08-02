@@ -1,5 +1,8 @@
 """Application orchestration for source ingestion and canonical loading."""
 
+from datetime import UTC, datetime
+import json
+import secrets
 from uuid import UUID
 
 from app.core.errors import AppError
@@ -7,16 +10,30 @@ from app.modules.auth.models import User, UserRole
 from app.modules.integrations.adapter import IntegrationAdapter
 from app.modules.integrations.canonical_writer import CanonicalWriteError, CanonicalWriter
 from app.modules.integrations.mapper import CanonicalMapper, compute_record_hash
+from app.modules.integrations.one_c import (
+    InvalidConnectorToken,
+    ONE_C_PROVIDER,
+    SAFE_ONE_C_ENTITIES,
+    connector_token_digest,
+    issue_connector_token,
+    parse_connector_token,
+    source_record_id,
+)
 from app.modules.integrations.repository import IntegrationRepository
 from app.modules.integrations.schemas import (
     ConnectionCreateRequest,
     ConnectionListResponse,
     ConnectionResponse,
+    ConnectionSyncStatusResponse,
+    EntitySyncCount,
     IngestionSummaryResponse,
     MappingDefinition,
     MappingIssue,
     MappingProfileListResponse,
     MappingProfileResponse,
+    OneCConnectorTokenResponse,
+    OneCPushRequest,
+    OneCPushResponse,
 )
 from app.modules.integrations.tabular_adapter import InvalidTabularFile, UnsupportedTabularFile
 
@@ -38,13 +55,144 @@ class IntegrationService:
         self, user: User, payload: ConnectionCreateRequest
     ) -> ConnectionResponse:
         self._require_owner(user)
+        settings = payload.settings
+        status = "active"
+        if payload.provider == ONE_C_PROVIDER:
+            # Never accept 1C credentials from the browser. The clinic-side
+            # connector keeps them protected by Windows DPAPI and talks only
+            # to localhost OData.
+            settings = {
+                "mode": "local_push",
+                "allowed_entities": list(SAFE_ONE_C_ENTITIES),
+            }
+            status = "awaiting_setup"
         connection = await self.repository.create_connection(
             tenant_id=user.tenant_id,
             provider=payload.provider,
             name=payload.name,
-            settings=payload.settings,
+            settings=settings,
+            status=status,
         )
         return ConnectionResponse.model_validate(connection)
+
+    async def rotate_one_c_connector_token(
+        self, user: User, connection_id: UUID
+    ) -> OneCConnectorTokenResponse:
+        self._require_owner(user)
+        connection = await self._connection(user.tenant_id, connection_id)
+        if connection.provider != ONE_C_PROVIDER:
+            raise AppError("INVALID_INTEGRATION_PROVIDER", "This is not a 1C connection", 422)
+        token, digest = issue_connector_token(user.tenant_id, connection.id)
+        settings = {
+            **(connection.settings or {}),
+            "mode": "local_push",
+            "allowed_entities": list(SAFE_ONE_C_ENTITIES),
+            "token_rotated_at": datetime.now(UTC).isoformat(),
+        }
+        await self.repository.configure_one_c_connector(
+            connection, token_digest=digest, settings=settings
+        )
+        return OneCConnectorTokenResponse(
+            connection_id=connection.id,
+            token=token,
+            allowed_entities=list(SAFE_ONE_C_ENTITIES),
+        )
+
+    async def one_c_sync_status(
+        self, user: User, connection_id: UUID
+    ) -> ConnectionSyncStatusResponse:
+        self._require_owner(user)
+        connection = await self._connection(user.tenant_id, connection_id)
+        if connection.provider != ONE_C_PROVIDER:
+            raise AppError("INVALID_INTEGRATION_PROVIDER", "This is not a 1C connection", 422)
+        counts = await self.repository.raw_record_counts(user.tenant_id, connection.id)
+        settings = connection.settings or {}
+        last_synced_at = None
+        if settings.get("last_synced_at"):
+            try:
+                last_synced_at = datetime.fromisoformat(str(settings["last_synced_at"]))
+            except ValueError:
+                last_synced_at = None
+        return ConnectionSyncStatusResponse(
+            connection_id=connection.id,
+            status=connection.status,
+            last_synced_at=last_synced_at,
+            last_entity=str(settings["last_entity"]) if settings.get("last_entity") else None,
+            total_records=sum(count for _, count in counts),
+            entities=[EntitySyncCount(entity=entity, records=count) for entity, count in counts],
+        )
+
+    async def ingest_one_c_push(
+        self, connector_token: str, payload: OneCPushRequest
+    ) -> OneCPushResponse:
+        try:
+            parts = parse_connector_token(connector_token)
+        except InvalidConnectorToken as exc:
+            raise AppError("INVALID_CONNECTOR_TOKEN", "Invalid connector token", 401) from exc
+
+        await self.repository.set_tenant_context(parts.tenant_id)
+        connection = await self.repository.get_connection(parts.tenant_id, parts.connection_id)
+        expected_digest = connection.encrypted_credentials if connection else None
+        actual_digest = connector_token_digest(connector_token)
+        if (
+            connection is None
+            or connection.provider != ONE_C_PROVIDER
+            or not expected_digest
+            or not secrets.compare_digest(expected_digest, actual_digest)
+        ):
+            raise AppError("INVALID_CONNECTOR_TOKEN", "Invalid connector token", 401)
+
+        allowed_entities = set(connection.settings.get("allowed_entities", []))
+        if payload.entity not in allowed_entities:
+            raise AppError(
+                "ONE_C_ENTITY_NOT_ALLOWED",
+                "This 1C entity is not approved for synchronization",
+                403,
+                {"entity": payload.entity},
+            )
+        encoded_size = len(
+            json.dumps(payload.records, ensure_ascii=False, default=str).encode("utf-8")
+        )
+        if encoded_size > 2 * 1024 * 1024:
+            raise AppError("ONE_C_BATCH_TOO_LARGE", "1C batch exceeds 2 MB", 413)
+
+        run = await self.repository.create_sync_run(parts.tenant_id, connection.id)
+        stored = 0
+        duplicates = 0
+        for record in payload.records:
+            _, created = await self.repository.store_raw_record(
+                tenant_id=parts.tenant_id,
+                connection_id=connection.id,
+                sync_run_id=run.id,
+                source_entity=payload.entity,
+                source_record_id=source_record_id(record),
+                source_schema_version=payload.schema_version,
+                record_hash=compute_record_hash(payload.entity, record),
+                payload=record,
+            )
+            if created:
+                stored += 1
+            else:
+                duplicates += 1
+
+        synced_at = datetime.now(UTC)
+        await self.repository.finish_sync_run(
+            run,
+            status="completed",
+            records_read=len(payload.records),
+            records_written=stored,
+        )
+        await self.repository.mark_connection_synced(
+            connection, entity=payload.entity, synced_at=synced_at
+        )
+        return OneCPushResponse(
+            sync_run_id=run.id,
+            status="completed",
+            entity=payload.entity,
+            records_received=len(payload.records),
+            records_stored=stored,
+            records_duplicate=duplicates,
+        )
 
     async def create_mapping_profile(
         self, user: User, connection_id: UUID, definition: MappingDefinition

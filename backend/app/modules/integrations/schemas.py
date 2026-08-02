@@ -127,3 +127,40 @@ class IngestionSummaryResponse(BaseModel):
     records_quarantined: int
     records_duplicate: int
     error_message: str | None = None
+
+
+class OneCConnectorTokenResponse(BaseModel):
+    """A connector token is shown once and stored only as a SHA-256 digest."""
+
+    connection_id: UUID
+    token: str
+    allowed_entities: list[str]
+
+
+class OneCPushRequest(BaseModel):
+    entity: str = Field(min_length=3, max_length=200)
+    records: list[dict[str, object]] = Field(min_length=1, max_length=500)
+    schema_version: str = Field(default="odata-v3", min_length=1, max_length=100)
+
+
+class OneCPushResponse(BaseModel):
+    sync_run_id: UUID
+    status: str
+    entity: str
+    records_received: int
+    records_stored: int
+    records_duplicate: int
+
+
+class EntitySyncCount(BaseModel):
+    entity: str
+    records: int
+
+
+class ConnectionSyncStatusResponse(BaseModel):
+    connection_id: UUID
+    status: str
+    last_synced_at: datetime | None = None
+    last_entity: str | None = None
+    total_records: int = 0
+    entities: list[EntitySyncCount] = Field(default_factory=list)

@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     meta_tenant_slug: str = "demo"
 
     # LLM analyst. The API key never reaches the browser or tenant data tables.
+    analyst_ai_provider: Literal["openai", "groq"] = "groq"
+    analyst_ai_model: str = "openai/gpt-oss-120b"
     openai_api_key: SecretStr = SecretStr("")
     openai_model: str = "gpt-5.6-terra"
     openai_base_url: str = "https://api.openai.com/v1"
@@ -71,6 +73,9 @@ class Settings(BaseSettings):
     call_max_audio_bytes: int = Field(default=25_000_000, ge=1_000_000, le=100_000_000)
     call_analysis_timeout_seconds: int = Field(default=120, ge=15, le=300)
     call_analysis_max_attempts: int = Field(default=3, ge=1, le=10)
+    embedded_call_worker: bool = False
+    embedded_call_worker_interval_seconds: int = Field(default=20, ge=5, le=300)
+    embedded_call_processing_timeout_minutes: int = Field(default=15, ge=5, le=120)
 
     # WhatsApp AI assistant. Production sending stays disabled until explicitly enabled.
     whatsapp_verify_token: SecretStr = SecretStr("")

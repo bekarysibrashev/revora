@@ -8,6 +8,10 @@ import { Role, useAuth } from "@/modules/auth";
 import { api } from "@/shared/api-client";
 
 type Branch = { id: string; name: string; code: string; is_active: boolean };
+type DataQuality = {
+  summary: { score: number; status: "good" | "warning" | "critical" };
+  generated_at: string;
+};
 type NavItem = { href: string; label: string; mark: string; roles: Role[] };
 type NavGroup = { label: string; mark: string; items: NavItem[] };
 
@@ -16,7 +20,7 @@ const coreItems: NavItem[] = [
   { href: "/sales", label: "Продажи", mark: "С", roles: ["owner", "manager", "administrator", "sales_manager"] },
   { href: "/doctors", label: "Врачи", mark: "В", roles: ["owner", "manager", "administrator"] },
   { href: "/marketing", label: "Маркетинг", mark: "М", roles: ["owner", "manager"] },
-  { href: "/analyst", label: "AI-аналитик", mark: "AI", roles: ["owner", "manager", "administrator", "sales_manager"] },
+  { href: "/analyst", label: "Data Science Lab", mark: "DS", roles: ["owner", "manager", "administrator", "sales_manager"] },
 ];
 
 const groups: NavGroup[] = [
@@ -43,7 +47,7 @@ const groups: NavGroup[] = [
     items: [
       { href: "/analytics", label: "Контроль данных", mark: "К", roles: ["owner", "manager"] },
       { href: "/losses", label: "Карта потерь", mark: "₸", roles: ["owner", "manager", "administrator"] },
-      { href: "/data-science", label: "Data Science Lab", mark: "DS", roles: ["owner", "manager"] },
+      { href: "/data-science", label: "ML-исследования", mark: "ML", roles: ["owner", "manager"] },
     ],
   },
 ];
@@ -83,6 +87,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     queryKey: ["branches"],
     queryFn: () => api<{ items: Branch[] }>("/admin/branches"),
     enabled: !!user && user.role !== "sales_manager",
+  });
+  const quality = useQuery({
+    queryKey: ["topbar-data-quality", user?.role],
+    queryFn: () => {
+      const today = new Date();
+      const start = new Date(today);
+      start.setDate(start.getDate() - 29);
+      const params = new URLSearchParams({
+        date_from: start.toISOString().slice(0, 10),
+        date_to: today.toISOString().slice(0, 10),
+      });
+      return api<DataQuality>(`/analytics/quality?${params.toString()}`);
+    },
+    enabled: user?.role === "owner" || user?.role === "manager",
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
   });
 
   useEffect(() => {
@@ -217,10 +237,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 ))}
             </select>
           )}
-          <span className="status">
-            <i />
-            Данные подключены
-          </span>
+          {(user.role === "owner" || user.role === "manager") ? (
+            <Link
+              href="/analytics"
+              className={`status data-${quality.data?.summary.status || "loading"}`}
+              title={quality.data ? `Качество данных: ${quality.data.summary.score}/100` : "Проверяем качество данных"}
+            >
+              <i />
+              {quality.isLoading
+                ? "Проверяем данные"
+                : quality.isError
+                  ? "Статус недоступен"
+                  : quality.data?.summary.status === "good"
+                    ? `Данные готовы · ${quality.data.summary.score}%`
+                    : quality.data?.summary.status === "warning"
+                      ? `Есть ограничения · ${quality.data.summary.score}%`
+                      : `Нужны данные · ${quality.data?.summary.score || 0}%`}
+            </Link>
+          ) : (
+            <span className="status"><i />Рабочее пространство</span>
+          )}
         </header>
         <main className="content">{children}</main>
       </section>

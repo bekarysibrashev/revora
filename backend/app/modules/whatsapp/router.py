@@ -20,10 +20,11 @@ from app.modules.whatsapp.schemas import (
     ConversationListResponse,
     EmbeddedSignupCompleteRequest,
     HumanMessageRequest,
-    KnowledgeApprovalRequest,
+    KnowledgeCreateRequest,
     KnowledgeImportResponse,
     KnowledgeItemResponse,
     KnowledgeListResponse,
+    KnowledgeUpdateRequest,
     MessageItem,
     SimulatorMessageRequest,
     SimulatorMessageResponse,
@@ -143,6 +144,16 @@ async def knowledge(
     return await WhatsAppService(session, settings).knowledge(user)
 
 
+@router.post("/knowledge", response_model=KnowledgeItemResponse)
+async def create_knowledge(
+    payload: KnowledgeCreateRequest,
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+) -> KnowledgeItemResponse:
+    return await WhatsAppService(session, settings).create_knowledge(user, payload)
+
+
 @router.post("/knowledge/import", response_model=KnowledgeImportResponse)
 async def import_knowledge(
     request: Request,
@@ -169,13 +180,13 @@ async def import_knowledge(
 )
 async def approve_knowledge(
     item_id: UUID,
-    payload: KnowledgeApprovalRequest,
+    payload: KnowledgeUpdateRequest,
     user: CurrentUser,
     session: Session,
     settings: RuntimeSettings,
 ) -> KnowledgeItemResponse:
-    return await WhatsAppService(session, settings).approve_knowledge(
-        user, item_id, payload.approved, payload.risk_level
+    return await WhatsAppService(session, settings).update_knowledge(
+        user, item_id, payload
     )
 
 

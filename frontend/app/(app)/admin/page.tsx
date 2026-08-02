@@ -1,13 +1,15 @@
 "use client";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, apiBinary } from "@/shared/api-client";
+import { API_URL, api, apiBinary } from "@/shared/api-client";
 import { PageHeader } from "@/shared/ui";
 
 type Branch = { id:string; name:string; code:string; address:string|null; is_active:boolean };
 type User = { id:string; email:string; full_name:string; role:string; branch_ids:string[]; is_active:boolean };
-type Connection = { id:string; name:string; provider:string; status:string };
+type Connection = { id:string; name:string; provider:string; status:string; settings?:Record<string,unknown> };
 type Profile = { id:string; source_entity:string; target_entity:string; version:number; is_active:boolean; rules:Record<string,unknown> };
+type OneCToken = { connection_id:string; token:string; allowed_entities:string[] };
+type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; entities:{entity:string;records:number}[] };
 const example = JSON.stringify({
   external_id:{source_fields:["ID","Код пациента"],required:true,transform:"string"},
   full_name:{source_fields:["ФИО","Пациент"],required:true,transform:"string"},
@@ -52,6 +54,7 @@ function DataImport() {
     }
   }
   return <div className="admin-stack">
+    <OneCIntegration/>
     <section className="panel"><Step n="1" title="Источник" text="Создайте подключение для таблиц этой клиники."/>
       {connections.data?.items.length?<label>Подключение<select value={connection} onChange={e=>{setConnection(e.target.value);setProfile("")}}><option value="">Выберите источник</option>{connections.data.items.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>:null}
       <div className="inline-form"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Название источника"/><button onClick={()=>createConnection.mutate()} disabled={createConnection.isPending}>Добавить источник</button></div>
@@ -69,6 +72,77 @@ function DataImport() {
       {result&&<div className="import-result"><strong>Импорт завершён</strong><span>Прочитано: {result.records_read}</span><span>Загружено: {result.records_normalized}</span><span>Ошибок: {result.records_quarantined}</span><span>Дубликатов: {result.records_duplicate}</span></div>}{error&&<div className="error-box">{error}</div>}
     </section>
   </div>;
+}
+
+const oneCEntityLabels:Record<string,string>={
+  "AccumulationRegister_Выручка_RecordType":"Выручка",
+  "AccumulationRegister_ДенежныеСредства_RecordType":"Денежные средства",
+  "AccumulationRegister_Затраты_RecordType":"Затраты",
+  "AccumulationRegister_НарядЗаказы_RecordType":"Наряд-заказы",
+  "AccumulationRegister_Продажи_RecordType":"Продажи",
+  "AccumulationRegister_ПродажиСебестоимость_RecordType":"Себестоимость продаж",
+  "AccumulationRegister_РабочееВремяСотрудников_RecordType":"Рабочее время",
+  "AccumulationRegister_РасчетыСПерсоналом_RecordType":"Расчёты с персоналом"
+};
+
+function OneCIntegration(){
+  const qc=useQueryClient();
+  const connections=useQuery({queryKey:["connections"],queryFn:()=>api<{items:Connection[]}>('/integrations/connections')});
+  const oneCConnections=(connections.data?.items||[]).filter(x=>x.provider==="1c_odata_push");
+  const [connectionId,setConnectionId]=useState("");
+  const [token,setToken]=useState<OneCToken|null>(null);
+  const [copied,setCopied]=useState(false);
+  useEffect(()=>{if(!connectionId&&oneCConnections[0])setConnectionId(oneCConnections[0].id)},[connectionId,oneCConnections]);
+  const create=useMutation({
+    mutationFn:()=>api<Connection>("/integrations/connections",{method:"POST",body:JSON.stringify({provider:"1c_odata_push",name:"1С Stoma",settings:{}})}),
+    onSuccess:x=>{setConnectionId(x.id);qc.invalidateQueries({queryKey:["connections"]})}
+  });
+  const rotate=useMutation({
+    mutationFn:()=>api<OneCToken>(`/integrations/connections/${connectionId}/connector-token`,{method:"POST"}),
+    onSuccess:x=>{setToken(x);setCopied(false);qc.invalidateQueries({queryKey:["connections"]})}
+  });
+  const sync=useQuery({
+    queryKey:["one-c-sync",connectionId],
+    queryFn:()=>api<OneCStatus>(`/integrations/connections/${connectionId}/sync-status`),
+    enabled:!!connectionId,
+    refetchInterval:15000
+  });
+  const status=sync.data;
+  async function copyToken(){if(!token)return;await navigator.clipboard.writeText(token.token);setCopied(true)}
+  return <section className="panel">
+    <Step n="1С" title="Автоматическая синхронизация 1С" text="OData остаётся на localhost. Локальный коннектор отправляет в Revora только разрешённые финансовые регистры по HTTPS."/>
+    {!oneCConnections.length?<button className="primary small" onClick={()=>create.mutate()} disabled={create.isPending}>{create.isPending?"Создаём…":"Создать безопасное подключение 1С"}</button>:<>
+      {oneCConnections.length>1&&<label>Подключение<select value={connectionId} onChange={e=>{setConnectionId(e.target.value);setToken(null)}}>{oneCConnections.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>}
+      <div className="integration-health">
+        <span className={status?.status==="connected"?"badge active":"badge"}>{status?.status==="connected"?"Подключено":"Ожидает первого запуска"}</span>
+        <span>Записей: <strong>{status?.total_records||0}</strong></span>
+        <span>Последняя синхронизация: <strong>{status?.last_synced_at?new Date(status.last_synced_at).toLocaleString("ru-RU"):"ещё не было"}</strong></span>
+      </div>
+      {(create.isError||rotate.isError||sync.isError)&&<div className="error-box">{(create.error||rotate.error||sync.error)?.message||"Не удалось выполнить запрос"}</div>}
+      {status?.entities.length?<div className="table-wrap"><table><thead><tr><th>Данные 1С</th><th>Сохранено строк</th></tr></thead><tbody>{status.entities.map(x=><tr key={x.entity}><td>{oneCEntityLabels[x.entity]||x.entity}</td><td>{x.records}</td></tr>)}</tbody></table></div>:null}
+      <div className="inline-form">
+        <button className="primary small" onClick={()=>rotate.mutate()} disabled={rotate.isPending}>{rotate.isPending?"Создаём ключ…":token?"Перевыпустить ключ":"Получить ключ коннектора"}</button>
+        <a className="button-link" href="/revora-1c-odata.ps1" download>Скачать коннектор PowerShell</a>
+      </div>
+      {token&&<div className="success-box">
+        <strong>Скопируйте ключ сейчас — повторно он не показывается.</strong>
+        <textarea rows={3} readOnly value={token.token} spellCheck={false}/>
+        <button className="small" onClick={copyToken}>{copied?"Скопировано ✓":"Копировать ключ"}</button>
+      </div>}
+      <div className="setup-steps">
+        <p><strong>На серверном компьютере клиники:</strong></p>
+        <ol>
+          <li>Скачайте скрипт и положите его в отдельную папку.</li>
+          <li>Откройте PowerShell под тем Windows-пользователем, от которого будет идти синхронизация.</li>
+          <li>Выполните настройку; скрипт сам запросит логин 1С, пароль и ключ Revora.</li>
+        </ol>
+        <pre>{`.\\revora-1c-odata.ps1 -Setup -RevoraApiUrl "${API_URL}"`}</pre>
+        <p>Первый ручной запуск:</p>
+        <pre>{`.\\revora-1c-odata.ps1`}</pre>
+        <p className="hint">Пароль 1С и ключ сохраняются через Windows DPAPI для текущего пользователя Windows. Пароль 1С не передаётся в Revora. Коннектор читает OData только с localhost.</p>
+      </div>
+    </>}
+  </section>
 }
 const targets: [string,string][]=[["patient","Пациенты"],["doctor","Врачи"],["doctor_rating","Рейтинги врачей"],["service_direction","Направления"],["lead","Лиды"],["appointment","Записи"],["revenue_fact","Выручка"],["expense_fact","Расходы"],["cash_flow_fact","Движение денег"],["account_balance","Остатки"],["marketing_spend_fact","Затраты на маркетинг"],["attribution_fact","Атрибуция рекламы"]];
 function Step({n,title,text}:{n:string;title:string;text:string}){return <div className="step-title"><span>{n}</span><div><h2>{title}</h2><p>{text}</p></div></div>}

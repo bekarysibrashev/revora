@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, Query, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.errors import AppError
 from app.modules.auth.dependencies import CurrentUser
@@ -12,10 +13,14 @@ from app.modules.integrations.schemas import (
     ConnectionCreateRequest,
     ConnectionListResponse,
     ConnectionResponse,
+    ConnectionSyncStatusResponse,
     IngestionSummaryResponse,
     MappingProfileCreateRequest,
     MappingProfileListResponse,
     MappingProfileResponse,
+    OneCConnectorTokenResponse,
+    OneCPushRequest,
+    OneCPushResponse,
 )
 from app.modules.integrations.service import IntegrationService
 from app.modules.integrations.tabular_adapter import TabularFileAdapter
@@ -25,6 +30,20 @@ IntegrationServiceDependency = Annotated[
     IntegrationService, Depends(get_integration_service)
 ]
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+connector_bearer = HTTPBearer(auto_error=False)
+
+
+@router.post("/1c/push", response_model=OneCPushResponse)
+async def push_one_c_batch(
+    payload: OneCPushRequest,
+    service: IntegrationServiceDependency,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(connector_bearer)
+    ],
+) -> OneCPushResponse:
+    if credentials is None:
+        raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
+    return await service.ingest_one_c_push(credentials.credentials, payload)
 
 
 @router.get(
@@ -54,6 +73,30 @@ async def create_connection(
     service: IntegrationServiceDependency,
 ) -> ConnectionResponse:
     return await service.create_connection(user, payload)
+
+
+@router.post(
+    "/connections/{connection_id}/connector-token",
+    response_model=OneCConnectorTokenResponse,
+)
+async def rotate_one_c_connector_token(
+    connection_id: UUID,
+    user: CurrentUser,
+    service: IntegrationServiceDependency,
+) -> OneCConnectorTokenResponse:
+    return await service.rotate_one_c_connector_token(user, connection_id)
+
+
+@router.get(
+    "/connections/{connection_id}/sync-status",
+    response_model=ConnectionSyncStatusResponse,
+)
+async def one_c_sync_status(
+    connection_id: UUID,
+    user: CurrentUser,
+    service: IntegrationServiceDependency,
+) -> ConnectionSyncStatusResponse:
+    return await service.one_c_sync_status(user, connection_id)
 
 
 @router.post(

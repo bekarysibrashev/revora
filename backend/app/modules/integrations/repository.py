@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,18 +44,71 @@ class IntegrationRepository:
         )
 
     async def create_connection(
-        self, *, tenant_id: UUID, provider: str, name: str, settings: dict[str, object]
+        self,
+        *,
+        tenant_id: UUID,
+        provider: str,
+        name: str,
+        settings: dict[str, object],
+        status: str = "active",
     ) -> IntegrationConnection:
         connection = IntegrationConnection(
             tenant_id=tenant_id,
             provider=provider,
             name=name,
-            status="active",
+            status=status,
             settings=settings,
         )
         self.session.add(connection)
         await self.session.flush()
         return connection
+
+    async def set_tenant_context(self, tenant_id: UUID) -> None:
+        await self.session.execute(
+            text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+            {"tenant_id": str(tenant_id)},
+        )
+
+    async def configure_one_c_connector(
+        self,
+        connection: IntegrationConnection,
+        *,
+        token_digest: str,
+        settings: dict[str, object],
+    ) -> None:
+        connection.encrypted_credentials = token_digest
+        connection.settings = settings
+        connection.status = "awaiting_data"
+        await self.session.flush()
+
+    async def mark_connection_synced(
+        self,
+        connection: IntegrationConnection,
+        *,
+        entity: str,
+        synced_at: datetime,
+    ) -> None:
+        connection.settings = {
+            **(connection.settings or {}),
+            "last_synced_at": synced_at.isoformat(),
+            "last_entity": entity,
+        }
+        connection.status = "connected"
+        await self.session.flush()
+
+    async def raw_record_counts(
+        self, tenant_id: UUID, connection_id: UUID
+    ) -> list[tuple[str, int]]:
+        rows = await self.session.execute(
+            select(RawRecord.source_entity, func.count(RawRecord.id))
+            .where(
+                RawRecord.tenant_id == tenant_id,
+                RawRecord.connection_id == connection_id,
+            )
+            .group_by(RawRecord.source_entity)
+            .order_by(RawRecord.source_entity)
+        )
+        return [(str(entity), int(count)) for entity, count in rows.all()]
 
     async def create_mapping_profile(
         self,

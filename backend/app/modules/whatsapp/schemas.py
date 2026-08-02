@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WhatsAppStatusResponse(BaseModel):
@@ -89,8 +89,26 @@ class KnowledgeListResponse(BaseModel):
     items: list[KnowledgeItemResponse]
 
 
-class KnowledgeApprovalRequest(BaseModel):
-    approved: bool
+class KnowledgeCreateRequest(BaseModel):
+    category: str = Field(min_length=2, max_length=120)
+    title: str = Field(min_length=2, max_length=300)
+    content_ru: str | None = Field(default=None, min_length=2, max_length=5000)
+    content_kk: str | None = Field(default=None, min_length=2, max_length=5000)
+    risk_level: str = Field(default="review", pattern="^(safe|review|human_only)$")
+
+    @model_validator(mode="after")
+    def require_content(self) -> "KnowledgeCreateRequest":
+        if not (self.content_ru or self.content_kk):
+            raise ValueError("At least one answer language is required")
+        return self
+
+
+class KnowledgeUpdateRequest(BaseModel):
+    category: str | None = Field(default=None, min_length=2, max_length=120)
+    title: str | None = Field(default=None, min_length=2, max_length=300)
+    content_ru: str | None = Field(default=None, min_length=2, max_length=5000)
+    content_kk: str | None = Field(default=None, min_length=2, max_length=5000)
+    approved: bool | None = None
     risk_level: str | None = Field(default=None, pattern="^(safe|review|human_only)$")
 
 

@@ -8,7 +8,7 @@ from app.modules.ai.analyst.security import check_user_input, has_ungrounded_num
 from app.modules.ai.analyst.service import AnalystService
 from app.modules.ai.analyst.tools import AnalystToolRegistry, ToolResult, _privacy_safe_payload
 from app.modules.ai.llm_provider import LLMProviderError, LLMResult, LLMToolCall
-from app.modules.ai.llm_provider import OpenAIResponsesProvider
+from app.modules.ai.llm_provider import GroqChatCompletionsProvider, OpenAIResponsesProvider
 from app.modules.auth.models import User, UserBranch, UserRole
 
 def user(role=UserRole.OWNER, branch_id=None):
@@ -138,6 +138,105 @@ async def test_openai_provider_parses_final_text_and_rate_limit() -> None:
     with pytest.raises(LLMProviderError) as error:
         await limited.respond(instructions="safe",input_items=[],tools=[],safety_identifier="safe-id")
     assert error.value.code=="AI_PROVIDER_RATE_LIMIT"
+
+
+@pytest.mark.asyncio
+async def test_groq_provider_translates_tools_and_continues_tool_round() -> None:
+    import httpx, json
+    captured = {}
+
+    async def handler(request: httpx.Request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={
+            "choices": [{"message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "finance_summary",
+                        "arguments": '{"date_from":null,"date_to":null}',
+                    },
+                }],
+            }}],
+            "usage": {"prompt_tokens": 15, "completion_tokens": 4},
+        })
+
+    provider = GroqChatCompletionsProvider(
+        api_key="test-key",
+        model="openai/gpt-oss-120b",
+        base_url="https://api.groq.test/openai/v1",
+        timeout_seconds=5,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await provider.respond(
+        instructions="safe",
+        input_items=[
+            {"role": "user", "content": "Какая выручка?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "old-call",
+                    "type": "function",
+                    "function": {"name": "pnl", "arguments": "{}"},
+                }],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "old-call",
+                "output": '{"revenue":125000}',
+            },
+        ],
+        tools=[{
+            "type": "function",
+            "name": "finance_summary",
+            "description": "Financial totals",
+            "parameters": {"type": "object", "properties": {}},
+        }],
+        safety_identifier="not-sent-to-groq",
+    )
+
+    assert captured["tools"][0]["function"]["name"] == "finance_summary"
+    assert captured["messages"][-1]["role"] == "tool"
+    assert "safety_identifier" not in captured
+    assert result.tool_calls[0].name == "finance_summary"
+    assert result.input_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_groq_provider_parses_final_text_and_rate_limit() -> None:
+    import httpx
+
+    async def text_handler(request: httpx.Request):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"role": "assistant", "content": "Готово"}}]
+        })
+
+    provider = GroqChatCompletionsProvider(
+        api_key="test-key", model="test-model",
+        base_url="https://api.groq.test/openai/v1", timeout_seconds=5,
+        transport=httpx.MockTransport(text_handler),
+    )
+    result = await provider.respond(
+        instructions="safe", input_items=[], tools=[], safety_identifier="safe-id"
+    )
+    assert result.text == "Готово"
+
+    async def limited_handler(request: httpx.Request):
+        return httpx.Response(429, json={"error": {"message": "limited"}})
+
+    limited = GroqChatCompletionsProvider(
+        api_key="test-key", model="test-model",
+        base_url="https://api.groq.test/openai/v1", timeout_seconds=5,
+        transport=httpx.MockTransport(limited_handler),
+    )
+    with pytest.raises(LLMProviderError) as error:
+        await limited.respond(
+            instructions="safe", input_items=[], tools=[], safety_identifier="safe-id"
+        )
+    assert error.value.code == "AI_PROVIDER_RATE_LIMIT"
 
 @pytest.mark.asyncio
 async def test_service_enforces_message_rate_limit_before_provider() -> None:

@@ -21,6 +21,7 @@ from app.modules.whatsapp.security import (
     encrypt_contact,
     valid_meta_signature,
 )
+from app.modules.whatsapp.schemas import KnowledgeCreateRequest, KnowledgeUpdateRequest
 
 
 def test_retrieval_returns_only_a_matching_approved_answer() -> None:
@@ -101,6 +102,20 @@ def test_workbook_rows_start_unapproved_and_promotions_stay_human_only() -> None
     assert len(rows) == 2
     assert next(row for row in rows if row.category == "FAQ_КОНСУЛЬТАЦИЯ").risk_level == "review"
     assert next(row for row in rows if row.category == "РАССЫЛКА КП").risk_level == "human_only"
+
+
+def test_manual_knowledge_requires_an_answer_and_supports_partial_updates() -> None:
+    with pytest.raises(ValueError):
+        KnowledgeCreateRequest(category="FAQ", title="Цена", content_ru=None, content_kk=None)
+
+    item = KnowledgeCreateRequest(
+        category="FAQ",
+        title="Стоимость консультации",
+        content_ru="Консультация стоит 10 000 тенге.",
+    )
+    assert item.risk_level == "review"
+    update = KnowledgeUpdateRequest(approved=True)
+    assert update.approved is True and update.title is None
 
 
 @pytest.mark.asyncio

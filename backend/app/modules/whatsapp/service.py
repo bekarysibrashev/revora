@@ -33,8 +33,10 @@ from app.modules.whatsapp.schemas import (
     ConversationListItem,
     ConversationListResponse,
     KnowledgeImportResponse,
+    KnowledgeCreateRequest,
     KnowledgeItemResponse,
     KnowledgeListResponse,
+    KnowledgeUpdateRequest,
     SimulatorMessageResponse,
     WhatsAppChannelResponse,
     WhatsAppStatusResponse,
@@ -480,8 +482,27 @@ class WhatsAppService:
         )
         return KnowledgeListResponse(items=[self._knowledge(item) for item in rows])
 
-    async def approve_knowledge(
-        self, user: User, item_id: UUID, approved: bool, risk_level: str | None
+    async def create_knowledge(
+        self, user: User, payload: KnowledgeCreateRequest
+    ) -> KnowledgeItemResponse:
+        self._owner(user)
+        item = WhatsAppKnowledgeItem(
+            tenant_id=user.tenant_id,
+            category=payload.category.strip(),
+            title=payload.title.strip(),
+            content_ru=payload.content_ru.strip() if payload.content_ru else None,
+            content_kk=payload.content_kk.strip() if payload.content_kk else None,
+            keywords=[],
+            risk_level=payload.risk_level,
+            source=f"manual:{uuid4()}",
+            is_approved=False,
+        )
+        self.session.add(item)
+        await self.session.flush()
+        return self._knowledge(item)
+
+    async def update_knowledge(
+        self, user: User, item_id: UUID, payload: KnowledgeUpdateRequest
     ) -> KnowledgeItemResponse:
         self._owner(user)
         item = await self.session.scalar(
@@ -492,17 +513,31 @@ class WhatsAppService:
         )
         if item is None:
             raise AppError("KNOWLEDGE_NOT_FOUND", "Knowledge item not found", 404)
-        if risk_level:
-            item.risk_level = risk_level
-        if approved and item.risk_level == "human_only":
+        changed = False
+        for field in ("category", "title", "content_ru", "content_kk", "risk_level"):
+            value = getattr(payload, field)
+            if value is not None:
+                normalized = value.strip() if isinstance(value, str) else value
+                if getattr(item, field) != normalized:
+                    setattr(item, field, normalized)
+                    changed = True
+        approved = payload.approved
+        # Any edited answer must pass owner approval again before the bot can
+        # use it with patients. A PATCH cannot silently modify live knowledge.
+        if changed and approved is None:
+            item.is_approved = False
+            item.approved_by_id = None
+            item.approved_at = None
+        if approved is True and item.risk_level == "human_only":
             raise AppError(
                 "KNOWLEDGE_HUMAN_ONLY",
                 "Promotional or human-only material cannot be enabled for automatic answers",
                 409,
             )
-        item.is_approved = approved
-        item.approved_by_id = user.id if approved else None
-        item.approved_at = datetime.now(UTC) if approved else None
+        if approved is not None:
+            item.is_approved = approved
+            item.approved_by_id = user.id if approved else None
+            item.approved_at = datetime.now(UTC) if approved else None
         return self._knowledge(item)
 
     async def _decide(self, tenant_id: UUID, conversation: WhatsAppConversation, body: str):

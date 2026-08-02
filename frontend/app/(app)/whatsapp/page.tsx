@@ -35,6 +35,13 @@ type Simulation = {
 };
 type SignupAssets = { waba_id: string; phone_number_id: string; business_id?: string };
 type FacebookLoginResponse = { authResponse?: { code?: string } };
+type KnowledgeDraft = {
+  id?: string; category: string; title: string; content_ru: string;
+  content_kk: string; risk_level: "safe" | "review" | "human_only";
+};
+const emptyKnowledge: KnowledgeDraft = {
+  category: "FAQ", title: "", content_ru: "", content_kk: "", risk_level: "review",
+};
 
 declare global {
   interface Window {
@@ -97,6 +104,8 @@ export default function WhatsAppPage() {
   const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [importResult, setImportResult] = useState("");
   const [connectMessage, setConnectMessage] = useState("");
+  const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeDraft>(emptyKnowledge);
+  const [knowledgeEditorOpen, setKnowledgeEditorOpen] = useState(false);
   const status = useQuery({ queryKey: ["wa-status"], queryFn: () => api<Status>("/whatsapp/status") });
   const conversations = useQuery({
     queryKey: ["wa-conversations"],
@@ -148,6 +157,29 @@ export default function WhatsAppPage() {
         method: "PATCH", body: JSON.stringify({ approved }),
       }),
     onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["wa-knowledge"] }),
+        qc.invalidateQueries({ queryKey: ["wa-status"] }),
+      ]);
+    },
+  });
+  const saveKnowledge = useMutation({
+    mutationFn: (draft: KnowledgeDraft) => api<Knowledge>(
+      draft.id ? `/whatsapp/knowledge/${draft.id}` : "/whatsapp/knowledge",
+      {
+        method: draft.id ? "PATCH" : "POST",
+        body: JSON.stringify({
+          category: draft.category,
+          title: draft.title,
+          content_ru: draft.content_ru || null,
+          content_kk: draft.content_kk || null,
+          risk_level: draft.risk_level,
+        }),
+      },
+    ),
+    onSuccess: async () => {
+      setKnowledgeDraft(emptyKnowledge);
+      setKnowledgeEditorOpen(false);
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["wa-knowledge"] }),
         qc.invalidateQueries({ queryKey: ["wa-status"] }),
@@ -368,14 +400,33 @@ export default function WhatsAppPage() {
               </div>
             </div>}
             {tab === "knowledge" && <div>
-              {user?.role === "owner" ? <label className="file-drop"><strong>Загрузить Excel со скриптами</strong><span>Все строки попадут в черновики. Ничего не включается автоматически.</span>
-                <input type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadKnowledge(file); }} />
-              </label> : <div className="info-panel"><span>i</span><div><strong>Базой знаний управляет владелец</strong><p>Администраторы видят утверждённые материалы, но не могут менять ответы бота.</p></div></div>}
+              {user?.role === "owner" ? <>
+                <div className="wa-knowledge-actions">
+                  <button className="primary" onClick={() => { setKnowledgeDraft(emptyKnowledge); setKnowledgeEditorOpen(true); }}>Добавить ответ</button>
+                  <label className="file-drop"><strong>Загрузить Excel со скриптами</strong><span>Все строки попадут в черновики. Ничего не включается автоматически.</span>
+                    <input type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadKnowledge(file); }} />
+                  </label>
+                </div>
+                {knowledgeEditorOpen && <form className="knowledge-editor panel" onSubmit={(event) => {
+                  event.preventDefault(); saveKnowledge.mutate(knowledgeDraft);
+                }}>
+                  <div className="panel-head"><div><h2>{knowledgeDraft.id ? "Редактирование ответа" : "Новый ответ бота"}</h2><p>После сохранения материал останется выключенным до вашего одобрения.</p></div></div>
+                  <div className="two-col">
+                    <label>Категория<input required minLength={2} value={knowledgeDraft.category} onChange={e => setKnowledgeDraft({...knowledgeDraft, category:e.target.value})}/></label>
+                    <label>Режим<select value={knowledgeDraft.risk_level} onChange={e => setKnowledgeDraft({...knowledgeDraft, risk_level:e.target.value as KnowledgeDraft["risk_level"]})}><option value="review">Проверить перед включением</option><option value="safe">Безопасный FAQ</option><option value="human_only">Только администратору</option></select></label>
+                  </div>
+                  <label>Вопрос или название<input required minLength={2} value={knowledgeDraft.title} onChange={e => setKnowledgeDraft({...knowledgeDraft, title:e.target.value})}/></label>
+                  <label>Ответ на русском<textarea rows={4} value={knowledgeDraft.content_ru} onChange={e => setKnowledgeDraft({...knowledgeDraft, content_ru:e.target.value})}/></label>
+                  <label>Ответ на казахском<textarea rows={4} value={knowledgeDraft.content_kk} onChange={e => setKnowledgeDraft({...knowledgeDraft, content_kk:e.target.value})}/></label>
+                  {saveKnowledge.isError && <div className="error-box">{saveKnowledge.error.message}</div>}
+                  <div className="inline-actions"><button type="button" onClick={() => setKnowledgeEditorOpen(false)}>Отмена</button><button className="primary" disabled={saveKnowledge.isPending || (!knowledgeDraft.content_ru.trim() && !knowledgeDraft.content_kk.trim())}>{saveKnowledge.isPending ? "Сохраняем…" : "Сохранить черновик"}</button></div>
+                </form>}
+              </> : <div className="info-panel"><span>i</span><div><strong>Базой знаний управляет владелец</strong><p>Администраторы видят утверждённые материалы, но не могут менять ответы бота.</p></div></div>}
               {importResult && <div className="success-box">{importResult}</div>}
               <div className="wa-knowledge">{knowledge.data?.items.map((item) =>
                 <article key={item.id}><div><span>{item.category}</span><strong>{item.title}</strong><p>{item.content_ru}</p>
                   <small>{item.risk_level === "human_only" ? "Только администратору" : item.is_approved ? "Одобрено" : "Требует проверки"}</small>
-                </div>{user?.role === "owner" && item.risk_level !== "human_only" && <button className={item.is_approved ? "danger small" : "primary small"} onClick={() => approval.mutate({ item, approved: !item.is_approved })}>{item.is_approved ? "Отключить" : "Одобрить"}</button>}</article>)}
+                </div>{user?.role === "owner" && <div className="knowledge-card-actions"><button className="small" onClick={() => { setKnowledgeDraft({id:item.id,category:item.category,title:item.title,content_ru:item.content_ru||"",content_kk:item.content_kk||"",risk_level:item.risk_level as KnowledgeDraft["risk_level"]}); setKnowledgeEditorOpen(true); }}>Изменить</button>{item.risk_level !== "human_only" && <button className={item.is_approved ? "danger small" : "primary small"} onClick={() => approval.mutate({ item, approved: !item.is_approved })}>{item.is_approved ? "Отключить" : "Одобрить"}</button>}</div>}</article>)}
               </div>
             </div>}
           </section>

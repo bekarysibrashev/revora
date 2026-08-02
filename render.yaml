@@ -7,7 +7,7 @@ services:
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    healthCheckPath: /ready
     initialDeployHook: >-
       python -m app.cli.create_initial_owner
       --tenant-name "Demo Clinic"
@@ -54,6 +54,10 @@ services:
         value: test1
       - key: OPENAI_API_KEY
         sync: false
+      - key: ANALYST_AI_PROVIDER
+        value: groq
+      - key: ANALYST_AI_MODEL
+        value: openai/gpt-oss-120b
       - key: OPENAI_BASE_URL
         value: https://api.openai.com/v1
       - key: CALL_AI_PROVIDER
@@ -72,6 +76,10 @@ services:
         value: "25000000"
       - key: CALL_ANALYSIS_TIMEOUT_SECONDS
         value: "120"
+      - key: EMBEDDED_CALL_WORKER
+        value: "true"
+      - key: EMBEDDED_CALL_WORKER_INTERVAL_SECONDS
+        value: "20"
       - key: WHATSAPP_VERIFY_TOKEN
         sync: false
       - key: WHATSAPP_APP_SECRET

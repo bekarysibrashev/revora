@@ -9,16 +9,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from sqlalchemy import text
 
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import RequestIdMiddleware
 from app.core.errors import AppError
+from app.core.database import AsyncSessionFactory
 from app.modules.admin.router import router as admin_router
 from app.modules.analytics.router import router as analytics_router
 from app.modules.auth.router import router as auth_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.ai.call_quality.router import router as call_quality_router
+from app.modules.ai.call_quality.embedded_worker import EmbeddedCallWorker
 from app.modules.ai.analyst.router import router as analyst_router
 from app.modules.kcell.router import router as kcell_router
 from app.modules.losses.router import router as losses_router
@@ -37,12 +40,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
     logger = logging.getLogger(__name__)
+    call_worker = EmbeddedCallWorker(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.info("Starting %s in %s", settings.app_name, settings.app_env)
-        yield
-        logger.info("Stopping %s", settings.app_name)
+        call_worker.start()
+        try:
+            yield
+        finally:
+            await call_worker.stop()
+            logger.info("Stopping %s", settings.app_name)
 
     application = FastAPI(
         title=settings.app_name,
@@ -98,6 +106,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
         return {"status": "ok", "service": settings.app_name, "environment": settings.app_env}
+
+    @application.get("/ready", tags=["system"])
+    async def ready() -> JSONResponse:
+        """Verify the persistent dependency required by every business feature."""
+        try:
+            async with AsyncSessionFactory() as session:
+                await session.execute(text("SELECT 1"))
+        except Exception:
+            logger.exception("Readiness database check failed")
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unavailable", "database": "unavailable"},
+            )
+        return JSONResponse(content={"status": "ready", "database": "ready"})
 
     application.include_router(auth_router, prefix=settings.api_v1_prefix)
     application.include_router(tenancy_router, prefix=settings.api_v1_prefix)
