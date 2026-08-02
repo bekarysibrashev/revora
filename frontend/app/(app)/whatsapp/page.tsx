@@ -33,7 +33,7 @@ type Simulation = {
   conversation_id: string; state: string; reply: string | null; handoff: boolean;
   handoff_reason: string | null; provider: string; cost_kzt: string;
 };
-type SignupAssets = { waba_id: string; phone_number_id: string; business_id?: string };
+type SignupAssets = { waba_id: string; phone_number_id?: string; business_id?: string };
 type FacebookLoginResponse = { authResponse?: { code?: string } };
 type KnowledgeDraft = {
   id?: string; category: string; title: string; content_ru: string;
@@ -236,15 +236,23 @@ export default function WhatsAppPage() {
         const payload =
           typeof event.data === "string" ? JSON.parse(event.data) : event.data;
         if (payload?.type !== "WA_EMBEDDED_SIGNUP") return;
-        if (payload.event === "FINISH") {
+        if (
+          payload.event === "FINISH" ||
+          payload.event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+        ) {
           const data = payload.data || {};
-          if (data.waba_id && data.phone_number_id) {
+          if (data.waba_id) {
             assets = {
               waba_id: String(data.waba_id),
-              phone_number_id: String(data.phone_number_id),
+              phone_number_id: data.phone_number_id
+                ? String(data.phone_number_id)
+                : undefined,
               business_id: data.business_id ? String(data.business_id) : undefined,
             };
             finish();
+          } else {
+            setConnectMessage("Meta завершила подключение, но не вернула WABA ID.");
+            cleanup();
           }
         } else if (payload.event === "CANCEL" || payload.event === "ERROR") {
           setConnectMessage(

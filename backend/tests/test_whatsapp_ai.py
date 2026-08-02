@@ -1,6 +1,7 @@
 from hashlib import sha256
 import hmac
 from io import BytesIO
+import json
 
 import httpx
 import pytest
@@ -16,12 +17,17 @@ from app.modules.whatsapp.meta_client import (
     MetaEmbeddedSignupClient,
     MetaEmbeddedSignupError,
 )
+from app.modules.whatsapp.router import _message_body, _meta_timestamp
 from app.modules.whatsapp.security import (
     decrypt_contact,
     encrypt_contact,
     valid_meta_signature,
 )
-from app.modules.whatsapp.schemas import KnowledgeCreateRequest, KnowledgeUpdateRequest
+from app.modules.whatsapp.schemas import (
+    EmbeddedSignupCompleteRequest,
+    KnowledgeCreateRequest,
+    KnowledgeUpdateRequest,
+)
 
 
 def test_retrieval_returns_only_a_matching_approved_answer() -> None:
@@ -118,6 +124,25 @@ def test_manual_knowledge_requires_an_answer_and_supports_partial_updates() -> N
     assert update.approved is True and update.title is None
 
 
+def test_coexistence_callback_accepts_waba_without_phone_number_id() -> None:
+    payload = EmbeddedSignupCompleteRequest(
+        code="single-use-code",
+        waba_id="1234567890",
+    )
+
+    assert payload.phone_number_id is None
+
+
+def test_coexistence_history_payload_helpers_preserve_text_and_media() -> None:
+    timestamp = _meta_timestamp("1739230955")
+
+    assert timestamp is not None and int(timestamp.timestamp()) == 1739230955
+    assert _message_body({"type": "text", "text": {"body": "Hello"}}) == "Hello"
+    assert _message_body({"type": "image", "image": {"caption": "Scan"}}) == "Scan"
+    assert _message_body({"type": "video", "video": {}}) == "[video]"
+    assert _message_body({"type": "revoke", "revoke": {}}) is None
+
+
 @pytest.mark.asyncio
 async def test_embedded_signup_exchanges_code_and_subscribes_verified_waba() -> None:
     requests: list[httpx.Request] = []
@@ -149,6 +174,10 @@ async def test_embedded_signup_exchanges_code_and_subscribes_verified_waba() -> 
             )
         if request.url.path.endswith("/waba-123/subscribed_apps"):
             return httpx.Response(200, json={"success": True})
+        if request.url.path.endswith("/phone-123/smb_app_data"):
+            sync_type = json.loads(request.content)["sync_type"]
+            assert sync_type in {"smb_app_state_sync", "history"}
+            return httpx.Response(200, json={"request_id": f"request-{sync_type}"})
         return httpx.Response(404)
 
     client = MetaEmbeddedSignupClient(
@@ -159,15 +188,22 @@ async def test_embedded_signup_exchanges_code_and_subscribes_verified_waba() -> 
     )
 
     token, expires_in = await client.exchange_code("single-use-code")
-    phone = await client.verify_and_subscribe(
+    phone = await client.verify_subscribe_and_sync(
         token=token,
         waba_id="waba-123",
-        phone_number_id="phone-123",
+        phone_number_id=None,
     )
 
     assert expires_in == 3600
+    assert phone["id"] == "phone-123"
     assert phone["verified_name"] == "Revora Test"
-    assert [request.method for request in requests] == ["GET", "GET", "POST"]
+    assert [request.method for request in requests] == [
+        "GET",
+        "GET",
+        "POST",
+        "POST",
+        "POST",
+    ]
 
 
 @pytest.mark.asyncio
@@ -183,8 +219,31 @@ async def test_embedded_signup_rejects_phone_from_another_waba() -> None:
     )
 
     with pytest.raises(MetaEmbeddedSignupError, match="does not belong"):
-        await client.verify_and_subscribe(
+        await client.verify_subscribe_and_sync(
             token="channel-token",
             waba_id="waba-123",
             phone_number_id="phone-123",
+        )
+
+
+@pytest.mark.asyncio
+async def test_coexistence_requires_an_unambiguous_phone_number() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "phone-1"}, {"id": "phone-2"}]},
+        )
+
+    client = MetaEmbeddedSignupClient(
+        app_id="app-123",
+        app_secret="app-secret",
+        graph_version="v25.0",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(MetaEmbeddedSignupError, match="multiple phone numbers"):
+        await client.verify_subscribe_and_sync(
+            token="channel-token",
+            waba_id="waba-123",
+            phone_number_id=None,
         )

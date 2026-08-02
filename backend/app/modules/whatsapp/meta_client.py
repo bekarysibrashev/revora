@@ -45,8 +45,8 @@ class MetaEmbeddedSignupClient:
                 "Meta did not exchange the Embedded Signup code"
             ) from exc
 
-    async def verify_and_subscribe(
-        self, *, token: str, waba_id: str, phone_number_id: str
+    async def verify_subscribe_and_sync(
+        self, *, token: str, waba_id: str, phone_number_id: str | None
     ) -> dict[str, str]:
         proof = hmac.new(
             self.app_secret.encode("utf-8"),
@@ -69,17 +69,30 @@ class MetaEmbeddedSignupClient:
                 )
                 phones_response.raise_for_status()
                 phones = phones_response.json().get("data") or []
-                phone = next(
-                    (
-                        item
-                        for item in phones
-                        if str(item.get("id")) == phone_number_id
-                    ),
-                    None,
+                phone = (
+                    next(
+                        (
+                            item
+                            for item in phones
+                            if str(item.get("id")) == phone_number_id
+                        ),
+                        None,
+                    )
+                    if phone_number_id
+                    else phones[0] if len(phones) == 1 else None
                 )
                 if phone is None:
+                    if not phone_number_id and len(phones) > 1:
+                        raise MetaEmbeddedSignupError(
+                            "Meta returned multiple phone numbers without identifying the Coexistence number"
+                        )
                     raise MetaEmbeddedSignupError(
                         "The selected phone number does not belong to this WABA"
+                    )
+                resolved_phone_number_id = str(phone.get("id") or "")
+                if not resolved_phone_number_id:
+                    raise MetaEmbeddedSignupError(
+                        "Meta did not return a business phone number ID"
                     )
                 subscribe_response = await client.post(
                     f"{self.base_url}/{waba_id}/subscribed_apps",
@@ -91,7 +104,23 @@ class MetaEmbeddedSignupClient:
                     raise MetaEmbeddedSignupError(
                         "Meta did not subscribe Revora to this WABA"
                     )
+                for sync_type in ("smb_app_state_sync", "history"):
+                    sync_response = await client.post(
+                        f"{self.base_url}/{resolved_phone_number_id}/smb_app_data",
+                        headers=headers,
+                        params=params,
+                        json={
+                            "messaging_product": "whatsapp",
+                            "sync_type": sync_type,
+                        },
+                    )
+                    sync_response.raise_for_status()
+                    if not sync_response.json().get("request_id"):
+                        raise MetaEmbeddedSignupError(
+                            f"Meta did not start {sync_type} synchronization"
+                        )
             return {
+                "id": resolved_phone_number_id,
                 "display_phone_number": str(
                     phone.get("display_phone_number") or ""
                 ),

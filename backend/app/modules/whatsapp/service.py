@@ -144,7 +144,7 @@ class WhatsAppService:
         *,
         code: str,
         waba_id: str,
-        phone_number_id: str,
+        phone_number_id: str | None,
     ) -> WhatsAppChannelResponse:
         self._owner(user)
         app_id = self.settings.meta_app_id
@@ -163,7 +163,7 @@ class WhatsAppService:
                 graph_version=self.settings.whatsapp_graph_api_version,
             )
             token, expires_in = await client.exchange_code(code)
-            phone = await client.verify_and_subscribe(
+            phone = await client.verify_subscribe_and_sync(
                 token=token,
                 waba_id=waba_id,
                 phone_number_id=phone_number_id,
@@ -177,6 +177,7 @@ class WhatsAppService:
             ) from exc
         display_phone_number = phone["display_phone_number"]
         verified_name = phone["verified_name"]
+        phone_number_id = phone["id"]
         channel = await self._ensure_channel(
             user.tenant_id,
             phone_number_id,
@@ -371,6 +372,55 @@ class WhatsAppService:
             provider=provider,
             cost_kzt=cost,
         )
+
+    async def store_synced_message(
+        self,
+        *,
+        tenant_id: UUID,
+        channel: WhatsAppChannel,
+        contact_id: str,
+        external_message_id: str,
+        direction: str,
+        message_type: str,
+        body: str | None,
+        provider_timestamp: datetime | None,
+        status: str = "synced",
+    ) -> None:
+        duplicate = await self.session.scalar(
+            select(WhatsAppMessage.id).where(
+                WhatsAppMessage.tenant_id == tenant_id,
+                WhatsAppMessage.external_message_id == external_message_id,
+            )
+        )
+        if duplicate:
+            return
+        conversation = await self._get_or_create_conversation(
+            tenant_id, channel.id, contact_id
+        )
+        occurred_at = provider_timestamp or datetime.now(UTC)
+        if occurred_at > conversation.last_message_at:
+            conversation.last_message_at = occurred_at
+        if direction == "in" and (
+            conversation.last_patient_message_at is None
+            or occurred_at > conversation.last_patient_message_at
+        ):
+            conversation.last_patient_message_at = occurred_at
+        self.session.add(
+            WhatsAppMessage(
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                external_message_id=external_message_id,
+                direction=direction,
+                sender_kind="patient" if direction == "in" else "business_app",
+                message_type=message_type,
+                body_ciphertext=self._encrypt_message(body) if body else None,
+                status=status,
+                is_draft=False,
+                provider_timestamp=provider_timestamp,
+                sent_at=occurred_at if direction == "out" else None,
+            )
+        )
+        await self.session.flush()
 
     async def takeover(self, user: User, conversation_id: UUID) -> ConversationDetailResponse:
         item = await self._owned_conversation(user, conversation_id)

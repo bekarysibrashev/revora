@@ -121,7 +121,7 @@ class KnowledgeImportResponse(BaseModel):
 class EmbeddedSignupCompleteRequest(BaseModel):
     code: str = Field(min_length=10, max_length=2000)
     waba_id: str = Field(pattern=r"^\d{5,30}$")
-    phone_number_id: str = Field(pattern=r"^\d{5,30}$")
+    phone_number_id: str | None = Field(default=None, pattern=r"^\d{5,30}$")
     business_id: str | None = Field(default=None, pattern=r"^\d{5,30}$")
 
 

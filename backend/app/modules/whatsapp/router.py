@@ -1,7 +1,7 @@
 import hmac
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import unquote
 from uuid import UUID
 
@@ -38,6 +38,25 @@ router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 webhook_router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp-webhook"])
 Session = Annotated[AsyncSession, Depends(get_db_session)]
 RuntimeSettings = Annotated[Settings, Depends(get_settings)]
+
+
+def _meta_timestamp(value: Any) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(int(value), tz=UTC)
+    except (TypeError, ValueError):
+        return None
+
+
+def _message_body(message: dict[str, Any]) -> str | None:
+    message_type = str(message.get("type") or "unknown")
+    content = message.get(message_type)
+    if isinstance(content, dict):
+        body = content.get("body") or content.get("caption")
+        if body:
+            return str(body).strip()
+    if message_type in {"revoke", "unsupported"}:
+        return None
+    return f"[{message_type}]"
 
 
 @router.get("/status", response_model=WhatsAppStatusResponse)
@@ -255,13 +274,6 @@ async def receive_webhook(
                 body = str((message.get("text") or {}).get("body") or "").strip()
                 if not contact_id or not external_message_id or not body:
                     continue
-                timestamp = None
-                try:
-                    timestamp = datetime.fromtimestamp(
-                        int(message.get("timestamp")), tz=UTC
-                    )
-                except (TypeError, ValueError):
-                    pass
                 await service.process_incoming(
                     tenant_id=tenant.id,
                     channel=channel,
@@ -269,6 +281,51 @@ async def receive_webhook(
                     external_message_id=external_message_id,
                     body=body,
                     simulated=False,
-                    provider_timestamp=timestamp,
+                    provider_timestamp=_meta_timestamp(message.get("timestamp")),
                 )
+            for echo in value.get("message_echoes") or []:
+                contact_id = str(echo.get("to") or "").strip()
+                external_message_id = str(echo.get("id") or "").strip()
+                if not contact_id or not external_message_id:
+                    continue
+                await service.store_synced_message(
+                    tenant_id=tenant.id,
+                    channel=channel,
+                    contact_id=contact_id,
+                    external_message_id=external_message_id,
+                    direction="out",
+                    message_type=str(echo.get("type") or "unknown"),
+                    body=_message_body(echo),
+                    provider_timestamp=_meta_timestamp(echo.get("timestamp")),
+                    status="echoed",
+                )
+            for history_chunk in value.get("history") or []:
+                for thread in history_chunk.get("threads") or []:
+                    contact_id = str(thread.get("id") or "").strip()
+                    if not contact_id:
+                        continue
+                    for message in thread.get("messages") or []:
+                        external_message_id = str(message.get("id") or "").strip()
+                        if not external_message_id:
+                            continue
+                        direction = (
+                            "in"
+                            if str(message.get("from") or "").strip() == contact_id
+                            else "out"
+                        )
+                        history_status = str(
+                            (message.get("history_context") or {}).get("status")
+                            or "synced"
+                        ).lower()
+                        await service.store_synced_message(
+                            tenant_id=tenant.id,
+                            channel=channel,
+                            contact_id=contact_id,
+                            external_message_id=external_message_id,
+                            direction=direction,
+                            message_type=str(message.get("type") or "unknown"),
+                            body=_message_body(message),
+                            provider_timestamp=_meta_timestamp(message.get("timestamp")),
+                            status=history_status,
+                        )
     return {"status": "ok"}
