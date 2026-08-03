@@ -137,8 +137,12 @@ function OneCIntegration(){
           <li>Выполните настройку; скрипт сам запросит логин 1С, пароль и ключ Revora.</li>
         </ol>
         <pre>{`.\\revora-1c-odata.ps1 -Setup -RevoraApiUrl "${API_URL}"`}</pre>
-        <p>Первый ручной запуск:</p>
-        <pre>{`.\\revora-1c-odata.ps1`}</pre>
+        <p>Проверка доступа к 1С:</p>
+        <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -TestConnection`}</pre>
+        <p>Первая полная синхронизация:</p>
+        <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -FullSync`}</pre>
+        <p>Установка задачи Планировщика Windows каждые 3 часа:</p>
+        <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -InstallTask`}</pre>
         <p className="hint">Пароль 1С и ключ сохраняются через Windows DPAPI для текущего пользователя Windows. Пароль 1С не передаётся в Revora. Коннектор читает OData только с localhost.</p>
       </div>
     </>}
