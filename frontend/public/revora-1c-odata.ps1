@@ -240,14 +240,19 @@ function Get-ODataPages {
     )
 
     $encodedEntity = [Uri]::EscapeDataString($Entity)
-    $url = "$BaseUrl/$encodedEntity`?`$format=json&`$top=$ConfiguredPageSize&allowedOnly=true"
+    $queryUrl = "$BaseUrl/$encodedEntity`?`$format=json&`$top=$ConfiguredPageSize&allowedOnly=true"
     if ($null -ne $ChangedSince) {
         $dateText = $ChangedSince.Value.ToString("yyyy-MM-ddTHH:mm:ss")
         $filter = [Uri]::EscapeDataString("Period ge datetime'$dateText'")
-        $url += "&`$filter=$filter"
+        $queryUrl += "&`$filter=$filter"
     }
 
-    while ($url) {
+    # 1C treats $top as the total result limit and does not necessarily emit
+    # odata.nextLink. Page explicitly with $skip so a register containing more
+    # than one batch is always read completely.
+    $skip = 0
+    while ($true) {
+        $url = "$queryUrl&`$skip=$skip"
         $response = Invoke-OneCGet -Url $url -Credential $Credential
         $valueProperty = $response.PSObject.Properties["value"]
         $dProperty = $response.PSObject.Properties["d"]
@@ -264,14 +269,8 @@ function Get-ODataPages {
         }
 
         Write-Output -NoEnumerate ([pscustomobject]@{ Records = $records })
-        $next = Get-NextLink -Response $response
-        if ($next) {
-            $url = Resolve-ODataLink -Link $next -BaseUrl $BaseUrl
-            Assert-LocalODataUrl -Url $url
-        }
-        else {
-            $url = $null
-        }
+        if ($records.Count -lt $ConfiguredPageSize) { break }
+        $skip += $records.Count
     }
 }
 
