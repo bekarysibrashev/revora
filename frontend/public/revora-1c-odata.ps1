@@ -20,10 +20,16 @@ param(
     [Parameter(ParameterSetName = "Run")]
     [switch]$FullSync,
 
+    [Parameter(ParameterSetName = "Run")]
+    [switch]$AllHistory,
+
     [string]$ConfigPath = "$env:LOCALAPPDATA\Revora\one-c-odata.xml",
 
     [ValidateRange(10, 500)]
-    [int]$PageSize = 200
+    [int]$PageSize = 200,
+
+    [ValidateRange(1, 3650)]
+    [int]$HistoryDays = 90
 )
 
 Set-StrictMode -Version 2.0
@@ -163,6 +169,7 @@ function Save-ConnectorConfig {
         ConnectorToken = $connectorToken
         Entities = $ApprovedEntities
         PageSize = $PageSize
+        HistoryDays = $HistoryDays
     } | Export-Clixml -LiteralPath $ConfigPath -Force
 
     $currentScript = $MyInvocation.ScriptName
@@ -242,7 +249,7 @@ function Get-ODataPages {
     $encodedEntity = [Uri]::EscapeDataString($Entity)
     $queryUrl = "$BaseUrl/$encodedEntity`?`$format=json&`$top=$ConfiguredPageSize&allowedOnly=true"
     if ($null -ne $ChangedSince) {
-        $dateText = $ChangedSince.Value.ToString("yyyy-MM-ddTHH:mm:ss")
+        $dateText = ([datetime]$ChangedSince).ToString("yyyy-MM-ddTHH:mm:ss")
         $filter = [Uri]::EscapeDataString("Period ge datetime'$dateText'")
         $queryUrl += "&`$filter=$filter"
     }
@@ -251,6 +258,8 @@ function Get-ODataPages {
     # odata.nextLink. Page explicitly with $skip so a register containing more
     # than one batch is always read completely.
     $skip = 0
+    $pageNumber = 0
+    $previousFingerprint = $null
     while ($true) {
         $url = "$queryUrl&`$skip=$skip"
         $response = Invoke-OneCGet -Url $url -Credential $Credential
@@ -268,6 +277,24 @@ function Get-ODataPages {
             throw "Unexpected OData response for $Entity."
         }
 
+        $pageNumber += 1
+        if ($records.Count -gt 0) {
+            $pageJson = $records | ConvertTo-Json -Depth 30 -Compress
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try {
+                $fingerprint = [Convert]::ToBase64String(
+                    $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($pageJson))
+                )
+            }
+            finally {
+                $sha.Dispose()
+            }
+            if ($null -ne $previousFingerprint -and $fingerprint -eq $previousFingerprint) {
+                throw "1C returned the same OData page twice for $Entity; paging was stopped safely."
+            }
+            $previousFingerprint = $fingerprint
+        }
+        Write-ConnectorLog -Message "${Entity}: page=$pageNumber, read=$($records.Count), offset=$skip"
         Write-Output -NoEnumerate ([pscustomobject]@{ Records = $records })
         if ($records.Count -lt $ConfiguredPageSize) { break }
         $skip += $records.Count
@@ -376,7 +403,7 @@ function Save-LastSuccessfulSync {
 }
 
 function Invoke-ConnectorSync {
-    param($Config, [switch]$ForceFull)
+    param($Config, [switch]$ForceFull, [switch]$ForceAllHistory)
 
     $mutex = [Threading.Mutex]::new($false, "Local\RevoraOneCODataConnector")
     $lockTaken = $false
@@ -390,12 +417,24 @@ function Invoke-ConnectorSync {
         $startedUtc = [datetime]::UtcNow
         $lastSuccessful = Read-LastSuccessfulSync
         $changedSince = $null
-        if (-not $ForceFull -and $null -ne $lastSuccessful) {
-            $changedSince = $lastSuccessful.ToUniversalTime().AddDays(-$IncrementalOverlapDays)
-            Write-ConnectorLog -Message "Incremental sync started with a $IncrementalOverlapDays-day overlap."
+        $historyDaysProperty = $Config.PSObject.Properties["HistoryDays"]
+        $configuredHistoryDays = if ($null -ne $historyDaysProperty -and $historyDaysProperty.Value) {
+            [int]$historyDaysProperty.Value
         }
         else {
-            Write-ConnectorLog -Message "Full sync started."
+            $HistoryDays
+        }
+
+        if ($ForceAllHistory) {
+            Write-ConnectorLog -Message "All-history sync started by explicit request."
+        }
+        elseif ($ForceFull -or $null -eq $lastSuccessful) {
+            $changedSince = [datetime]::UtcNow.AddDays(-$configuredHistoryDays)
+            Write-ConnectorLog -Message "Full sync for the last $configuredHistoryDays days started."
+        }
+        else {
+            $changedSince = $lastSuccessful.ToUniversalTime().AddDays(-$IncrementalOverlapDays)
+            Write-ConnectorLog -Message "Incremental sync started with a $IncrementalOverlapDays-day overlap."
         }
 
         $credential = [pscredential]::new($Config.OneCUsername, $Config.OneCPassword)
@@ -454,4 +493,4 @@ if ($TestConnection) {
     exit 0
 }
 
-Invoke-ConnectorSync -Config $config -ForceFull:$FullSync
+Invoke-ConnectorSync -Config $config -ForceFull:$FullSync -ForceAllHistory:$AllHistory

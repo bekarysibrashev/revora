@@ -139,7 +139,7 @@ function OneCIntegration(){
         <pre>{`.\\revora-1c-odata.ps1 -Setup -RevoraApiUrl "${API_URL}"`}</pre>
         <p>Проверка доступа к 1С:</p>
         <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -TestConnection`}</pre>
-        <p>Первая полная синхронизация:</p>
+        <p>Первая синхронизация за последние 90 дней:</p>
         <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -FullSync`}</pre>
         <p>Установка задачи Планировщика Windows каждые 3 часа:</p>
         <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -InstallTask`}</pre>
