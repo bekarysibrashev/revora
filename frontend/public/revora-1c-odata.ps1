@@ -230,7 +230,7 @@ function Invoke-OneCGet {
     Assert-LocalODataUrl -Url $Url
     $authorization = Get-BasicAuthorizationValue -Credential $Credential
     return Invoke-WithRetry -Description "1C OData request" -Operation {
-        Invoke-RestMethod -Method Get -Uri $Url -MaximumRedirection 0 -Headers @{
+        Invoke-RestMethod -Method Get -Uri $Url -MaximumRedirection 0 -TimeoutSec 300 -Headers @{
             Accept = "application/json"
             Authorization = $authorization
         }
@@ -318,7 +318,7 @@ function Send-RevoraBatch {
     $body = [Text.Encoding]::UTF8.GetBytes($json)
 
     return Invoke-WithRetry -Description "Revora upload" -Operation {
-        Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/push" -MaximumRedirection 0 `
+        Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/push" -MaximumRedirection 0 -TimeoutSec 300 `
             -Headers @{ Authorization = "Bearer $Token" } `
             -ContentType "application/json; charset=utf-8" -Body $body
     }
@@ -332,7 +332,7 @@ function Test-Connector {
     $authorization = Get-BasicAuthorizationValue -Credential $credential
     Assert-LocalODataUrl -Url $metadataUrl
     Invoke-WithRetry -Description "1C metadata test" -Operation {
-        Invoke-WebRequest -UseBasicParsing -Method Get -Uri $metadataUrl -MaximumRedirection 0 `
+        Invoke-WebRequest -UseBasicParsing -Method Get -Uri $metadataUrl -MaximumRedirection 0 -TimeoutSec 300 `
             -Headers @{ Authorization = $authorization } | Out-Null
     }
 
