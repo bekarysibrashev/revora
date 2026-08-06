@@ -19,6 +19,8 @@ from app.modules.integrations.schemas import (
     MappingProfileListResponse,
     MappingProfileResponse,
     OneCConnectorTokenResponse,
+    OneCNormalizeRequest,
+    OneCNormalizeResponse,
     OneCPushRequest,
     OneCPushResponse,
 )
@@ -97,6 +99,19 @@ async def one_c_sync_status(
     service: IntegrationServiceDependency,
 ) -> ConnectionSyncStatusResponse:
     return await service.one_c_sync_status(user, connection_id)
+
+
+@router.post(
+    "/connections/{connection_id}/normalize-1c",
+    response_model=OneCNormalizeResponse,
+)
+async def normalize_existing_one_c_records(
+    connection_id: UUID,
+    payload: OneCNormalizeRequest,
+    user: CurrentUser,
+    service: IntegrationServiceDependency,
+) -> OneCNormalizeResponse:
+    return await service.normalize_existing_one_c_records(user, connection_id, payload)
 
 
 @router.post(

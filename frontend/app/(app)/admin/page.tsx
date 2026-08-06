@@ -9,7 +9,8 @@ type User = { id:string; email:string; full_name:string; role:string; branch_ids
 type Connection = { id:string; name:string; provider:string; status:string; settings?:Record<string,unknown> };
 type Profile = { id:string; source_entity:string; target_entity:string; version:number; is_active:boolean; rules:Record<string,unknown> };
 type OneCToken = { connection_id:string; token:string; allowed_entities:string[] };
-type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; entities:{entity:string;records:number}[] };
+type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; pending_records:number; normalized_records:number; quarantined_records:number; entities:{entity:string;records:number}[] };
+type OneCNormalize = { connection_id:string; processed:number; normalized:number; quarantined:number; remaining:number };
 const example = JSON.stringify({
   external_id:{source_fields:["ID","Код пациента"],required:true,transform:"string"},
   full_name:{source_fields:["ФИО","Пациент"],required:true,transform:"string"},
@@ -92,6 +93,9 @@ function OneCIntegration(){
   const [connectionId,setConnectionId]=useState("");
   const [token,setToken]=useState<OneCToken|null>(null);
   const [copied,setCopied]=useState(false);
+  const [normalizing,setNormalizing]=useState(false);
+  const [normalizeProgress,setNormalizeProgress]=useState<{processed:number;normalized:number;quarantined:number;remaining:number}|null>(null);
+  const [normalizeError,setNormalizeError]=useState("");
   useEffect(()=>{if(!connectionId&&oneCConnections[0])setConnectionId(oneCConnections[0].id)},[connectionId,oneCConnections]);
   const create=useMutation({
     mutationFn:()=>api<Connection>("/integrations/connections",{method:"POST",body:JSON.stringify({provider:"1c_odata_push",name:"1С Stoma",settings:{}})}),
@@ -109,6 +113,22 @@ function OneCIntegration(){
   });
   const status=sync.data;
   async function copyToken(){if(!token)return;await navigator.clipboard.writeText(token.token);setCopied(true)}
+  async function normalizeExisting(){
+    if(!connectionId||normalizing)return;
+    setNormalizing(true);setNormalizeError("");
+    let totals={processed:0,normalized:0,quarantined:0,remaining:status?.pending_records||0};
+    setNormalizeProgress(totals);
+    try{
+      for(;;){
+        const batch=await api<OneCNormalize>(`/integrations/connections/${connectionId}/normalize-1c`,{method:"POST",body:JSON.stringify({history_days:90,batch_size:500})});
+        totals={processed:totals.processed+batch.processed,normalized:totals.normalized+batch.normalized,quarantined:totals.quarantined+batch.quarantined,remaining:batch.remaining};
+        setNormalizeProgress(totals);
+        if(batch.remaining===0||batch.processed===0)break;
+      }
+      await qc.invalidateQueries({queryKey:["one-c-sync",connectionId]});
+    }catch(e){setNormalizeError(e instanceof Error?e.message:"Не удалось обработать данные 1С")}
+    finally{setNormalizing(false)}
+  }
   return <section className="panel">
     <Step n="1С" title="Автоматическая синхронизация 1С" text="OData остаётся на localhost. Локальный коннектор отправляет в Revora только разрешённые финансовые регистры по HTTPS."/>
     {!oneCConnections.length?<button className="primary small" onClick={()=>create.mutate()} disabled={create.isPending}>{create.isPending?"Создаём…":"Создать безопасное подключение 1С"}</button>:<>
@@ -118,6 +138,17 @@ function OneCIntegration(){
         <span>Записей: <strong>{status?.total_records||0}</strong></span>
         <span>Последняя синхронизация: <strong>{status?.last_synced_at?new Date(status.last_synced_at).toLocaleString("ru-RU"):"ещё не было"}</strong></span>
       </div>
+      {status&&<div className="integration-health">
+        <span>В аналитике за 90 дней: <strong>{status.normalized_records||0}</strong></span>
+        <span>Ожидают обработки: <strong>{status.pending_records||0}</strong></span>
+        <span>Нужна проверка: <strong>{status.quarantined_records||0}</strong></span>
+      </div>}
+      {!!status?.pending_records&&<div className="setup-steps">
+        <p><strong>Сырые строки уже сохранены, но ещё не участвуют в дашбордах.</strong> Revora безопасно сопоставит выручку, продажи, затраты и движение денег за последние 90 дней. Неоднозначные строки не попадут в суммы.</p>
+        <button className="primary small" onClick={normalizeExisting} disabled={normalizing}>{normalizing?"Обрабатываем данные 1С…":"Добавить данные 1С в аналитику"}</button>
+        {normalizeProgress&&<p className="hint">Обработано: {normalizeProgress.processed}. Добавлено в аналитику: {normalizeProgress.normalized}. Нужна проверка: {normalizeProgress.quarantined}. Осталось: {normalizeProgress.remaining}.</p>}
+        {normalizeError&&<div className="error-box">{normalizeError}</div>}
+      </div>}
       {(create.isError||rotate.isError||sync.isError)&&<div className="error-box">{(create.error||rotate.error||sync.error)?.message||"Не удалось выполнить запрос"}</div>}
       {status?.entities.length?<div className="table-wrap"><table><thead><tr><th>Данные 1С</th><th>Сохранено строк</th></tr></thead><tbody>{status.entities.map(x=><tr key={x.entity}><td>{oneCEntityLabels[x.entity]||x.entity}</td><td>{x.records}</td></tr>)}</tbody></table></div>:null}
       <div className="inline-form">

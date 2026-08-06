@@ -150,6 +150,21 @@ class OneCPushResponse(BaseModel):
     records_received: int
     records_stored: int
     records_duplicate: int
+    records_normalized: int = 0
+    records_quarantined: int = 0
+
+
+class OneCNormalizeRequest(BaseModel):
+    history_days: int = Field(default=90, ge=1, le=3650)
+    batch_size: int = Field(default=200, ge=10, le=500)
+
+
+class OneCNormalizeResponse(BaseModel):
+    connection_id: UUID
+    processed: int
+    normalized: int
+    quarantined: int
+    remaining: int
 
 
 class EntitySyncCount(BaseModel):
@@ -163,4 +178,7 @@ class ConnectionSyncStatusResponse(BaseModel):
     last_synced_at: datetime | None = None
     last_entity: str | None = None
     total_records: int = 0
+    pending_records: int = 0
+    normalized_records: int = 0
+    quarantined_records: int = 0
     entities: list[EntitySyncCount] = Field(default_factory=list)

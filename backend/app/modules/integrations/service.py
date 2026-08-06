@@ -1,6 +1,6 @@
 """Application orchestration for source ingestion and canonical loading."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import secrets
 from uuid import UUID
@@ -19,6 +19,10 @@ from app.modules.integrations.one_c import (
     parse_connector_token,
     source_record_id,
 )
+from app.modules.integrations.one_c_finance import (
+    MAPPABLE_ONE_C_ENTITIES,
+    normalize_one_c_finance_record,
+)
 from app.modules.integrations.repository import IntegrationRepository
 from app.modules.integrations.schemas import (
     ConnectionCreateRequest,
@@ -32,6 +36,8 @@ from app.modules.integrations.schemas import (
     MappingProfileListResponse,
     MappingProfileResponse,
     OneCConnectorTokenResponse,
+    OneCNormalizeRequest,
+    OneCNormalizeResponse,
     OneCPushRequest,
     OneCPushResponse,
 )
@@ -106,6 +112,13 @@ class IntegrationService:
         if connection.provider != ONE_C_PROVIDER:
             raise AppError("INVALID_INTEGRATION_PROVIDER", "This is not a 1C connection", 422)
         counts = await self.repository.raw_record_counts(user.tenant_id, connection.id)
+        period_from = datetime.now(UTC) - timedelta(days=90)
+        status_counts = await self.repository.raw_record_status_counts(
+            user.tenant_id,
+            connection.id,
+            source_entities=MAPPABLE_ONE_C_ENTITIES,
+            period_from=period_from,
+        )
         settings = connection.settings or {}
         last_synced_at = None
         if settings.get("last_synced_at"):
@@ -119,6 +132,9 @@ class IntegrationService:
             last_synced_at=last_synced_at,
             last_entity=str(settings["last_entity"]) if settings.get("last_entity") else None,
             total_records=sum(count for _, count in counts),
+            pending_records=status_counts.get("pending", 0),
+            normalized_records=status_counts.get("normalized", 0),
+            quarantined_records=status_counts.get("quarantined", 0),
             entities=[EntitySyncCount(entity=entity, records=count) for entity, count in counts],
         )
 
@@ -159,8 +175,15 @@ class IntegrationService:
         run = await self.repository.create_sync_run(parts.tenant_id, connection.id)
         stored = 0
         duplicates = 0
+        normalized = 0
+        quarantined = 0
+        branch_code = (
+            str(connection.settings["default_branch_code"])
+            if connection.settings.get("default_branch_code")
+            else await self.repository.single_active_branch_code(parts.tenant_id)
+        )
         for record in payload.records:
-            _, created = await self.repository.store_raw_record(
+            raw_record, created = await self.repository.store_raw_record(
                 tenant_id=parts.tenant_id,
                 connection_id=connection.id,
                 sync_run_id=run.id,
@@ -174,6 +197,14 @@ class IntegrationService:
                 stored += 1
             else:
                 duplicates += 1
+            if raw_record.status == "pending":
+                outcome = await self._normalize_one_c_raw_record(
+                    tenant_id=parts.tenant_id,
+                    raw_record=raw_record,
+                    branch_code=branch_code,
+                )
+                normalized += int(outcome == "normalized")
+                quarantined += int(outcome == "quarantined")
 
         synced_at = datetime.now(UTC)
         await self.repository.finish_sync_run(
@@ -192,7 +223,96 @@ class IntegrationService:
             records_received=len(payload.records),
             records_stored=stored,
             records_duplicate=duplicates,
+            records_normalized=normalized,
+            records_quarantined=quarantined,
         )
+
+    async def normalize_existing_one_c_records(
+        self,
+        user: User,
+        connection_id: UUID,
+        payload: OneCNormalizeRequest,
+    ) -> OneCNormalizeResponse:
+        self._require_owner(user)
+        connection = await self._connection(user.tenant_id, connection_id)
+        if connection.provider != ONE_C_PROVIDER:
+            raise AppError("INVALID_INTEGRATION_PROVIDER", "This is not a 1C connection", 422)
+        branch_code = (
+            str(connection.settings["default_branch_code"])
+            if connection.settings.get("default_branch_code")
+            else await self.repository.single_active_branch_code(user.tenant_id)
+        )
+        period_from = datetime.now(UTC) - timedelta(days=payload.history_days)
+        records = await self.repository.pending_one_c_records(
+            tenant_id=user.tenant_id,
+            connection_id=connection.id,
+            source_entities=MAPPABLE_ONE_C_ENTITIES,
+            period_from=period_from,
+            limit=payload.batch_size,
+        )
+        normalized = 0
+        quarantined = 0
+        for raw_record in records:
+            outcome = await self._normalize_one_c_raw_record(
+                tenant_id=user.tenant_id,
+                raw_record=raw_record,
+                branch_code=branch_code,
+            )
+            normalized += int(outcome == "normalized")
+            quarantined += int(outcome == "quarantined")
+        remaining = await self.repository.pending_one_c_record_count(
+            tenant_id=user.tenant_id,
+            connection_id=connection.id,
+            source_entities=MAPPABLE_ONE_C_ENTITIES,
+            period_from=period_from,
+        )
+        return OneCNormalizeResponse(
+            connection_id=connection.id,
+            processed=len(records),
+            normalized=normalized,
+            quarantined=quarantined,
+            remaining=remaining,
+        )
+
+    async def _normalize_one_c_raw_record(
+        self,
+        *,
+        tenant_id: UUID,
+        raw_record,
+        branch_code: str | None,
+    ) -> str:
+        mapping = normalize_one_c_finance_record(
+            source_entity=raw_record.source_entity,
+            source_record_id=raw_record.source_record_id or str(raw_record.id),
+            payload=dict(raw_record.payload),
+            branch_code=branch_code,
+        )
+        if mapping is None:
+            return "skipped"
+        if mapping.issues:
+            await self.repository.quarantine(
+                tenant_id=tenant_id,
+                raw_record=raw_record,
+                mapping_profile_id=None,
+                issues=mapping.issues,
+            )
+            return "quarantined"
+        try:
+            await self.canonical_writer.write(
+                tenant_id=tenant_id,
+                target_entity=mapping.target_entity,
+                data=mapping.data,
+            )
+        except CanonicalWriteError as exc:
+            await self.repository.quarantine(
+                tenant_id=tenant_id,
+                raw_record=raw_record,
+                mapping_profile_id=None,
+                issues=[MappingIssue(code="ONE_C_CANONICAL_WRITE_FAILED", message=str(exc))],
+            )
+            return "quarantined"
+        await self.repository.mark_raw_normalized(raw_record)
+        return "normalized"
 
     async def create_mapping_profile(
         self, user: User, connection_id: UUID, definition: MappingDefinition

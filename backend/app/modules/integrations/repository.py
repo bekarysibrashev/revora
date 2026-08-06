@@ -16,6 +16,7 @@ from app.modules.integrations.models import (
     SyncRun,
 )
 from app.modules.integrations.schemas import MappingDefinition, MappingIssue
+from app.modules.tenancy.models import Branch
 
 
 class IntegrationRepository:
@@ -109,6 +110,93 @@ class IntegrationRepository:
             .order_by(RawRecord.source_entity)
         )
         return [(str(entity), int(count)) for entity, count in rows.all()]
+
+    async def raw_record_status_counts(
+        self,
+        tenant_id: UUID,
+        connection_id: UUID,
+        *,
+        source_entities: tuple[str, ...] | None = None,
+        period_from: datetime | None = None,
+    ) -> dict[str, int]:
+        conditions = [
+            RawRecord.tenant_id == tenant_id,
+            RawRecord.connection_id == connection_id,
+        ]
+        if source_entities:
+            conditions.append(RawRecord.source_entity.in_(source_entities))
+        if period_from:
+            period_text = period_from.replace(tzinfo=None).isoformat(timespec="seconds")
+            conditions.append(RawRecord.payload["Period"].astext >= period_text)
+        rows = await self.session.execute(
+            select(RawRecord.status, func.count(RawRecord.id))
+            .where(*conditions)
+            .group_by(RawRecord.status)
+        )
+        return {str(status): int(count) for status, count in rows.all()}
+
+    async def single_active_branch_code(self, tenant_id: UUID) -> str | None:
+        codes = list(
+            (
+                await self.session.scalars(
+                    select(Branch.code)
+                    .where(Branch.tenant_id == tenant_id, Branch.is_active.is_(True))
+                    .limit(2)
+                )
+            ).all()
+        )
+        return str(codes[0]) if len(codes) == 1 else None
+
+    async def pending_one_c_records(
+        self,
+        *,
+        tenant_id: UUID,
+        connection_id: UUID,
+        source_entities: tuple[str, ...],
+        period_from: datetime,
+        limit: int,
+    ) -> list[RawRecord]:
+        period_text = period_from.replace(tzinfo=None).isoformat(timespec="seconds")
+        return list(
+            (
+                await self.session.scalars(
+                    select(RawRecord)
+                    .where(
+                        RawRecord.tenant_id == tenant_id,
+                        RawRecord.connection_id == connection_id,
+                        RawRecord.source_entity.in_(source_entities),
+                        RawRecord.status == "pending",
+                        RawRecord.payload["Period"].astext >= period_text,
+                    )
+                    .order_by(RawRecord.received_at, RawRecord.id)
+                    .limit(limit)
+                )
+            ).all()
+        )
+
+    async def pending_one_c_record_count(
+        self,
+        *,
+        tenant_id: UUID,
+        connection_id: UUID,
+        source_entities: tuple[str, ...],
+        period_from: datetime,
+    ) -> int:
+        period_text = period_from.replace(tzinfo=None).isoformat(timespec="seconds")
+        count = await self.session.scalar(
+            select(func.count(RawRecord.id)).where(
+                RawRecord.tenant_id == tenant_id,
+                RawRecord.connection_id == connection_id,
+                RawRecord.source_entity.in_(source_entities),
+                RawRecord.status == "pending",
+                RawRecord.payload["Period"].astext >= period_text,
+            )
+        )
+        return int(count or 0)
+
+    async def mark_raw_normalized(self, raw_record: RawRecord) -> None:
+        raw_record.status = "normalized"
+        await self.session.flush()
 
     async def create_mapping_profile(
         self,
@@ -252,7 +340,7 @@ class IntegrationRepository:
         *,
         tenant_id: UUID,
         raw_record: RawRecord,
-        mapping_profile_id: UUID,
+        mapping_profile_id: UUID | None,
         issues: list[MappingIssue],
     ) -> None:
         for issue in issues:
