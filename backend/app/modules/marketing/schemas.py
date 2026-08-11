@@ -58,6 +58,8 @@ class MetaCampaignPerformance(BaseModel):
     currency: str
     campaign_external_id: str
     campaign_name: str
+    status: str
+    effective_status: str
     spend: Decimal
     impressions: int
     clicks: int

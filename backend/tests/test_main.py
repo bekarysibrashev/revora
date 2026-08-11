@@ -108,6 +108,8 @@ def test_domain_analytics_routes_are_in_openapi() -> None:
     assert "/api/v1/call-quality/manual-tests" in paths
     assert "/api/v1/call-quality/calls/{call_id}/analysis" in paths
     assert "/api/v1/call-quality/operators" in paths
+    assert "/api/v1/call-quality/contacts" in paths
+    assert "/api/v1/call-quality/contacts/export" in paths
     assert "/api/v1/whatsapp/status" in paths
     assert "/api/v1/whatsapp/embedded-signup/complete" in paths
     assert "/api/v1/whatsapp/simulator/messages" in paths

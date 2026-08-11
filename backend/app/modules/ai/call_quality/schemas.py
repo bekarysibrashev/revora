@@ -43,6 +43,7 @@ class CallListItem(BaseModel):
     direction: str
     employee: str | None
     phone_masked: str | None
+    phone_number: str | None = None
     duration_seconds: int | None
     outcome: str | None
     recording_url: str | None
@@ -63,6 +64,36 @@ class CallListResponse(BaseModel):
     available_extensions: list[str]
     available_directions: list[str]
     available_outcomes: list[str]
+
+
+class CallerContactItem(BaseModel):
+    phone_number: str
+    call_count: int
+    qualified_calls: int
+    first_call_at: datetime
+    last_call_at: datetime
+    first_call_duration_seconds: int | None
+    total_duration_seconds: int
+    last_outcome: str | None
+    extensions: list[str]
+    contact_type: str
+
+
+class CallerContactSummary(BaseModel):
+    unique_contacts: int
+    first_only: int
+    repeat_contacts: int
+    total_calls: int
+    qualified_calls: int
+
+
+class CallerContactListResponse(BaseModel):
+    items: list[CallerContactItem]
+    summary: CallerContactSummary
+    total: int
+    page: int
+    page_size: int
+    pages: int
 
 
 class EvidenceResponse(BaseModel):

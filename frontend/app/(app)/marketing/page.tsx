@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { api } from "@/shared/api-client";
 import {
@@ -119,6 +121,8 @@ type MetaOverview = {
     currency: string;
     campaign_external_id: string;
     campaign_name: string;
+    status: string;
+    effective_status: string;
     spend: string;
     impressions: number;
     clicks: number;
@@ -199,6 +203,7 @@ export default function MarketingPage() {
   const metaQuery = new URLSearchParams(query);
   if (selectedAccount) metaQuery.set("account_id", selectedAccount);
   const queryClient = useQueryClient();
+  const [showStopped, setShowStopped] = useState(false);
   const overview = useQuery({
     queryKey: ["marketing", query],
     queryFn: () => api<Overview>(`/marketing/overview?${query}`),
@@ -346,6 +351,14 @@ export default function MarketingPage() {
                 note={change(meta.data.comparison.leads_change)}
               />
             </section>
+            <section className="panel marketing-chart">
+              <div className="panel-head"><div><h2>Сравнение активных кампаний</h2><p>Расход и количество WhatsApp-диалогов за выбранный период</p></div></div>
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={meta.data.campaigns.filter(item=>item.effective_status==="ACTIVE"||item.effective_status==="UNKNOWN").slice(0,8)} layout="vertical" margin={{left:20,right:25}}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false}/><XAxis type="number"/><YAxis type="category" dataKey="campaign_name" width={180} tick={{fontSize:11}}/><Tooltip formatter={(value,name)=>name==="spend"?currency(Number(value),meta.data?.currency||"USD"):Number(value).toLocaleString("ru-RU")}/><Bar dataKey="spend" name="Расход" fill="#2F725B" radius={[0,6,6,0]}/><Bar dataKey="conversations_started" name="Диалоги" fill="#B9D7C8" radius={[0,6,6,0]}/>
+                </BarChart>
+              </ResponsiveContainer>
+            </section>
             <section className="panel budget-advisor">
               <div className="panel-head">
                 <div>
@@ -445,13 +458,13 @@ export default function MarketingPage() {
               </section>
             )}
             <section className="panel">
-              <h2>Кампании Meta</h2>
+              <div className="panel-head"><div><h2>Кампании Meta</h2><p>Остановленные кампании скрыты и не участвуют в рекомендациях</p></div><label className="toggle-row"><input type="checkbox" checked={showStopped} onChange={event=>setShowStopped(event.target.checked)}/><span>Показать остановленные</span></label></div>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
                       <th>Кампания</th>
-                      <th>Кабинет</th>
+                      <th>Статус</th><th>Кабинет</th>
                       <th>Расход</th>
                       <th>Показы</th>
                       <th>Клики</th>
@@ -463,14 +476,14 @@ export default function MarketingPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {meta.data.campaigns.map((campaign) => (
+                    {meta.data.campaigns.filter(campaign=>showStopped||campaign.effective_status==="ACTIVE"||campaign.effective_status==="UNKNOWN").map((campaign) => (
                       <tr
                         key={`${campaign.account_external_id}:${campaign.campaign_external_id}`}
                       >
                         <td>
                           <strong>{campaign.campaign_name}</strong>
                         </td>
-                        <td>{campaign.account_name}</td>
+                        <td><span className={`campaign-status ${campaign.effective_status.toLowerCase()}`}>{campaign.effective_status==="ACTIVE"?"Активна":campaign.effective_status==="UNKNOWN"?"Статус не получен":"Остановлена"}</span></td><td>{campaign.account_name}</td>
                         <td>{currency(campaign.spend, campaign.currency)}</td>
                         <td>{campaign.impressions.toLocaleString("ru-RU")}</td>
                         <td>{campaign.clicks.toLocaleString("ru-RU")}</td>
@@ -503,7 +516,7 @@ export default function MarketingPage() {
                     ))}
                     {!meta.data.campaigns.length && (
                       <tr>
-                        <td colSpan={10} className="empty">
+                        <td colSpan={11} className="empty">
                           Нажмите «Синхронизировать Meta», чтобы загрузить данные
                           выбранного периода.
                         </td>

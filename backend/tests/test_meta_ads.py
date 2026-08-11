@@ -285,3 +285,25 @@ async def test_budget_recommendations_rank_and_reallocate() -> None:
     assert by_name["Лучшая"].action == "increase"
     assert by_name["Слабая"].action == "reduce"
     assert by_name["Без результата"].action == "pause"
+
+
+@pytest.mark.asyncio
+async def test_stopped_meta_campaign_is_excluded_from_budget_advice() -> None:
+    class StoppedRepository(FakeMetaRepository):
+        async def meta_campaign_totals(
+            self, tenant_id, date_from, date_to, account_external_id=None
+        ):
+            rows = await super().meta_campaign_totals(
+                tenant_id, date_from, date_to, account_external_id
+            )
+            if date_to < date(2026, 7, 1):
+                return []
+            return [replace(rows[0], effective_status="PAUSED")]
+
+    response = await MarketingService(StoppedRepository()).meta_overview(
+        make_user(), date(2026, 7, 1), date(2026, 7, 27)
+    )
+
+    assert response.campaigns[0].effective_status == "PAUSED"
+    assert response.recommendations == []
+    assert response.alerts == []

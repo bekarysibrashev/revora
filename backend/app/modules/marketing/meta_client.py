@@ -43,6 +43,8 @@ class MetaCampaignDay:
     actions: list[dict[str, str]]
     action_values: list[dict[str, str]]
     outbound_clicks_raw: list[dict[str, str]]
+    status: str = "UNKNOWN"
+    effective_status: str = "UNKNOWN"
 
 
 class MetaAdsClient:
@@ -93,6 +95,7 @@ class MetaAdsClient:
     async def campaign_days(
         self, account_id: str, date_from: date, date_to: date
     ) -> list[MetaCampaignDay]:
+        states = await self._campaign_states(account_id)
         params: dict[str, object] = {
             "fields": self.FIELDS,
             "level": "campaign",
@@ -106,7 +109,7 @@ class MetaAdsClient:
         pages = 0
         while True:
             payload = await self._get(f"/{account_id}/insights", params)
-            result.extend(self._parse_day(row) for row in payload.get("data", []))
+            result.extend(self._parse_day(row, states) for row in payload.get("data", []))
             pages += 1
             if pages >= 100:
                 raise MetaAdsError("Meta pagination exceeded the safety limit")
@@ -115,6 +118,29 @@ class MetaAdsClient:
                 break
             params["after"] = cursor
         return result
+
+    async def _campaign_states(self, account_id: str) -> dict[str, tuple[str, str]]:
+        params: dict[str, object] = {
+            "fields": "id,status,effective_status",
+            "limit": 500,
+        }
+        states: dict[str, tuple[str, str]] = {}
+        pages = 0
+        while True:
+            payload = await self._get(f"/{account_id}/campaigns", params)
+            for row in payload.get("data", []):
+                states[str(row["id"])] = (
+                    str(row.get("status") or "UNKNOWN"),
+                    str(row.get("effective_status") or row.get("status") or "UNKNOWN"),
+                )
+            pages += 1
+            if pages >= 100:
+                raise MetaAdsError("Meta campaign pagination exceeded the safety limit")
+            cursor = payload.get("paging", {}).get("cursors", {}).get("after")
+            if not cursor or not payload.get("paging", {}).get("next"):
+                break
+            params["after"] = cursor
+        return states
 
     async def _get(self, path: str, params: dict[str, object]) -> dict:
         headers = {"Authorization": f"Bearer {self.access_token}"}
@@ -139,16 +165,20 @@ class MetaAdsClient:
         return payload
 
     @classmethod
-    def _parse_day(cls, row: dict) -> MetaCampaignDay:
+    def _parse_day(cls, row: dict, states: dict[str, tuple[str, str]] | None = None) -> MetaCampaignDay:
         actions = cls._action_list(row.get("actions"))
         action_values = cls._action_list(row.get("action_values"))
         outbound_raw = cls._action_list(row.get("outbound_clicks"))
         by_type = {
             item["action_type"]: cls._integer(item["value"]) for item in actions
         }
+        campaign_id = str(row["campaign_id"])
+        status, effective_status = (states or {}).get(campaign_id, ("UNKNOWN", "UNKNOWN"))
         return MetaCampaignDay(
-            campaign_external_id=str(row["campaign_id"]),
+            campaign_external_id=campaign_id,
             campaign_name=str(row.get("campaign_name") or "Без названия"),
+            status=status,
+            effective_status=effective_status,
             metric_date=date.fromisoformat(str(row["date_start"])),
             spend=cls._decimal(row.get("spend")),
             impressions=cls._integer(row.get("impressions")),

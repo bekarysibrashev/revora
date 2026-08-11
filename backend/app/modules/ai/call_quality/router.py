@@ -4,7 +4,10 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import unquote
 from uuid import UUID, uuid4
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from io import BytesIO
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -15,7 +18,7 @@ from app.modules.ai.call_quality.defaults import ensure_default_rule_set
 from app.modules.ai.call_quality.models import CallQualityAnalysis
 from app.modules.ai.call_quality.pipeline import CallQualityPipeline
 from app.modules.ai.call_quality.schemas import (
-    CallAnalysisResponse, CallListResponse, CallQualityStatusResponse,
+    CallAnalysisResponse, CallerContactListResponse, CallListResponse, CallQualityStatusResponse,
     ManualTestResponse, OperatorPerformanceResponse, RuleSetRequest, RuleSetResponse,
 )
 from app.modules.ai.call_quality.service import CallQualityService
@@ -42,6 +45,11 @@ async def list_calls(
     outcome: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    duration_min: int | None = Query(default=None, ge=0),
+    duration_max: int | None = Query(default=None, ge=0),
+    phone: str | None = None,
+    sort_by: str = Query(default="started_at", pattern="^(started_at|duration|extension|outcome)$"),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
 ) -> CallListResponse:
     if date_from and date_to and date_from > date_to:
         raise AppError("INVALID_DATE_RANGE", "date_from must not be after date_to", 422)
@@ -54,6 +62,69 @@ async def list_calls(
         outcome=outcome,
         date_from=date_from,
         date_to=date_to,
+        duration_min=duration_min,
+        duration_max=duration_max,
+        phone=phone,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+
+@router.get("/contacts", response_model=CallerContactListResponse)
+async def caller_contacts(
+    user: CurrentUser,
+    session: Session,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=5000),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    search: str | None = None,
+    contact_type: str | None = Query(default=None, pattern="^(first|repeat)$"),
+    sort_by: str = Query(default="last_call_at", pattern="^(last_call_at|first_call_at|call_count|duration|phone)$"),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+) -> CallerContactListResponse:
+    return await CallQualityService(session).caller_contacts(
+        user, page=page, page_size=page_size, date_from=date_from, date_to=date_to,
+        search=search, contact_type=contact_type, sort_by=sort_by, sort_order=sort_order,
+    )
+
+
+@router.get("/contacts/export")
+async def export_caller_contacts(
+    user: CurrentUser,
+    session: Session,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> Response:
+    result = await CallQualityService(session).caller_contacts(
+        user, page=1, page_size=5000, date_from=date_from, date_to=date_to,
+    )
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Звонящие"
+    sheet.sheet_view.showGridLines = False
+    sheet.append(["Номер телефона", "Количество звонков", "Тип контакта", "Первый звонок", "Последний звонок", "Первый разговор, сек.", "Общая длительность, сек.", "Квалифицированных", "Внутренние номера"])
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1D3B31")
+    for item in result.items:
+        sheet.append([
+            item.phone_number, item.call_count,
+            "Повторное обращение" if item.contact_type == "repeat" else "Первое обращение",
+            item.first_call_at.replace(tzinfo=None), item.last_call_at.replace(tzinfo=None),
+            item.first_call_duration_seconds, item.total_duration_seconds,
+            item.qualified_calls, ", ".join(item.extensions),
+        ])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    widths = [20, 20, 22, 21, 21, 24, 25, 23, 24]
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[chr(64 + index)].width = width
+    output = BytesIO()
+    workbook.save(output)
+    return Response(
+        output.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="revora-callers.xlsx"'},
     )
 
 @router.post("/rule-sets", response_model=RuleSetResponse, status_code=status.HTTP_201_CREATED)

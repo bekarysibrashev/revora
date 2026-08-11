@@ -44,6 +44,8 @@ class MetaCampaignTotals:
     messaging_connections: int
     video_plays: int
     video_thruplays: int
+    status: str = "UNKNOWN"
+    effective_status: str = "UNKNOWN"
 
 
 class MarketingRepository:
@@ -135,6 +137,8 @@ class MarketingRepository:
                 "account_id": account_id,
                 "campaign_external_id": row.campaign_external_id,
                 "campaign_name": row.campaign_name,
+                "status": row.status,
+                "effective_status": row.effective_status,
                 "metric_date": row.metric_date,
                 "spend": row.spend,
                 "impressions": row.impressions,
@@ -166,6 +170,8 @@ class MarketingRepository:
             ],
             set_={
                 "campaign_name": statement.excluded.campaign_name,
+                "status": statement.excluded.status,
+                "effective_status": statement.excluded.effective_status,
                 "spend": statement.excluded.spend,
                 "impressions": statement.excluded.impressions,
                 "reach": statement.excluded.reach,
@@ -214,6 +220,8 @@ class MarketingRepository:
                     MetaAdsAccount.currency,
                     MetaCampaignDailyMetric.campaign_external_id,
                     MetaCampaignDailyMetric.campaign_name,
+                    func.max(MetaCampaignDailyMetric.status),
+                    func.max(MetaCampaignDailyMetric.effective_status),
                     func.sum(MetaCampaignDailyMetric.spend),
                     func.sum(MetaCampaignDailyMetric.impressions),
                     func.sum(MetaCampaignDailyMetric.clicks),
@@ -258,19 +266,21 @@ class MarketingRepository:
                 currency=row[2],
                 campaign_external_id=row[3],
                 campaign_name=row[4],
-                spend=Decimal(row[5] or 0),
-                impressions=int(row[6] or 0),
-                clicks=int(row[7] or 0),
-                unique_clicks=int(row[8] or 0),
-                link_clicks=int(row[9] or 0),
-                outbound_clicks=int(row[10] or 0),
-                landing_page_views=int(row[11] or 0),
-                leads=int(row[12] or 0),
-                purchases=int(row[13] or 0),
-                conversations_started=int(row[14] or 0),
-                messaging_connections=int(row[15] or 0),
-                video_plays=int(row[16] or 0),
-                video_thruplays=int(row[17] or 0),
+                status=row[5] or "UNKNOWN",
+                effective_status=row[6] or "UNKNOWN",
+                spend=Decimal(row[7] or 0),
+                impressions=int(row[8] or 0),
+                clicks=int(row[9] or 0),
+                unique_clicks=int(row[10] or 0),
+                link_clicks=int(row[11] or 0),
+                outbound_clicks=int(row[12] or 0),
+                landing_page_views=int(row[13] or 0),
+                leads=int(row[14] or 0),
+                purchases=int(row[15] or 0),
+                conversations_started=int(row[16] or 0),
+                messaging_connections=int(row[17] or 0),
+                video_plays=int(row[18] or 0),
+                video_thruplays=int(row[19] or 0),
             )
             for row in rows
         ]

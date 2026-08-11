@@ -178,6 +178,8 @@ class MarketingService:
                 currency=row.currency,
                 campaign_external_id=row.campaign_external_id,
                 campaign_name=row.campaign_name,
+                status=row.status,
+                effective_status=row.effective_status,
                 spend=row.spend,
                 impressions=row.impressions,
                 clicks=row.clicks,
@@ -363,6 +365,8 @@ class MarketingService:
     ) -> list[MetaCampaignAlert]:
         alerts: list[MetaCampaignAlert] = []
         for campaign in campaigns:
+            if campaign.effective_status not in {"ACTIVE", "UNKNOWN"}:
+                continue
             common = {
                 "account_external_id": campaign.account_external_id,
                 "campaign_external_id": campaign.campaign_external_id,
@@ -437,6 +441,8 @@ class MarketingService:
         """
         rows: list[dict] = []
         for campaign in campaigns:
+            if campaign.effective_status not in {"ACTIVE", "UNKNOWN"}:
+                continue
             metric = (
                 "WhatsApp-диалоги"
                 if campaign.conversations_started > 0

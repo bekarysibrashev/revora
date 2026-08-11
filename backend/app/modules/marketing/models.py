@@ -60,6 +60,8 @@ class MetaCampaignDailyMetric(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampM
     )
     campaign_external_id: Mapped[str] = mapped_column(String(80), index=True)
     campaign_name: Mapped[str] = mapped_column(String(250))
+    status: Mapped[str] = mapped_column(String(40), default="UNKNOWN")
+    effective_status: Mapped[str] = mapped_column(String(40), default="UNKNOWN")
     metric_date: Mapped[date] = mapped_column(Date, index=True)
     spend: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     impressions: Mapped[int] = mapped_column(Integer)

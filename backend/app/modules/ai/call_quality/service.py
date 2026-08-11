@@ -7,11 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError
 from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityRuleSet
 from app.modules.ai.call_quality.schemas import (
-    CallAnalysisResponse, CallListItem, CallListResponse, CallQualityStatusResponse,
+    CallAnalysisResponse, CallerContactItem, CallerContactListResponse,
+    CallerContactSummary, CallListItem, CallListResponse, CallQualityStatusResponse,
     OperatorPerformanceItem, OperatorPerformanceResponse, RuleSetRequest, RuleSetResponse,
 )
 from app.modules.auth.models import User, UserRole
 from app.modules.sales.models import Call
+from app.modules.kcell.models import KcellWebhookReceipt
 
 
 class CallQualityService:
@@ -67,6 +69,11 @@ class CallQualityService:
         outcome: str | None = None,
         date_from: date | None = None,
         date_to: date | None = None,
+        duration_min: int | None = None,
+        duration_max: int | None = None,
+        phone: str | None = None,
+        sort_by: str = "started_at",
+        sort_order: str = "desc",
     ) -> CallListResponse:
         self._owner(user)
         filters = [Call.tenant_id == user.tenant_id]
@@ -84,19 +91,46 @@ class CallQualityService:
             filters.append(
                 Call.started_at <= datetime.combine(date_to, time.max, tzinfo=UTC)
             )
+        if duration_min is not None:
+            filters.append(Call.duration_seconds >= duration_min)
+        if duration_max is not None:
+            filters.append(Call.duration_seconds <= duration_max)
+        order_columns = {
+            "started_at": Call.started_at,
+            "duration": Call.duration_seconds,
+            "extension": Call.external_user,
+            "outcome": Call.outcome,
+        }
+        order_column = order_columns.get(sort_by, Call.started_at)
+        order_expression = order_column.asc() if sort_order == "asc" else order_column.desc()
         statement = (
-            select(Call, CallQualityAnalysis)
+            select(Call, CallQualityAnalysis, KcellWebhookReceipt.payload)
             .outerjoin(
                 CallQualityAnalysis,
                 (CallQualityAnalysis.call_id == Call.id)
                 & (CallQualityAnalysis.tenant_id == user.tenant_id),
             )
+            .outerjoin(
+                KcellWebhookReceipt,
+                (KcellWebhookReceipt.tenant_id == user.tenant_id)
+                & (KcellWebhookReceipt.call_id == Call.external_id)
+                & (KcellWebhookReceipt.command == "history"),
+            )
             .where(*filters)
-            .order_by(Call.started_at.desc())
+            .order_by(order_expression, Call.started_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
         rows = (await self.session.execute(statement)).all()
+        if phone:
+            needle = "".join(character for character in phone if character.isdigit())
+            rows = [
+                row for row in rows
+                if needle in "".join(
+                    character for character in str((row.payload or {}).get("phone", ""))
+                    if character.isdigit()
+                )
+            ]
         items = [
             CallListItem(
                 id=call.id,
@@ -104,6 +138,7 @@ class CallQualityService:
                 direction=call.direction,
                 employee=call.external_user,
                 phone_masked=call.phone_masked,
+                phone_number=str((payload or {}).get("phone") or "") or None,
                 duration_seconds=call.duration_seconds,
                 outcome=call.outcome,
                 recording_url=call.recording_url,
@@ -114,7 +149,7 @@ class CallQualityService:
                 needs_review=analysis.needs_review if analysis else False,
                 error_code=analysis.error_code if analysis else None,
             )
-            for call, analysis in rows
+            for call, analysis, payload in rows
         ]
         total = await self.session.scalar(
             select(func.count()).select_from(Call).where(*filters)
@@ -141,6 +176,93 @@ class CallQualityService:
             available_outcomes=sorted(
                 {row.outcome for row in option_rows if row.outcome}
             ),
+        )
+
+    async def caller_contacts(
+        self,
+        user: User,
+        *,
+        page: int,
+        page_size: int,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        search: str | None = None,
+        contact_type: str | None = None,
+        sort_by: str = "last_call_at",
+        sort_order: str = "desc",
+    ) -> CallerContactListResponse:
+        self._owner(user)
+        filters = [Call.tenant_id == user.tenant_id]
+        if date_from:
+            filters.append(Call.started_at >= datetime.combine(date_from, time.min, tzinfo=UTC))
+        if date_to:
+            filters.append(Call.started_at <= datetime.combine(date_to, time.max, tzinfo=UTC))
+        rows = (await self.session.execute(
+            select(Call, KcellWebhookReceipt.payload)
+            .join(
+                KcellWebhookReceipt,
+                (KcellWebhookReceipt.tenant_id == user.tenant_id)
+                & (KcellWebhookReceipt.call_id == Call.external_id)
+                & (KcellWebhookReceipt.command == "history"),
+            )
+            .where(*filters)
+            .order_by(Call.started_at.asc())
+        )).all()
+        contacts: dict[str, dict] = {}
+        needle = "".join(character for character in (search or "") if character.isdigit())
+        for call, payload in rows:
+            raw_phone = str((payload or {}).get("phone") or "").strip()
+            digits = "".join(character for character in raw_phone if character.isdigit())
+            if not digits or (needle and needle not in digits):
+                continue
+            phone_number = digits
+            item = contacts.setdefault(phone_number, {
+                "phone_number": phone_number,
+                "call_count": 0,
+                "qualified_calls": 0,
+                "first_call_at": call.started_at,
+                "last_call_at": call.started_at,
+                "first_call_duration_seconds": call.duration_seconds,
+                "total_duration_seconds": 0,
+                "last_outcome": call.outcome,
+                "extensions": set(),
+            })
+            item["call_count"] += 1
+            duration = int(call.duration_seconds or 0)
+            item["total_duration_seconds"] += duration
+            if duration > 20 and call.outcome == "Success":
+                item["qualified_calls"] += 1
+            if call.started_at >= item["last_call_at"]:
+                item["last_call_at"] = call.started_at
+                item["last_outcome"] = call.outcome
+            if call.external_user:
+                item["extensions"].add(call.external_user)
+        prepared = []
+        for value in contacts.values():
+            value["extensions"] = sorted(value["extensions"])
+            value["contact_type"] = "repeat" if value["call_count"] > 1 else "first"
+            if not contact_type or value["contact_type"] == contact_type:
+                prepared.append(CallerContactItem(**value))
+        sort_fields = {
+            "last_call_at": lambda item: item.last_call_at,
+            "first_call_at": lambda item: item.first_call_at,
+            "call_count": lambda item: item.call_count,
+            "duration": lambda item: item.total_duration_seconds,
+            "phone": lambda item: item.phone_number,
+        }
+        prepared.sort(key=sort_fields.get(sort_by, sort_fields["last_call_at"]), reverse=sort_order != "asc")
+        summary = CallerContactSummary(
+            unique_contacts=len(contacts),
+            first_only=sum(1 for item in contacts.values() if item["call_count"] == 1),
+            repeat_contacts=sum(1 for item in contacts.values() if item["call_count"] > 1),
+            total_calls=sum(item["call_count"] for item in contacts.values()),
+            qualified_calls=sum(item["qualified_calls"] for item in contacts.values()),
+        )
+        total = len(prepared)
+        start = (page - 1) * page_size
+        return CallerContactListResponse(
+            items=prepared[start:start + page_size], summary=summary, total=total,
+            page=page, page_size=page_size, pages=max(1, (total + page_size - 1) // page_size),
         )
 
     async def analysis(self, user: User, call_id: UUID) -> CallAnalysisResponse:

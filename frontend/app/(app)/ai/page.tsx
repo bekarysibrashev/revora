@@ -2,13 +2,13 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/shared/api-client";
+import { api, apiBinary } from "@/shared/api-client";
 import { DataState, Metric, PageHeader } from "@/shared/ui";
 
 type Criterion = { name: string; weight: number; description: string };
 type RuleSet = { id: string; version: number; name: string; success_definition: string; partial_success_definition: string; loss_definition: string; criteria: Criterion[]; loss_reasons: string[] };
 type Status = { rule_set: RuleSet | null; calls_received: number; analyses_ready: number; integration_status: string; queued: number; processing: number; needs_review: number; failed: number };
-type CallItem = { id: string; started_at: string; direction: string; employee: string | null; phone_masked: string | null; duration_seconds: number | null; outcome: string | null; recording_url: string | null; analysis_status: string | null; score: number | null; result: string | null; summary: string | null; needs_review: boolean; error_code: string | null };
+type CallItem = { id: string; started_at: string; direction: string; employee: string | null; phone_masked: string | null; phone_number: string | null; duration_seconds: number | null; outcome: string | null; recording_url: string | null; analysis_status: string | null; score: number | null; result: string | null; summary: string | null; needs_review: boolean; error_code: string | null };
 type Calls = {
   items: CallItem[];
   total: number;
@@ -23,6 +23,8 @@ type Evidence = { criterion: string; timestamp_from: number; timestamp_to: numbe
 type Analysis = { id:string;call_id:string;status:string;result:string|null;score:number|null;summary:string|null;criteria_scores:Array<{name:string;score:number;weight:number;explanation:string}>;strengths:string[];loss_reasons:string[];recommendations:string[];flags:Record<string,boolean>;evidence:Evidence[];languages:string[];mixed_language:boolean|null;confidence:number|null;needs_review:boolean;attempt_count:number;error_code:string|null;model_version:string|null;completed_at:string|null };
 type Operators = { items:Array<{employee:string;calls_analyzed:number;average_score:number;successful_calls:number;success_rate:number;needs_review:number}> };
 type ManualTest = { call_id:string;analysis_id:string;status:string };
+type ContactItem = { phone_number:string;call_count:number;qualified_calls:number;first_call_at:string;last_call_at:string;first_call_duration_seconds:number|null;total_duration_seconds:number;last_outcome:string|null;extensions:string[];contact_type:"first"|"repeat" };
+type Contacts = { items:ContactItem[];summary:{unique_contacts:number;first_only:number;repeat_contacts:number;total_calls:number;qualified_calls:number};total:number;page:number;page_size:number;pages:number };
 
 const defaults = {
   name: "Стандарт обработки звонков",
@@ -53,6 +55,14 @@ export default function AiPage() {
   const [outcome, setOutcome] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [journalTab, setJournalTab] = useState<"calls"|"contacts">("calls");
+  const [durationMin, setDurationMin] = useState("");
+  const [durationMax, setDurationMax] = useState("");
+  const [callSort, setCallSort] = useState("started_at:desc");
+  const [contactPage, setContactPage] = useState(1);
+  const [contactSearch, setContactSearch] = useState("");
+  const [contactType, setContactType] = useState("");
+  const [contactSort, setContactSort] = useState("last_call_at:desc");
   const callParams = new URLSearchParams({
     page: String(callPage),
     page_size: "10",
@@ -62,6 +72,19 @@ export default function AiPage() {
   if (outcome) callParams.set("outcome", outcome);
   if (dateFrom) callParams.set("date_from", dateFrom);
   if (dateTo) callParams.set("date_to", dateTo);
+  if (durationMin) callParams.set("duration_min", durationMin);
+  if (durationMax) callParams.set("duration_max", durationMax);
+  const [callSortBy, callSortOrder] = callSort.split(":");
+  callParams.set("sort_by", callSortBy);
+  callParams.set("sort_order", callSortOrder);
+  const contactParams = new URLSearchParams({page:String(contactPage),page_size:"25"});
+  if (dateFrom) contactParams.set("date_from", dateFrom);
+  if (dateTo) contactParams.set("date_to", dateTo);
+  if (contactSearch) contactParams.set("search", contactSearch);
+  if (contactType) contactParams.set("contact_type", contactType);
+  const [contactSortBy, contactSortOrder] = contactSort.split(":");
+  contactParams.set("sort_by", contactSortBy);
+  contactParams.set("sort_order", contactSortOrder);
   const status = useQuery({ queryKey: ["call-quality-status"], queryFn: () => api<Status>("/call-quality/status"), refetchInterval: 5000 });
   const calls = useQuery({
     queryKey: ["call-quality-calls", callParams.toString()],
@@ -69,6 +92,7 @@ export default function AiPage() {
     refetchInterval: 5000,
   });
   const operators = useQuery({ queryKey:["call-quality-operators"], queryFn:()=>api<Operators>("/call-quality/operators"), refetchInterval:10000 });
+  const contacts = useQuery({ queryKey:["call-contacts",contactParams.toString()], queryFn:()=>api<Contacts>(`/call-quality/contacts?${contactParams}`), refetchInterval:10000 });
   const current = status.data?.rule_set;
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<typeof defaults>(defaults);
@@ -83,6 +107,17 @@ export default function AiPage() {
   },onSuccess:data=>{setSelectedCall(data.call_id);setAudioFile(null);client.invalidateQueries({queryKey:["call-quality-calls"]});client.invalidateQueries({queryKey:["call-quality-status"]});}});
   const reanalyze = useMutation({mutationFn:(callId:string)=>api<Analysis>(`/call-quality/calls/${callId}/reanalyze`,{method:"POST"}),onSuccess:data=>{setSelectedCall(data.call_id);client.invalidateQueries({queryKey:["call-analysis",data.call_id]});}});
   const begin = () => { setForm(current || defaults); setEditing(true); };
+  async function exportContacts() {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", dateTo);
+    const response = await apiBinary(`/call-quality/contacts/export?${params}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = "revora-callers.xlsx"; anchor.click();
+    URL.revokeObjectURL(url);
+  }
 
   return <>
     <PageHeader title="Контроль звонков" subtitle="Журнал Kcell и оценка работы администраторов" action={<button className="primary" onClick={begin}>{current ? "Изменить стандарт" : "Настроить стандарт"}</button>} />
@@ -106,7 +141,12 @@ export default function AiPage() {
       {upload.data&&<p className={upload.data.status==="failed"?"error-box":"success-box"}>{upload.data.status==="failed"?"Анализ завершился ошибкой — откройте отчёт для кода ошибки.":"Анализ завершён. Откройте сформированный отчёт."}</p>}
     </section>
 
-    <section className="panel">
+    <div className="journal-tabs" role="tablist">
+      <button className={journalTab==="calls"?"active":""} onClick={()=>setJournalTab("calls")}>Журнал звонков</button>
+      <button className={journalTab==="contacts"?"active":""} onClick={()=>setJournalTab("contacts")}>База обращений</button>
+    </div>
+
+    {journalTab === "calls" && <section className="panel">
       <div className="panel-head"><div><h2>Последние звонки</h2><p>Автоматически получены из виртуальной АТС Kcell</p></div></div>
       <div className="call-filters">
         <label>Внутренний номер
@@ -129,14 +169,17 @@ export default function AiPage() {
         </label>
         <label>С даты<input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setCallPage(1); }} /></label>
         <label>По дату<input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setCallPage(1); }} /></label>
-        {(extension || direction || outcome || dateFrom || dateTo) && (
-          <button className="quiet-button" onClick={() => { setExtension(""); setDirection(""); setOutcome(""); setDateFrom(""); setDateTo(""); setCallPage(1); }}>Сбросить</button>
+        <label>Мин. длительность<input type="number" min="0" placeholder="сек." value={durationMin} onChange={(event)=>{setDurationMin(event.target.value);setCallPage(1);}} /></label>
+        <label>Макс. длительность<input type="number" min="0" placeholder="сек." value={durationMax} onChange={(event)=>{setDurationMax(event.target.value);setCallPage(1);}} /></label>
+        <label>Сортировка<select value={callSort} onChange={(event)=>{setCallSort(event.target.value);setCallPage(1);}}><option value="started_at:desc">Сначала новые</option><option value="started_at:asc">Сначала старые</option><option value="duration:desc">Самые долгие</option><option value="duration:asc">Самые короткие</option><option value="extension:asc">По внутреннему номеру</option></select></label>
+        {(extension || direction || outcome || dateFrom || dateTo || durationMin || durationMax) && (
+          <button className="quiet-button" onClick={() => { setExtension(""); setDirection(""); setOutcome(""); setDateFrom(""); setDateTo(""); setDurationMin(""); setDurationMax(""); setCallPage(1); }}>Сбросить</button>
         )}
       </div>
       <DataState loading={calls.isLoading} error={calls.error}>
         <div className="table-wrap"><table><thead><tr><th>Дата и время</th><th>Тип</th><th>Сотрудник</th><th>Клиент</th><th>Длительность</th><th>Результат</th><th>Запись</th><th>ИИ-анализ</th></tr></thead><tbody>
           {calls.data?.items.map(call => <tr key={call.id}>
-            <td>{new Date(call.started_at).toLocaleString("ru-RU")}</td><td>{directionLabel(call.direction)}</td><td>{call.employee || "—"}</td><td>{call.phone_masked || "Скрыт"}</td><td>{durationLabel(call.duration_seconds)}</td><td>{outcomeLabel(call.outcome)}</td>
+            <td>{new Date(call.started_at).toLocaleString("ru-RU")}</td><td>{directionLabel(call.direction)}</td><td>{call.employee || "—"}</td><td>{call.phone_number || call.phone_masked || "Скрыт"}</td><td>{durationLabel(call.duration_seconds)}</td><td>{outcomeLabel(call.outcome)}</td>
             <td>{call.recording_url ? <a className="good" href={call.recording_url} target="_blank" rel="noreferrer">Прослушать</a> : "Нет записи"}</td>
             <td><button className={`analysis-status ${call.analysis_status||""}`} onClick={()=>setSelectedCall(call.id)}>{call.score != null ? `${call.score}/100 · ${analysisLabel(call.analysis_status)}` : analysisLabel(call.analysis_status)}</button></td>
           </tr>)}
@@ -150,7 +193,29 @@ export default function AiPage() {
           </div>
         )}
       </DataState>
-    </section>
+    </section>}
+
+    {journalTab === "contacts" && <>
+      <section className="metric-grid call-contact-metrics">
+        <Metric label="Уникальных номеров" value={String(contacts.data?.summary.unique_contacts||0)} note="Автоматически из Kcell" />
+        <Metric label="Первые обращения" value={String(contacts.data?.summary.first_only||0)} note="Номер звонил один раз" />
+        <Metric label="Повторные обращения" value={String(contacts.data?.summary.repeat_contacts||0)} note="Номер звонил 2+ раза" />
+        <Metric label="Всего звонков" value={String(contacts.data?.summary.total_calls||0)} note={`Дольше 20 сек.: ${contacts.data?.summary.qualified_calls||0}`} />
+      </section>
+      <section className="panel">
+        <div className="panel-head"><div><h2>Сохраняльщик обращений</h2><p>Каждый внешний номер и точное количество его звонков. Номера показываются полностью.</p></div><button className="primary small" onClick={exportContacts}>Выгрузить Excel</button></div>
+        <div className="call-filters compact">
+          <label>Поиск номера<input value={contactSearch} placeholder="87774548922" onChange={event=>{setContactSearch(event.target.value);setContactPage(1);}} /></label>
+          <label>Тип<select value={contactType} onChange={event=>{setContactType(event.target.value);setContactPage(1);}}><option value="">Все обращения</option><option value="first">Первое</option><option value="repeat">Повторное</option></select></label>
+          <label>Сортировка<select value={contactSort} onChange={event=>{setContactSort(event.target.value);setContactPage(1);}}><option value="last_call_at:desc">Недавно звонили</option><option value="call_count:desc">Больше звонков</option><option value="duration:desc">Больше минут</option><option value="phone:asc">По номеру</option></select></label>
+        </div>
+        <DataState loading={contacts.isLoading} error={contacts.error}><div className="table-wrap"><table><thead><tr><th>Номер</th><th>Звонков</th><th>Тип</th><th>Первый звонок</th><th>Последний звонок</th><th>Общая длительность</th><th>Внутренние номера</th></tr></thead><tbody>
+          {contacts.data?.items.map(item=><tr key={item.phone_number}><td><strong>{item.phone_number}</strong></td><td><span className="call-count-badge">{item.call_count} раза</span></td><td><span className={`health-badge ${item.contact_type==="repeat"?"warning":"ready"}`}>{item.contact_type==="repeat"?"Повторное":"Первое"}</span></td><td>{new Date(item.first_call_at).toLocaleString("ru-RU")}</td><td>{new Date(item.last_call_at).toLocaleString("ru-RU")}</td><td>{durationLabel(item.total_duration_seconds)}</td><td>{item.extensions.join(", ")||"—"}</td></tr>)}
+          {!contacts.data?.items.length&&<tr><td colSpan={7} className="empty">В выбранном периоде внешних номеров нет</td></tr>}
+        </tbody></table></div></DataState>
+        {!!contacts.data?.total&&<div className="pagination"><button disabled={contactPage<=1} onClick={()=>setContactPage(value=>value-1)}>← Назад</button><span>Страница {contacts.data.page} из {contacts.data.pages} · {contacts.data.total} номеров</span><button disabled={contactPage>=contacts.data.pages} onClick={()=>setContactPage(value=>value+1)}>Дальше →</button></div>}
+      </section>
+    </>}
 
     <section className="panel">
       <div className="panel-head"><div><h2>Успеваемость операторов</h2><p>Рейтинг строится только по завершённым AI-отчётам</p></div></div>
