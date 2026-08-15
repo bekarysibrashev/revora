@@ -21,6 +21,8 @@ from app.modules.integrations.schemas import (
     OneCConnectorTokenResponse,
     OneCNormalizeRequest,
     OneCNormalizeResponse,
+    OneCMetadataRequest,
+    OneCMetadataResponse,
     OneCPushRequest,
     OneCPushResponse,
 )
@@ -46,6 +48,30 @@ async def push_one_c_batch(
     if credentials is None:
         raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
     return await service.ingest_one_c_push(credentials.credentials, payload)
+
+
+@router.post("/1c/metadata", response_model=OneCMetadataResponse)
+async def push_one_c_metadata(
+    payload: OneCMetadataRequest,
+    service: IntegrationServiceDependency,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(connector_bearer)
+    ],
+) -> OneCMetadataResponse:
+    if credentials is None:
+        raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
+    return await service.ingest_one_c_metadata(credentials.credentials, payload)
+
+
+@router.get(
+    "/connections/{connection_id}/1c-metadata", response_model=OneCMetadataRequest
+)
+async def get_one_c_metadata(
+    connection_id: UUID,
+    user: CurrentUser,
+    service: IntegrationServiceDependency,
+) -> OneCMetadataRequest:
+    return await service.get_one_c_metadata(user, connection_id)
 
 
 @router.get(

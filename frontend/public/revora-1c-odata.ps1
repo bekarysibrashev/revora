@@ -17,6 +17,9 @@ param(
     [Parameter(ParameterSetName = "Test", Mandatory = $true)]
     [switch]$TestConnection,
 
+    [Parameter(ParameterSetName = "Metadata", Mandatory = $true)]
+    [switch]$DiscoverMetadata,
+
     [Parameter(ParameterSetName = "Run")]
     [switch]$FullSync,
 
@@ -324,6 +327,102 @@ function Send-RevoraBatch {
     }
 }
 
+function Get-OneCMetadataInventory {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][pscredential]$Credential
+    )
+
+    $metadataUrl = "$BaseUrl/`$metadata"
+    Assert-LocalODataUrl -Url $metadataUrl
+    $authorization = Get-BasicAuthorizationValue -Credential $Credential
+    $response = Invoke-WithRetry -Description "1C metadata discovery" -Operation {
+        Invoke-WebRequest -UseBasicParsing -Method Get -Uri $metadataUrl -MaximumRedirection 0 -TimeoutSec 300 `
+            -Headers @{ Authorization = $authorization; Accept = "application/xml" }
+    }
+    try {
+        [xml]$document = $response.Content
+    }
+    catch {
+        throw "1C returned invalid OData metadata XML."
+    }
+
+    $typeIndex = @{}
+    foreach ($schema in @($document.SelectNodes("//*[local-name()='Schema']"))) {
+        $namespace = [string]$schema.GetAttribute("Namespace")
+        foreach ($entityType in @($schema.SelectNodes("./*[local-name()='EntityType']"))) {
+            $typeName = [string]$entityType.GetAttribute("Name")
+            $qualifiedName = if ($namespace) { "$namespace.$typeName" } else { $typeName }
+            $typeIndex[$qualifiedName] = $entityType
+        }
+    }
+
+    $entities = @()
+    foreach ($entitySet in @($document.SelectNodes("//*[local-name()='EntityContainer']/*[local-name()='EntitySet']"))) {
+        $name = [string]$entitySet.GetAttribute("Name")
+        $entityTypeName = [string]$entitySet.GetAttribute("EntityType")
+        if (-not $name -or -not $entityTypeName) { continue }
+        $entityType = $typeIndex[$entityTypeName]
+        $properties = @()
+        $navigation = @()
+        if ($null -ne $entityType) {
+            foreach ($property in @($entityType.SelectNodes("./*[local-name()='Property']"))) {
+                $nullableText = [string]$property.GetAttribute("Nullable")
+                $nullable = $null
+                if ($nullableText -in @("true", "false")) { $nullable = [bool]::Parse($nullableText) }
+                $properties += [ordered]@{
+                    name = [string]$property.GetAttribute("Name")
+                    type = [string]$property.GetAttribute("Type")
+                    nullable = $nullable
+                }
+            }
+            foreach ($item in @($entityType.SelectNodes("./*[local-name()='NavigationProperty']"))) {
+                $navigation += [ordered]@{
+                    name = [string]$item.GetAttribute("Name")
+                    relationship = if ($item.HasAttribute("Relationship")) { [string]$item.GetAttribute("Relationship") } else { $null }
+                    target_type = if ($item.HasAttribute("Type")) { [string]$item.GetAttribute("Type") } else { $null }
+                }
+            }
+        }
+        $entities += [ordered]@{
+            name = $name
+            entity_type = $entityTypeName
+            properties = @($properties)
+            navigation_properties = @($navigation)
+        }
+    }
+    if ($entities.Count -eq 0) {
+        throw "No EntitySet definitions were found in 1C OData metadata."
+    }
+    return @($entities | Sort-Object { $_.name })
+}
+
+function Send-RevoraMetadata {
+    param($Config)
+
+    $credential = [pscredential]::new($Config.OneCUsername, $Config.OneCPassword)
+    $entities = @(Get-OneCMetadataInventory -BaseUrl $Config.OneCBaseUrl -Credential $credential)
+    $token = ConvertFrom-ProtectedString -Value $Config.ConnectorToken
+    try {
+        $json = @{
+            schema_version = "1c-odata-metadata-v1"
+            entities = $entities
+        } | ConvertTo-Json -Depth 30 -Compress
+        $body = [Text.Encoding]::UTF8.GetBytes($json)
+        $result = Invoke-WithRetry -Description "Revora metadata upload" -Operation {
+            Invoke-RestMethod -Method Post -Uri "$($Config.RevoraApiUrl)/integrations/1c/metadata" `
+                -MaximumRedirection 0 -TimeoutSec 300 `
+                -Headers @{ Authorization = "Bearer $token" } `
+                -ContentType "application/json; charset=utf-8" -Body $body
+        }
+        Write-ConnectorLog -Message "OData metadata uploaded: entities=$($result.entity_count), properties=$($result.property_count), fingerprint=$($result.fingerprint)."
+        return $result
+    }
+    finally {
+        $token = $null
+    }
+}
+
 function Test-Connector {
     param($Config)
 
@@ -343,6 +442,7 @@ function Test-Connector {
     if ($null -eq $probe.PSObject.Properties["value"] -and $null -eq $probe.PSObject.Properties["d"]) {
         throw "1C returned an unexpected test response."
     }
+    Send-RevoraMetadata -Config $Config | Out-Null
     Write-ConnectorLog -Message "Connection test passed: OData metadata and first approved register are readable."
 }
 
@@ -490,6 +590,11 @@ if ($InstallTask) {
 $config = Load-ConnectorConfig
 if ($TestConnection) {
     Test-Connector -Config $config
+    exit 0
+}
+
+if ($DiscoverMetadata) {
+    Send-RevoraMetadata -Config $config | Out-Null
     exit 0
 }
 

@@ -59,6 +59,14 @@ http://localhost/Revora/odata/standard.odata
 
 Успешный результат заканчивается текстом `Connection test passed`.
 
+Проверка также отправляет в Revora безопасный инвентарь `$metadata`: названия
+OData-сущностей, полей и связей. Значения полей и карточки пациентов на этом
+шаге не передаются. Повторить только обновление схемы можно командой:
+
+```powershell
+& "$env:LOCALAPPDATA\Revora\revora-1c-odata.ps1" -DiscoverMetadata
+```
+
 ### 4. Выполнить первую синхронизацию за 90 дней вручную
 
 ```powershell

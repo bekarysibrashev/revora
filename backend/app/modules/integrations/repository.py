@@ -11,6 +11,7 @@ from app.modules.integrations.models import (
     IntegrationConnection,
     MappingProfile,
     NormalizationError,
+    OneCMetadataSnapshot,
     RawRecord,
     RecordLineage,
     SyncRun,
@@ -81,6 +82,47 @@ class IntegrationRepository:
         connection.settings = settings
         connection.status = "awaiting_data"
         await self.session.flush()
+
+    async def upsert_one_c_metadata(
+        self,
+        *,
+        tenant_id: UUID,
+        connection_id: UUID,
+        schema_version: str,
+        fingerprint: str,
+        entities: list[dict[str, object]],
+        discovered_at: datetime,
+    ) -> OneCMetadataSnapshot:
+        statement = insert(OneCMetadataSnapshot).values(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            connection_id=connection_id,
+            schema_version=schema_version,
+            fingerprint=fingerprint,
+            entities=entities,
+            discovered_at=discovered_at,
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=["tenant_id", "connection_id"],
+            set_={
+                "schema_version": statement.excluded.schema_version,
+                "fingerprint": statement.excluded.fingerprint,
+                "entities": statement.excluded.entities,
+                "discovered_at": statement.excluded.discovered_at,
+                "updated_at": func.now(),
+            },
+        ).returning(OneCMetadataSnapshot)
+        return (await self.session.execute(statement)).scalar_one()
+
+    async def get_one_c_metadata(
+        self, tenant_id: UUID, connection_id: UUID
+    ) -> OneCMetadataSnapshot | None:
+        return await self.session.scalar(
+            select(OneCMetadataSnapshot).where(
+                OneCMetadataSnapshot.tenant_id == tenant_id,
+                OneCMetadataSnapshot.connection_id == connection_id,
+            )
+        )
 
     async def mark_connection_synced(
         self,

@@ -1,6 +1,7 @@
 """Application orchestration for source ingestion and canonical loading."""
 
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 import json
 import secrets
 from uuid import UUID
@@ -38,6 +39,8 @@ from app.modules.integrations.schemas import (
     OneCConnectorTokenResponse,
     OneCNormalizeRequest,
     OneCNormalizeResponse,
+    OneCMetadataRequest,
+    OneCMetadataResponse,
     OneCPushRequest,
     OneCPushResponse,
 )
@@ -141,22 +144,7 @@ class IntegrationService:
     async def ingest_one_c_push(
         self, connector_token: str, payload: OneCPushRequest
     ) -> OneCPushResponse:
-        try:
-            parts = parse_connector_token(connector_token)
-        except InvalidConnectorToken as exc:
-            raise AppError("INVALID_CONNECTOR_TOKEN", "Invalid connector token", 401) from exc
-
-        await self.repository.set_tenant_context(parts.tenant_id)
-        connection = await self.repository.get_connection(parts.tenant_id, parts.connection_id)
-        expected_digest = connection.encrypted_credentials if connection else None
-        actual_digest = connector_token_digest(connector_token)
-        if (
-            connection is None
-            or connection.provider != ONE_C_PROVIDER
-            or not expected_digest
-            or not secrets.compare_digest(expected_digest, actual_digest)
-        ):
-            raise AppError("INVALID_CONNECTOR_TOKEN", "Invalid connector token", 401)
+        parts, connection = await self._connector_connection(connector_token)
 
         allowed_entities = set(connection.settings.get("allowed_entities", []))
         if payload.entity not in allowed_entities:
@@ -226,6 +214,73 @@ class IntegrationService:
             records_normalized=normalized,
             records_quarantined=quarantined,
         )
+
+    async def ingest_one_c_metadata(
+        self, connector_token: str, payload: OneCMetadataRequest
+    ) -> OneCMetadataResponse:
+        parts, connection = await self._connector_connection(connector_token)
+        entities = [item.model_dump(mode="json") for item in payload.entities]
+        encoded = json.dumps(entities, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        if len(encoded) > 8 * 1024 * 1024:
+            raise AppError("ONE_C_METADATA_TOO_LARGE", "1C metadata exceeds 8 MB", 413)
+        fingerprint = sha256(encoded).hexdigest()
+        discovered_at = datetime.now(UTC)
+        snapshot = await self.repository.upsert_one_c_metadata(
+            tenant_id=parts.tenant_id,
+            connection_id=connection.id,
+            schema_version=payload.schema_version,
+            fingerprint=fingerprint,
+            entities=entities,
+            discovered_at=discovered_at,
+        )
+        connection.settings = {
+            **(connection.settings or {}),
+            "metadata_fingerprint": fingerprint,
+            "metadata_discovered_at": discovered_at.isoformat(),
+            "metadata_entity_count": len(entities),
+        }
+        property_count = sum(len(item.properties) for item in payload.entities)
+        return OneCMetadataResponse(
+            connection_id=connection.id,
+            schema_version=snapshot.schema_version,
+            fingerprint=snapshot.fingerprint,
+            entity_count=len(entities),
+            property_count=property_count,
+            discovered_at=snapshot.discovered_at,
+        )
+
+    async def get_one_c_metadata(
+        self, user: User, connection_id: UUID
+    ) -> OneCMetadataRequest:
+        self._require_owner(user)
+        connection = await self._connection(user.tenant_id, connection_id)
+        if connection.provider != ONE_C_PROVIDER:
+            raise AppError("INVALID_INTEGRATION_PROVIDER", "This is not a 1C connection", 422)
+        snapshot = await self.repository.get_one_c_metadata(user.tenant_id, connection.id)
+        if snapshot is None:
+            raise AppError("ONE_C_METADATA_NOT_FOUND", "1C metadata has not been discovered yet", 404)
+        return OneCMetadataRequest(
+            schema_version=snapshot.schema_version,
+            entities=snapshot.entities,
+        )
+
+    async def _connector_connection(self, connector_token: str):
+        try:
+            parts = parse_connector_token(connector_token)
+        except InvalidConnectorToken as exc:
+            raise AppError("INVALID_CONNECTOR_TOKEN", "Invalid connector token", 401) from exc
+        await self.repository.set_tenant_context(parts.tenant_id)
+        connection = await self.repository.get_connection(parts.tenant_id, parts.connection_id)
+        expected_digest = connection.encrypted_credentials if connection else None
+        actual_digest = connector_token_digest(connector_token)
+        if (
+            connection is None
+            or connection.provider != ONE_C_PROVIDER
+            or not expected_digest
+            or not secrets.compare_digest(expected_digest, actual_digest)
+        ):
+            raise AppError("INVALID_CONNECTOR_TOKEN", "Invalid connector token", 401)
+        return parts, connection
 
     async def normalize_existing_one_c_records(
         self,

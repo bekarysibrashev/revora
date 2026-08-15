@@ -154,6 +154,41 @@ class OneCPushResponse(BaseModel):
     records_quarantined: int = 0
 
 
+class OneCMetadataProperty(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    type: str = Field(min_length=1, max_length=300)
+    nullable: bool | None = None
+
+
+class OneCMetadataNavigationProperty(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    relationship: str | None = Field(default=None, max_length=300)
+    target_type: str | None = Field(default=None, max_length=300)
+
+
+class OneCMetadataEntity(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    entity_type: str = Field(min_length=1, max_length=300)
+    properties: list[OneCMetadataProperty] = Field(default_factory=list, max_length=1000)
+    navigation_properties: list[OneCMetadataNavigationProperty] = Field(
+        default_factory=list, max_length=500
+    )
+
+
+class OneCMetadataRequest(BaseModel):
+    schema_version: str = Field(default="1c-odata-metadata-v1", min_length=1, max_length=100)
+    entities: list[OneCMetadataEntity] = Field(min_length=1, max_length=5000)
+
+
+class OneCMetadataResponse(BaseModel):
+    connection_id: UUID
+    schema_version: str
+    fingerprint: str
+    entity_count: int
+    property_count: int
+    discovered_at: datetime
+
+
 class OneCNormalizeRequest(BaseModel):
     history_days: int = Field(default=90, ge=1, le=3650)
     batch_size: int = Field(default=200, ge=10, le=500)

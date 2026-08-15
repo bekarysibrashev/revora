@@ -12,7 +12,11 @@ from app.modules.integrations.one_c import (
     parse_connector_token,
     source_record_id,
 )
-from app.modules.integrations.schemas import OneCNormalizeRequest, OneCPushRequest
+from app.modules.integrations.schemas import (
+    OneCMetadataRequest,
+    OneCNormalizeRequest,
+    OneCPushRequest,
+)
 from app.modules.integrations.service import IntegrationService
 
 
@@ -31,6 +35,7 @@ class FakeOneCRepository:
         self.raw_records = {}
         self.finished = None
         self.quarantined = []
+        self.metadata = None
 
     async def set_tenant_context(self, tenant_id):
         self.context = tenant_id
@@ -97,6 +102,19 @@ class FakeOneCRepository:
             "last_entity": entity,
             "last_synced_at": synced_at.isoformat(),
         }
+
+    async def upsert_one_c_metadata(self, **kwargs):
+        self.metadata = SimpleNamespace(**kwargs)
+        return self.metadata
+
+    async def get_one_c_metadata(self, tenant_id, connection_id):
+        if (
+            self.metadata is not None
+            and tenant_id == self.connection.tenant_id
+            and connection_id == self.connection.id
+        ):
+            return self.metadata
+        return None
 
 
 class FakeOneCWriter:
@@ -182,6 +200,36 @@ async def test_push_rejects_an_entity_outside_allowlist() -> None:
         )
 
     assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_connector_can_upload_schema_without_patient_rows() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    service = IntegrationService(repository, FakeOneCWriter())
+
+    result = await service.ingest_one_c_metadata(
+        token,
+        OneCMetadataRequest(
+            entities=[
+                {
+                    "name": "Catalog_Patients",
+                    "entity_type": "StandardODATA.Catalog_Patients",
+                    "properties": [
+                        {"name": "Ref_Key", "type": "Edm.Guid", "nullable": False},
+                        {"name": "Description", "type": "Edm.String", "nullable": True},
+                    ],
+                }
+            ]
+        ),
+    )
+
+    assert result.entity_count == 1
+    assert result.property_count == 2
+    assert len(result.fingerprint) == 64
+    assert repository.metadata.entities[0]["name"] == "Catalog_Patients"
+    assert "records" not in repository.metadata.entities[0]
 
 
 @pytest.mark.asyncio
