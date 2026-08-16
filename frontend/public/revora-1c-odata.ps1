@@ -297,26 +297,18 @@ function Get-ODataPages {
         $dateText = ([datetime]$ChangedSince).ToString("yyyy-MM-ddTHH:mm:ss")
         $filterParts += "$DateField ge datetime'$dateText'"
     }
+    if ($filterParts.Count -gt 0) {
+        $filter = [Uri]::EscapeDataString(($filterParts -join " and "))
+        $queryUrl += "&`$filter=$filter"
+    }
     # 1C treats $top as the total result limit and does not necessarily emit
-    # odata.nextLink. Registers use $skip. Catalogs/documents switch to a key
-    # cursor after the first page, avoiding increasingly expensive large skips.
+    # odata.nextLink. Page explicitly with $skip. Ref_Key remains the stable
+    # order for catalogs/documents; this 1C version cannot compare GUIDs with gt.
     $skip = $InitialSkip
     $pageNumber = [int][Math]::Floor($InitialSkip / $ConfiguredPageSize)
     $previousFingerprint = $null
-    $lastReferenceKey = $null
     while ($true) {
-        $pageFilterParts = @($filterParts)
-        if ($isReferenceEntity -and $lastReferenceKey) {
-            $pageFilterParts += "Ref_Key gt guid'$lastReferenceKey'"
-        }
-        $url = $queryUrl
-        if ($pageFilterParts.Count -gt 0) {
-            $filter = [Uri]::EscapeDataString(($pageFilterParts -join " and "))
-            $url += "&`$filter=$filter"
-        }
-        if (-not $isReferenceEntity -or -not $lastReferenceKey) {
-            $url += "&`$skip=$skip"
-        }
+        $url = "$queryUrl&`$skip=$skip"
         $response = Invoke-OneCGet -Url $url -Credential $Credential
         $valueProperty = $response.PSObject.Properties["value"]
         $dProperty = $response.PSObject.Properties["d"]
@@ -348,14 +340,6 @@ function Get-ODataPages {
                 throw "1C returned the same OData page twice for $Entity; paging was stopped safely."
             }
             $previousFingerprint = $fingerprint
-            if ($isReferenceEntity) {
-                $keyProperty = $records[-1].PSObject.Properties["Ref_Key"]
-                if ($null -eq $keyProperty -or -not $keyProperty.Value) {
-                    throw "1C omitted Ref_Key required for safe paging of $Entity."
-                }
-                try { $lastReferenceKey = ([guid]$keyProperty.Value).ToString() }
-                catch { throw "1C returned an invalid Ref_Key while paging $Entity." }
-            }
         }
         Write-ConnectorLog -Message "${Entity}: page=$pageNumber, read=$($records.Count), offset=$skip"
         Write-Output -NoEnumerate ([pscustomobject]@{ Records = $records })
