@@ -610,10 +610,15 @@ function Invoke-ConnectorSync {
                 $entitySent = 0
                 $definition = @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $entity })[0]
                 if ($null -eq $definition) { throw "No field allowlist is defined for $entity." }
-                foreach ($page in Get-ODataPages -Entity $entity -Credential $credential `
+                # Use the pipeline so every OData page is uploaded immediately.
+                # A regular foreach expression materializes all pages first and
+                # can leave the console silent for a long time during upload.
+                Get-ODataPages -Entity $entity -Credential $credential `
                     -BaseUrl $Config.OneCBaseUrl -ChangedSince $changedSince `
                     -SelectFields $definition.select -DateField $definition.date_field `
-                    -StaticFilter $definition.static_filter -ConfiguredPageSize $configuredPageSize) {
+                    -StaticFilter $definition.static_filter -ConfiguredPageSize $configuredPageSize |
+                ForEach-Object {
+                    $page = $_
                     $records = @(Protect-OneCRecords -Records @($page.Records) -PhoneField $definition.protect_phone)
                     if ($records.Count -eq 0) { continue }
                     $result = Send-RevoraBatch -Entity $entity -Records $records -ApiUrl $Config.RevoraApiUrl -Token $token
@@ -621,6 +626,7 @@ function Invoke-ConnectorSync {
                     $totalSent += $records.Count
                     $totalStored += [int]$result.records_stored
                     $totalDuplicates += [int]$result.records_duplicate
+                    Write-ConnectorLog -Message "${entity}: uploaded=$entitySent, stored=$($result.records_stored), duplicates=$($result.records_duplicate)"
                 }
                 Write-ConnectorLog -Message "${entity}: sent=$entitySent"
             }
