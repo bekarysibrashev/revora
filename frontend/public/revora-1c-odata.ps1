@@ -96,13 +96,20 @@ function Write-ConnectorLog {
     if (-not (Test-Path -LiteralPath $ConnectorDirectory)) {
         New-Item -ItemType Directory -Path $ConnectorDirectory -Force | Out-Null
     }
-    if ((Test-Path -LiteralPath $LogPath) -and (Get-Item -LiteralPath $LogPath).Length -gt 5MB) {
-        $archive = "$LogPath.1"
-        if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
-        Move-Item -LiteralPath $LogPath -Destination $archive -Force
-    }
     $line = "{0} [{1}] {2}" -f (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"), $Level, $Message
-    Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+    try {
+        if ((Test-Path -LiteralPath $LogPath) -and (Get-Item -LiteralPath $LogPath).Length -gt 5MB) {
+            $archive = "$LogPath.1"
+            if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
+            Move-Item -LiteralPath $LogPath -Destination $archive -Force
+        }
+        Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+    }
+    catch {
+        # Logging must never abort a data sync because another console or an
+        # antivirus scanner briefly holds the file.
+        Write-Warning "Could not write the connector log: $($_.Exception.Message)"
+    }
     Write-Host $line
 }
 
@@ -342,6 +349,10 @@ function Get-ODataPages {
             $previousFingerprint = $fingerprint
         }
         Write-ConnectorLog -Message "${Entity}: page=$pageNumber, read=$($records.Count), offset=$skip"
+        # Do not emit an empty page into the downstream pipeline. In Windows
+        # PowerShell, consumer control-flow statements can otherwise resume the
+        # producer loop before it reaches this termination condition.
+        if ($records.Count -eq 0) { break }
         Write-Output -NoEnumerate ([pscustomobject]@{ Records = $records })
         if ($records.Count -lt $ConfiguredPageSize) { break }
         $skip += $records.Count
@@ -648,7 +659,6 @@ function Invoke-ConnectorSync {
                 ForEach-Object {
                     $page = $_
                     $records = @(Protect-OneCRecords -Records @($page.Records) -PhoneField $definition.protect_phone)
-                    if ($records.Count -eq 0) { continue }
                     # Patient normalization is intentionally more expensive than
                     # raw register ingestion. Smaller upload chunks stay below
                     # proxy/request timeouts while retaining OData page size.
