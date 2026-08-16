@@ -77,6 +77,8 @@ def normalize_one_c_finance_record(
         base.update(
             {
                 "branch_code": branch_code,
+                "patient_external_id": _reference_value(normalized, "Контрагент_Key"),
+                "doctor_external_id": _reference_value(normalized, "Сотрудник_Key"),
                 "recognition_type": "payment" if source_entity == REVENUE_ENTITY else "accrual",
                 "occurred_at": occurred_at,
                 "amount": amount,
@@ -236,6 +238,14 @@ def _text_value(source: dict[str, object], *aliases: str) -> str | None:
     if re.fullmatch(r"[0-9a-fA-F-]{36}", text):
         return None
     return text[:250] or None
+
+
+def _reference_value(source: dict[str, object], *aliases: str) -> str | None:
+    _, value = _find(source, *aliases)
+    text = str(value).strip() if value is not None else ""
+    if not text or text == "00000000-0000-0000-0000-000000000000":
+        return None
+    return text
 
 
 def _cash_direction(

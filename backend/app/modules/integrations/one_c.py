@@ -12,9 +12,8 @@ from uuid import UUID
 ONE_C_PROVIDER = "1c_odata_push"
 CONNECTOR_TOKEN_PREFIX = "rvo1"
 
-# These entities contain financial identifiers but no direct patient names or
-# phone numbers in the metadata supplied by SAN Dental. Leads and payment
-# documents are deliberately excluded until field-level PII protection exists.
+# The companion connector applies a per-entity $select allowlist. Patient phone
+# numbers are transformed to a SHA-256 digest locally before a batch is sent.
 SAFE_ONE_C_ENTITIES = (
     "AccumulationRegister_Выручка_RecordType",
     "AccumulationRegister_ДенежныеСредства_RecordType",
@@ -24,7 +23,32 @@ SAFE_ONE_C_ENTITIES = (
     "AccumulationRegister_ПродажиСебестоимость_RecordType",
     "AccumulationRegister_РабочееВремяСотрудников_RecordType",
     "AccumulationRegister_РасчетыСПерсоналом_RecordType",
+    "Catalog_Контрагенты",
+    "Catalog_Сотрудники",
+    "Catalog_Номенклатура",
+    "Catalog_Заявки",
+    "Document_Событие",
+    "Document_ПланЛечения",
+    "InformationRegister_РекламныеРасходы",
 )
+
+SAFE_ONE_C_FIELDS: dict[str, frozenset[str]] = {
+    "AccumulationRegister_Выручка_RecordType": frozenset(("Recorder", "Period", "LineNumber", "Active", "Касса_Key", "СтруктурнаяЕдиница_Key", "Организация_Key", "ТипДенежныхСредств", "ВидОперации", "Контрагент_Key", "Куратор_Key", "Сумма", "Recorder_Type")),
+    "AccumulationRegister_ДенежныеСредства_RecordType": frozenset(("Recorder", "Period", "LineNumber", "Active", "RecordType", "СтруктурнаяЕдиница_Key", "ТипДенежныхСредств", "Сумма", "СтатьяДДС_Key", "Recorder_Type")),
+    "AccumulationRegister_Затраты_RecordType": frozenset(("Recorder", "Period", "LineNumber", "Active", "СтруктурнаяЕдиница_Key", "Номенклатура_Key", "Контрагент_Key", "Сотрудник_Key", "СтатьяЗатрат", "Сумма", "Recorder_Type", "СтатьяЗатрат_Type")),
+    "AccumulationRegister_НарядЗаказы_RecordType": frozenset(("Recorder", "Period", "LineNumber", "Active", "RecordType", "СтруктурнаяЕдиница_Key", "Номенклатура_Key", "Контрагент_Key", "НарядЗаказ_Key", "НомерЗаказа", "Количество", "КлючСтроки", "Recorder_Type")),
+    "AccumulationRegister_Продажи_RecordType": frozenset(("Recorder", "Period", "LineNumber", "Active", "СтруктурнаяЕдиница_Key", "Номенклатура_Key", "ДокументПродажи", "Сотрудник_Key", "Контрагент_Key", "Количество", "Стоимость", "СтоимостьБезСкидки", "СуммаНДС", "Recorder_Type", "ДокументПродажи_Type")),
+    "AccumulationRegister_ПродажиСебестоимость_RecordType": frozenset(("Recorder", "Period", "LineNumber", "Active", "СтруктурнаяЕдиница_Key", "Номенклатура_Key", "Материал_Key", "ДокументПродажи", "Контрагент_Key", "Сотрудник_Key", "Количество", "Стоимость", "СуммаНДС", "Recorder_Type", "ДокументПродажи_Type")),
+    "AccumulationRegister_РабочееВремяСотрудников_RecordType": frozenset(("Recorder_Key", "Period", "LineNumber", "Active", "СтруктурнаяЕдиница_Key", "Сотрудник_Key", "Врач_Key", "Дней", "Часов")),
+    "AccumulationRegister_РасчетыСПерсоналом_RecordType": frozenset(("Recorder", "Period", "LineNumber", "Active", "RecordType", "СтруктурнаяЕдиница_Key", "Сотрудник_Key", "МесяцНачисления", "ДокументНачисления_Key", "Сумма", "Recorder_Type")),
+    "Catalog_Контрагенты": frozenset(("Ref_Key", "Description", "DeletionMark", "ДатаРегистрации", "ИсточникИнформации_Key", "КаналПривлечения_Key", "КаналПривлеченияЗначение", "СотрудникРегистрации_Key", "СтруктурнаяЕдиница_Key", "PhoneHash")),
+    "Catalog_Сотрудники": frozenset(("Ref_Key", "Description", "DeletionMark", "Должность_Key", "Имя", "Отчество", "Фамилия", "НаименованиеСокращенное", "ПредставлениеДляОнлайнЗаписи", "Роль", "Служебный")),
+    "Catalog_Номенклатура": frozenset(("Ref_Key", "Description", "DeletionMark", "НаименованиеПолное", "Специализация_Key", "ТипНоменклатуры", "НормаВремени", "ЭтоУслуга", "ЭтоЗапас")),
+    "Catalog_Заявки": frozenset(("Ref_Key", "DeletionMark", "utm_campaign", "utm_content", "utm_medium", "utm_source", "utm_term", "ДатаОбработки", "ДатаСоздания", "КаналПривлечения_Key", "КаналПривлеченияЗначение", "PhoneHash", "ОсновнойКлиент_Key", "ОсновнойМенеджер_Key", "РекламныйИсточник_Key", "Статус", "СтатусПациента", "СтруктурнаяЕдиница_Key", "Направление_Key", "Категория_Key")),
+    "Document_Событие": frozenset(("Ref_Key", "Number", "Date", "DeletionMark", "Posted", "Врач_Key", "ДатаОкончания", "ДатаСоздания", "ИсточникЗаписи_Key", "Контрагент_Key", "ПричинаОтмены_Key", "Сделка_Key", "СсылкаНаПрием_Key", "Статус", "СтатусПациента", "СтруктурнаяЕдиница_Key", "ТипСобытия")),
+    "Document_ПланЛечения": frozenset(("Ref_Key", "Number", "Date", "DeletionMark", "Posted", "Контрагент_Key", "Куратор_Key", "Сотрудник_Key", "Статус", "СтруктурнаяЕдиница_Key", "СуммаДокумента", "СуммаОплачено")),
+    "InformationRegister_РекламныеРасходы": frozenset(("utmCampaign", "utmContent", "utmMedium", "utmSource", "utmTerm", "Дата", "Сумма")),
+}
 
 
 class InvalidConnectorToken(ValueError):

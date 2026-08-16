@@ -1,6 +1,6 @@
 """Load normalized dictionaries into the source-agnostic canonical model."""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from hashlib import sha256
 from uuid import UUID, uuid4
@@ -13,7 +13,7 @@ from app.modules.auth.models import User
 from app.modules.doctors.models import Doctor, DoctorRating
 from app.modules.finance.models import AccountBalance, CashFlowFact, ExpenseCategory, ExpenseFact, RevenueFact
 from app.modules.marketing.models import AttributionFact, MarketingSpendFact
-from app.modules.sales.models import Appointment, Lead, Patient, ServiceDirection
+from app.modules.sales.models import Appointment, Lead, Patient, ServiceDirection, TreatmentPlan
 from app.modules.tenancy.models import Branch
 
 
@@ -37,6 +37,7 @@ class CanonicalWriter:
         "attribution_fact",
         "account_balance",
         "doctor_rating",
+        "treatment_plan",
     }
 
     def __init__(self, session: AsyncSession) -> None:
@@ -54,12 +55,15 @@ class CanonicalWriter:
     async def _write_patient(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
         external_id = self._string(data, "external_id")
         phone = self._optional_string(data, "phone")
+        phone_hash = self._optional_string(data, "phone_hash")
+        if phone_hash and (len(phone_hash) != 64 or any(c not in "0123456789abcdef" for c in phone_hash.lower())):
+            raise CanonicalWriteError("phone_hash must be a SHA-256 hex digest")
         values = {
             "tenant_id": tenant_id,
             "external_id": external_id,
             "full_name": self._optional_string(data, "full_name"),
             "phone_e164_encrypted": None,
-            "phone_hash": self._phone_hash(phone) if phone else None,
+            "phone_hash": phone_hash.lower() if phone_hash else (self._phone_hash(phone) if phone else None),
             "lead_source": self._optional_string(data, "lead_source"),
         }
         return await self._upsert(
@@ -111,6 +115,7 @@ class CanonicalWriter:
             "external_id": self._string(data, "external_id"),
             "source": self._string(data, "source"),
             "status": self._string(data, "status"),
+            "created_at": self._datetime(data, "created_at") if data.get("created_at") else datetime.now(UTC),
         }
         return await self._upsert(
             Lead,
@@ -306,6 +311,24 @@ class CanonicalWriter:
         return await self._upsert(
             DoctorRating, values, ["tenant_id", "doctor_id", "source", "rated_at"],
             ["rating", "reviews_count"],
+        )
+
+    async def _write_treatment_plan(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
+        patient_id = await self._required_external_id(
+            Patient, tenant_id, self._string(data, "patient_external_id"), "patient"
+        )
+        values = {
+            "tenant_id": tenant_id,
+            "patient_id": patient_id,
+            "external_id": self._string(data, "external_id"),
+            "status": self._string(data, "status")[:50],
+            "accepted_at": self._datetime(data, "accepted_at") if data.get("accepted_at") else None,
+        }
+        return await self._upsert(
+            TreatmentPlan,
+            values,
+            ["tenant_id", "external_id"],
+            ["patient_id", "status", "accepted_at"],
         )
 
     async def _upsert(

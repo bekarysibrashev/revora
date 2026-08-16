@@ -15,14 +15,19 @@ from app.modules.integrations.one_c import (
     InvalidConnectorToken,
     ONE_C_PROVIDER,
     SAFE_ONE_C_ENTITIES,
+    SAFE_ONE_C_FIELDS,
     connector_token_digest,
     issue_connector_token,
     parse_connector_token,
     source_record_id,
 )
 from app.modules.integrations.one_c_finance import (
-    MAPPABLE_ONE_C_ENTITIES,
+    MAPPABLE_ONE_C_ENTITIES as MAPPABLE_ONE_C_FINANCE_ENTITIES,
     normalize_one_c_finance_record,
+)
+from app.modules.integrations.one_c_operational import (
+    MAPPABLE_OPERATIONAL_ENTITIES,
+    normalize_one_c_operational_record,
 )
 from app.modules.integrations.repository import IntegrationRepository
 from app.modules.integrations.schemas import (
@@ -45,6 +50,9 @@ from app.modules.integrations.schemas import (
     OneCPushResponse,
 )
 from app.modules.integrations.tabular_adapter import InvalidTabularFile, UnsupportedTabularFile
+
+
+MAPPABLE_ONE_C_ENTITIES = (*MAPPABLE_ONE_C_FINANCE_ENTITIES, *MAPPABLE_OPERATIONAL_ENTITIES)
 
 
 class IntegrationService:
@@ -154,6 +162,18 @@ class IntegrationService:
                 403,
                 {"entity": payload.entity},
             )
+        approved_fields = SAFE_ONE_C_FIELDS.get(payload.entity)
+        if approved_fields is None:
+            raise AppError("ONE_C_ENTITY_NOT_ALLOWED", "This 1C entity has no field allowlist", 403)
+        for record in payload.records:
+            unexpected_fields = sorted(set(record) - approved_fields)
+            if unexpected_fields:
+                raise AppError(
+                    "ONE_C_FIELDS_NOT_ALLOWED",
+                    "This 1C batch contains fields outside the server allowlist",
+                    422,
+                    {"entity": payload.entity, "fields": unexpected_fields[:20]},
+                )
         encoded_size = len(
             json.dumps(payload.records, ensure_ascii=False, default=str).encode("utf-8")
         )
@@ -235,6 +255,7 @@ class IntegrationService:
         )
         connection.settings = {
             **(connection.settings or {}),
+            "allowed_entities": list(SAFE_ONE_C_ENTITIES),
             "metadata_fingerprint": fingerprint,
             "metadata_discovered_at": discovered_at.isoformat(),
             "metadata_entity_count": len(entities),
@@ -336,12 +357,19 @@ class IntegrationService:
         raw_record,
         branch_code: str | None,
     ) -> str:
-        mapping = normalize_one_c_finance_record(
+        mapping = normalize_one_c_operational_record(
             source_entity=raw_record.source_entity,
             source_record_id=raw_record.source_record_id or str(raw_record.id),
             payload=dict(raw_record.payload),
             branch_code=branch_code,
         )
+        if mapping is None:
+            mapping = normalize_one_c_finance_record(
+                source_entity=raw_record.source_entity,
+                source_record_id=raw_record.source_record_id or str(raw_record.id),
+                payload=dict(raw_record.payload),
+                branch_code=branch_code,
+            )
         if mapping is None:
             return "skipped"
         if mapping.issues:

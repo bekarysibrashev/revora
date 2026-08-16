@@ -49,19 +49,30 @@ $IncrementalOverlapDays = 7
 
 # Kept as UTF-8 Base64 so this file works in Windows PowerShell 5.1 even when
 # it is saved without a BOM on an older Windows server.
-$ApprovedEntityBase64 = @(
-    "QWNjdW11bGF0aW9uUmVnaXN0ZXJf0JLRi9GA0YPRh9C60LBfUmVjb3JkVHlwZQ==",
-    "QWNjdW11bGF0aW9uUmVnaXN0ZXJf0JTQtdC90LXQttC90YvQtdCh0YDQtdC00YHRgtCy0LBfUmVjb3JkVHlwZQ==",
-    "QWNjdW11bGF0aW9uUmVnaXN0ZXJf0JfQsNGC0YDQsNGC0YtfUmVjb3JkVHlwZQ==",
-    "QWNjdW11bGF0aW9uUmVnaXN0ZXJf0J3QsNGA0Y/QtNCX0LDQutCw0LfRi19SZWNvcmRUeXBl",
-    "QWNjdW11bGF0aW9uUmVnaXN0ZXJf0J/RgNC+0LTQsNC20LhfUmVjb3JkVHlwZQ==",
-    "QWNjdW11bGF0aW9uUmVnaXN0ZXJf0J/RgNC+0LTQsNC20LjQodC10LHQtdGB0YLQvtC40LzQvtGB0YLRjF9SZWNvcmRUeXBl",
-    "QWNjdW11bGF0aW9uUmVnaXN0ZXJf0KDQsNCx0L7Rh9C10LXQktGA0LXQvNGP0KHQvtGC0YDRg9C00L3QuNC60L7Qsl9SZWNvcmRUeXBl",
-    "QWNjdW11bGF0aW9uUmVnaXN0ZXJf0KDQsNGB0YfQtdGC0YvQodCf0LXRgNGB0L7QvdCw0LvQvtC8X1JlY29yZFR5cGU="
+$ApprovedEntityDefinitionBase64 = @(
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWNvcmRlcixQZXJpb2QsTGluZU51bWJlcixBY3RpdmUs0JrQsNGB0YHQsF9LZXks0KHRgtGA0YPQutGC0YPRgNC90LDRj9CV0LTQuNC90LjRhtCwX0tleSzQntGA0LPQsNC90LjQt9Cw0YbQuNGPX0tleSzQotC40L/QlNC10L3QtdC20L3Ri9GF0KHRgNC10LTRgdGC0LIs0JLQuNC00J7Qv9C10YDQsNGG0LjQuCzQmtC+0L3RgtGA0LDQs9C10L3Rgl9LZXks0JrRg9GA0LDRgtC+0YBfS2V5LNCh0YPQvNC80LAsUmVjb3JkZXJfVHlwZSIsImVudGl0eSI6IkFjY3VtdWxhdGlvblJlZ2lzdGVyX9CS0YvRgNGD0YfQutCwX1JlY29yZFR5cGUiLCJkYXRlX2ZpZWxkIjoiUGVyaW9kIiwic3RhdGljX2ZpbHRlciI6bnVsbH0=",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWNvcmRlcixQZXJpb2QsTGluZU51bWJlcixBY3RpdmUsUmVjb3JkVHlwZSzQodGC0YDRg9C60YLRg9GA0L3QsNGP0JXQtNC40L3QuNGG0LBfS2V5LNCi0LjQv9CU0LXQvdC10LbQvdGL0YXQodGA0LXQtNGB0YLQsizQodGD0LzQvNCwLNCh0YLQsNGC0YzRj9CU0JTQoV9LZXksUmVjb3JkZXJfVHlwZSIsImVudGl0eSI6IkFjY3VtdWxhdGlvblJlZ2lzdGVyX9CU0LXQvdC10LbQvdGL0LXQodGA0LXQtNGB0YLQstCwX1JlY29yZFR5cGUiLCJkYXRlX2ZpZWxkIjoiUGVyaW9kIiwic3RhdGljX2ZpbHRlciI6bnVsbH0=",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWNvcmRlcixQZXJpb2QsTGluZU51bWJlcixBY3RpdmUs0KHRgtGA0YPQutGC0YPRgNC90LDRj9CV0LTQuNC90LjRhtCwX0tleSzQndC+0LzQtdC90LrQu9Cw0YLRg9GA0LBfS2V5LNCa0L7QvdGC0YDQsNCz0LXQvdGCX0tleSzQodC+0YLRgNGD0LTQvdC40LpfS2V5LNCh0YLQsNGC0YzRj9CX0LDRgtGA0LDRgizQodGD0LzQvNCwLFJlY29yZGVyX1R5cGUs0KHRgtCw0YLRjNGP0JfQsNGC0YDQsNGCX1R5cGUiLCJlbnRpdHkiOiJBY2N1bXVsYXRpb25SZWdpc3Rlcl/Ql9Cw0YLRgNCw0YLRi19SZWNvcmRUeXBlIiwiZGF0ZV9maWVsZCI6IlBlcmlvZCIsInN0YXRpY19maWx0ZXIiOm51bGx9",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWNvcmRlcixQZXJpb2QsTGluZU51bWJlcixBY3RpdmUsUmVjb3JkVHlwZSzQodGC0YDRg9C60YLRg9GA0L3QsNGP0JXQtNC40L3QuNGG0LBfS2V5LNCd0L7QvNC10L3QutC70LDRgtGD0YDQsF9LZXks0JrQvtC90YLRgNCw0LPQtdC90YJfS2V5LNCd0LDRgNGP0LTQl9Cw0LrQsNC3X0tleSzQndC+0LzQtdGA0JfQsNC60LDQt9CwLNCa0L7Qu9C40YfQtdGB0YLQstC+LNCa0LvRjtGH0KHRgtGA0L7QutC4LFJlY29yZGVyX1R5cGUiLCJlbnRpdHkiOiJBY2N1bXVsYXRpb25SZWdpc3Rlcl/QndCw0YDRj9C00JfQsNC60LDQt9GLX1JlY29yZFR5cGUiLCJkYXRlX2ZpZWxkIjoiUGVyaW9kIiwic3RhdGljX2ZpbHRlciI6bnVsbH0=",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWNvcmRlcixQZXJpb2QsTGluZU51bWJlcixBY3RpdmUs0KHRgtGA0YPQutGC0YPRgNC90LDRj9CV0LTQuNC90LjRhtCwX0tleSzQndC+0LzQtdC90LrQu9Cw0YLRg9GA0LBfS2V5LNCU0L7QutGD0LzQtdC90YLQn9GA0L7QtNCw0LbQuCzQodC+0YLRgNGD0LTQvdC40LpfS2V5LNCa0L7QvdGC0YDQsNCz0LXQvdGCX0tleSzQmtC+0LvQuNGH0LXRgdGC0LLQvizQodGC0L7QuNC80L7RgdGC0Yws0KHRgtC+0LjQvNC+0YHRgtGM0JHQtdC30KHQutC40LTQutC4LNCh0YPQvNC80LDQndCU0KEsUmVjb3JkZXJfVHlwZSzQlNC+0LrRg9C80LXQvdGC0J/RgNC+0LTQsNC20LhfVHlwZSIsImVudGl0eSI6IkFjY3VtdWxhdGlvblJlZ2lzdGVyX9Cf0YDQvtC00LDQttC4X1JlY29yZFR5cGUiLCJkYXRlX2ZpZWxkIjoiUGVyaW9kIiwic3RhdGljX2ZpbHRlciI6bnVsbH0=",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWNvcmRlcixQZXJpb2QsTGluZU51bWJlcixBY3RpdmUs0KHRgtGA0YPQutGC0YPRgNC90LDRj9CV0LTQuNC90LjRhtCwX0tleSzQndC+0LzQtdC90LrQu9Cw0YLRg9GA0LBfS2V5LNCc0LDRgtC10YDQuNCw0LtfS2V5LNCU0L7QutGD0LzQtdC90YLQn9GA0L7QtNCw0LbQuCzQmtC+0L3RgtGA0LDQs9C10L3Rgl9LZXks0KHQvtGC0YDRg9C00L3QuNC6X0tleSzQmtC+0LvQuNGH0LXRgdGC0LLQvizQodGC0L7QuNC80L7RgdGC0Yws0KHRg9C80LzQsNCd0JTQoSxSZWNvcmRlcl9UeXBlLNCU0L7QutGD0LzQtdC90YLQn9GA0L7QtNCw0LbQuF9UeXBlIiwiZW50aXR5IjoiQWNjdW11bGF0aW9uUmVnaXN0ZXJf0J/RgNC+0LTQsNC20LjQodC10LHQtdGB0YLQvtC40LzQvtGB0YLRjF9SZWNvcmRUeXBlIiwiZGF0ZV9maWVsZCI6IlBlcmlvZCIsInN0YXRpY19maWx0ZXIiOm51bGx9",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWNvcmRlcl9LZXksUGVyaW9kLExpbmVOdW1iZXIsQWN0aXZlLNCh0YLRgNGD0LrRgtGD0YDQvdCw0Y/QldC00LjQvdC40YbQsF9LZXks0KHQvtGC0YDRg9C00L3QuNC6X0tleSzQktGA0LDRh19LZXks0JTQvdC10Lks0KfQsNGB0L7QsiIsImVudGl0eSI6IkFjY3VtdWxhdGlvblJlZ2lzdGVyX9Cg0LDQsdC+0YfQtdC10JLRgNC10LzRj9Ch0L7RgtGA0YPQtNC90LjQutC+0LJfUmVjb3JkVHlwZSIsImRhdGVfZmllbGQiOiJQZXJpb2QiLCJzdGF0aWNfZmlsdGVyIjpudWxsfQ==",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWNvcmRlcixQZXJpb2QsTGluZU51bWJlcixBY3RpdmUsUmVjb3JkVHlwZSzQodGC0YDRg9C60YLRg9GA0L3QsNGP0JXQtNC40L3QuNGG0LBfS2V5LNCh0L7RgtGA0YPQtNC90LjQul9LZXks0JzQtdGB0Y/RhtCd0LDRh9C40YHQu9C10L3QuNGPLNCU0L7QutGD0LzQtdC90YLQndCw0YfQuNGB0LvQtdC90LjRj19LZXks0KHRg9C80LzQsCxSZWNvcmRlcl9UeXBlIiwiZW50aXR5IjoiQWNjdW11bGF0aW9uUmVnaXN0ZXJf0KDQsNGB0YfQtdGC0YvQodCf0LXRgNGB0L7QvdCw0LvQvtC8X1JlY29yZFR5cGUiLCJkYXRlX2ZpZWxkIjoiUGVyaW9kIiwic3RhdGljX2ZpbHRlciI6bnVsbH0=",
+    "eyJwcm90ZWN0X3Bob25lIjoi0KLQtdC70LXRhNC+0L0iLCJzZWxlY3QiOiJSZWZfS2V5LERlc2NyaXB0aW9uLERlbGV0aW9uTWFyayzQlNCw0YLQsNCg0LXQs9C40YHRgtGA0LDRhtC40Lgs0JjRgdGC0L7Rh9C90LjQutCY0L3RhNC+0YDQvNCw0YbQuNC4X0tleSzQmtCw0L3QsNC70J/RgNC40LLQu9C10YfQtdC90LjRj19LZXks0JrQsNC90LDQu9Cf0YDQuNCy0LvQtdGH0LXQvdC40Y/Ql9C90LDRh9C10L3QuNC1LNCh0L7RgtGA0YPQtNC90LjQutCg0LXQs9C40YHRgtGA0LDRhtC40LhfS2V5LNCh0YLRgNGD0LrRgtGD0YDQvdCw0Y/QldC00LjQvdC40YbQsF9LZXks0KLQtdC70LXRhNC+0L0iLCJlbnRpdHkiOiJDYXRhbG9nX9Ca0L7QvdGC0YDQsNCz0LXQvdGC0YsiLCJkYXRlX2ZpZWxkIjpudWxsLCJzdGF0aWNfZmlsdGVyIjoiRGVsZXRpb25NYXJrIGVxIGZhbHNlIn0=",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LERlc2NyaXB0aW9uLERlbGV0aW9uTWFyayzQlNC+0LvQttC90L7RgdGC0YxfS2V5LNCY0LzRjyzQntGC0YfQtdGB0YLQstC+LNCk0LDQvNC40LvQuNGPLNCd0LDQuNC80LXQvdC+0LLQsNC90LjQtdCh0L7QutGA0LDRidC10L3QvdC+0LUs0J/RgNC10LTRgdGC0LDQstC70LXQvdC40LXQlNC70Y/QntC90LvQsNC50L3Ql9Cw0L/QuNGB0Lgs0KDQvtC70Yws0KHQu9GD0LbQtdCx0L3Ri9C5IiwiZW50aXR5IjoiQ2F0YWxvZ1/QodC+0YLRgNGD0LTQvdC40LrQuCIsImRhdGVfZmllbGQiOm51bGwsInN0YXRpY19maWx0ZXIiOiJEZWxldGlvbk1hcmsgZXEgZmFsc2UgYW5kINCh0LvRg9C20LXQsdC90YvQuSBlcSBmYWxzZSJ9",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LERlc2NyaXB0aW9uLERlbGV0aW9uTWFyayzQndCw0LjQvNC10L3QvtCy0LDQvdC40LXQn9C+0LvQvdC+0LUs0KHQv9C10YbQuNCw0LvQuNC30LDRhtC40Y9fS2V5LNCi0LjQv9Cd0L7QvNC10L3QutC70LDRgtGD0YDRiyzQndC+0YDQvNCw0JLRgNC10LzQtdC90Lgs0K3RgtC+0KPRgdC70YPQs9CwLNCt0YLQvtCX0LDQv9Cw0YEiLCJlbnRpdHkiOiJDYXRhbG9nX9Cd0L7QvNC10L3QutC70LDRgtGD0YDQsCIsImRhdGVfZmllbGQiOm51bGwsInN0YXRpY19maWx0ZXIiOiJEZWxldGlvbk1hcmsgZXEgZmFsc2UgYW5kINCt0YLQvtCj0YHQu9GD0LPQsCBlcSB0cnVlIn0=",
+    "eyJwcm90ZWN0X3Bob25lIjoi0J3QvtC80LXRgNCi0LXQu9C10YTQvtC90LAiLCJzZWxlY3QiOiJSZWZfS2V5LERlbGV0aW9uTWFyayx1dG1fY2FtcGFpZ24sdXRtX2NvbnRlbnQsdXRtX21lZGl1bSx1dG1fc291cmNlLHV0bV90ZXJtLNCU0LDRgtCw0J7QsdGA0LDQsdC+0YLQutC4LNCU0LDRgtCw0KHQvtC30LTQsNC90LjRjyzQmtCw0L3QsNC70J/RgNC40LLQu9C10YfQtdC90LjRj19LZXks0JrQsNC90LDQu9Cf0YDQuNCy0LvQtdGH0LXQvdC40Y/Ql9C90LDRh9C10L3QuNC1LNCd0L7QvNC10YDQotC10LvQtdGE0L7QvdCwLNCe0YHQvdC+0LLQvdC+0LnQmtC70LjQtdC90YJfS2V5LNCe0YHQvdC+0LLQvdC+0LnQnNC10L3QtdC00LbQtdGAX0tleSzQoNC10LrQu9Cw0LzQvdGL0LnQmNGB0YLQvtGH0L3QuNC6X0tleSzQodGC0LDRgtGD0YEs0KHRgtCw0YLRg9GB0J/QsNGG0LjQtdC90YLQsCzQodGC0YDRg9C60YLRg9GA0L3QsNGP0JXQtNC40L3QuNGG0LBfS2V5LNCd0LDQv9GA0LDQstC70LXQvdC40LVfS2V5LNCa0LDRgtC10LPQvtGA0LjRj19LZXkiLCJlbnRpdHkiOiJDYXRhbG9nX9CX0LDRj9Cy0LrQuCIsImRhdGVfZmllbGQiOm51bGwsInN0YXRpY19maWx0ZXIiOiJEZWxldGlvbk1hcmsgZXEgZmFsc2UifQ==",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LE51bWJlcixEYXRlLERlbGV0aW9uTWFyayxQb3N0ZWQs0JLRgNCw0YdfS2V5LNCU0LDRgtCw0J7QutC+0L3Rh9Cw0L3QuNGPLNCU0LDRgtCw0KHQvtC30LTQsNC90LjRjyzQmNGB0YLQvtGH0L3QuNC60JfQsNC/0LjRgdC4X0tleSzQmtC+0L3RgtGA0LDQs9C10L3Rgl9LZXks0J/RgNC40YfQuNC90LDQntGC0LzQtdC90YtfS2V5LNCh0LTQtdC70LrQsF9LZXks0KHRgdGL0LvQutCw0J3QsNCf0YDQuNC10LxfS2V5LNCh0YLQsNGC0YPRgSzQodGC0LDRgtGD0YHQn9Cw0YbQuNC10L3RgtCwLNCh0YLRgNGD0LrRgtGD0YDQvdCw0Y/QldC00LjQvdC40YbQsF9LZXks0KLQuNC/0KHQvtCx0YvRgtC40Y8iLCJlbnRpdHkiOiJEb2N1bWVudF/QodC+0LHRi9GC0LjQtSIsImRhdGVfZmllbGQiOiJEYXRlIiwic3RhdGljX2ZpbHRlciI6IkRlbGV0aW9uTWFyayBlcSBmYWxzZSJ9",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LE51bWJlcixEYXRlLERlbGV0aW9uTWFyayxQb3N0ZWQs0JrQvtC90YLRgNCw0LPQtdC90YJfS2V5LNCa0YPRgNCw0YLQvtGAX0tleSzQodC+0YLRgNGD0LTQvdC40LpfS2V5LNCh0YLQsNGC0YPRgSzQodGC0YDRg9C60YLRg9GA0L3QsNGP0JXQtNC40L3QuNGG0LBfS2V5LNCh0YPQvNC80LDQlNC+0LrRg9C80LXQvdGC0LAs0KHRg9C80LzQsNCe0L/Qu9Cw0YfQtdC90L4iLCJlbnRpdHkiOiJEb2N1bWVudF/Qn9C70LDQvdCb0LXRh9C10L3QuNGPIiwiZGF0ZV9maWVsZCI6IkRhdGUiLCJzdGF0aWNfZmlsdGVyIjoiRGVsZXRpb25NYXJrIGVxIGZhbHNlIn0=",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJ1dG1DYW1wYWlnbix1dG1Db250ZW50LHV0bU1lZGl1bSx1dG1Tb3VyY2UsdXRtVGVybSzQlNCw0YLQsCzQodGD0LzQvNCwIiwiZW50aXR5IjoiSW5mb3JtYXRpb25SZWdpc3Rlcl/QoNC10LrQu9Cw0LzQvdGL0LXQoNCw0YHRhdC+0LTRiyIsImRhdGVfZmllbGQiOiLQlNCw0YLQsCIsInN0YXRpY19maWx0ZXIiOm51bGx9"
 )
-$ApprovedEntities = @($ApprovedEntityBase64 | ForEach-Object {
-    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_))
+$ApprovedEntityDefinitions = @($ApprovedEntityDefinitionBase64 | ForEach-Object {
+    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) | ConvertFrom-Json
 })
+# Dependencies first: patients and staff must exist before leads, appointments
+# and finance facts are normalized in Revora.
+$ApprovedEntityDefinitions = @($ApprovedEntityDefinitions[8..14] + $ApprovedEntityDefinitions[0..7])
+$ApprovedEntities = @($ApprovedEntityDefinitions | ForEach-Object { $_.entity })
 
 function Write-ConnectorLog {
     param(
@@ -191,6 +202,9 @@ function Load-ConnectorConfig {
     }
     $loaded = Import-Clixml -LiteralPath $ConfigPath
     Assert-ConnectorUrls -ApiUrl $loaded.RevoraApiUrl -ODataUrl $loaded.OneCBaseUrl
+    # The executable allowlist is versioned with the signed/deployed script;
+    # an old local config cannot keep broader or stale entity permissions.
+    $loaded.Entities = $ApprovedEntities
     return $loaded
 }
 
@@ -246,14 +260,25 @@ function Get-ODataPages {
         [Parameter(Mandatory = $true)][pscredential]$Credential,
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Nullable[datetime]]$ChangedSince,
+        [string]$SelectFields,
+        [string]$DateField,
+        [string]$StaticFilter,
         [Parameter(Mandatory = $true)][int]$ConfiguredPageSize
     )
 
     $encodedEntity = [Uri]::EscapeDataString($Entity)
     $queryUrl = "$BaseUrl/$encodedEntity`?`$format=json&`$top=$ConfiguredPageSize&allowedOnly=true"
-    if ($null -ne $ChangedSince) {
+    if ($SelectFields) {
+        $queryUrl += "&`$select=$([Uri]::EscapeDataString($SelectFields))"
+    }
+    $filterParts = @()
+    if ($StaticFilter) { $filterParts += $StaticFilter }
+    if ($null -ne $ChangedSince -and $DateField) {
         $dateText = ([datetime]$ChangedSince).ToString("yyyy-MM-ddTHH:mm:ss")
-        $filter = [Uri]::EscapeDataString("Period ge datetime'$dateText'")
+        $filterParts += "$DateField ge datetime'$dateText'"
+    }
+    if ($filterParts.Count -gt 0) {
+        $filter = [Uri]::EscapeDataString(($filterParts -join " and "))
         $queryUrl += "&`$filter=$filter"
     }
 
@@ -304,6 +329,34 @@ function Get-ODataPages {
     }
 }
 
+function ConvertTo-ProtectedPhoneHash {
+    param([object]$Value)
+
+    if ($null -eq $Value) { return $null }
+    $digits = ([string]$Value) -replace "[^0-9]", ""
+    if ($digits.Length -eq 11 -and $digits.StartsWith("8")) { $digits = "7" + $digits.Substring(1) }
+    elseif ($digits.Length -eq 10) { $digits = "7" + $digits }
+    if ($digits.Length -lt 10) { return $null }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("+$digits")))).Replace("-", "").ToLowerInvariant()
+    }
+    finally { $sha.Dispose() }
+}
+
+function Protect-OneCRecords {
+    param([object[]]$Records, [string]$PhoneField)
+
+    if (-not $PhoneField) { return @($Records) }
+    foreach ($record in @($Records)) {
+        $property = $record.PSObject.Properties[$PhoneField]
+        $phoneHash = if ($null -ne $property) { ConvertTo-ProtectedPhoneHash -Value $property.Value } else { $null }
+        if ($null -ne $property) { $record.PSObject.Properties.Remove($PhoneField) }
+        $record | Add-Member -NotePropertyName "PhoneHash" -NotePropertyValue $phoneHash -Force
+    }
+    return @($Records)
+}
+
 function Send-RevoraBatch {
     param(
         [Parameter(Mandatory = $true)][string]$Entity,
@@ -316,7 +369,7 @@ function Send-RevoraBatch {
     $json = @{
         entity = $Entity
         records = $Records
-        schema_version = "1c-odata-v3"
+        schema_version = "1c-odata-v4-field-allowlist"
     } | ConvertTo-Json -Depth 30 -Compress
     $body = [Text.Encoding]::UTF8.GetBytes($json)
 
@@ -436,14 +489,17 @@ function Test-Connector {
     }
 
     $entity = @($Config.Entities)[0]
+    $definition = @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $entity })[0]
+    if ($null -eq $definition) { throw "No field allowlist is defined for $entity." }
     $encodedEntity = [Uri]::EscapeDataString($entity)
-    $probeUrl = "$($Config.OneCBaseUrl)/$encodedEntity`?`$format=json&`$top=1&allowedOnly=true"
+    $probeField = ([string]$definition.select -split ",")[0]
+    $probeUrl = "$($Config.OneCBaseUrl)/$encodedEntity`?`$format=json&`$top=1&`$select=$([Uri]::EscapeDataString($probeField))&allowedOnly=true"
     $probe = Invoke-OneCGet -Url $probeUrl -Credential $credential
     if ($null -eq $probe.PSObject.Properties["value"] -and $null -eq $probe.PSObject.Properties["d"]) {
         throw "1C returned an unexpected test response."
     }
     Send-RevoraMetadata -Config $Config | Out-Null
-    Write-ConnectorLog -Message "Connection test passed: OData metadata and first approved register are readable."
+    Write-ConnectorLog -Message "Connection test passed: OData metadata and first allowlisted entity are readable."
 }
 
 function Install-ConnectorTask {
@@ -547,9 +603,13 @@ function Invoke-ConnectorSync {
         try {
             foreach ($entity in @($Config.Entities)) {
                 $entitySent = 0
+                $definition = @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $entity })[0]
+                if ($null -eq $definition) { throw "No field allowlist is defined for $entity." }
                 foreach ($page in Get-ODataPages -Entity $entity -Credential $credential `
-                    -BaseUrl $Config.OneCBaseUrl -ChangedSince $changedSince -ConfiguredPageSize $configuredPageSize) {
-                    $records = @($page.Records)
+                    -BaseUrl $Config.OneCBaseUrl -ChangedSince $changedSince `
+                    -SelectFields $definition.select -DateField $definition.date_field `
+                    -StaticFilter $definition.static_filter -ConfiguredPageSize $configuredPageSize) {
+                    $records = @(Protect-OneCRecords -Records @($page.Records) -PhoneField $definition.protect_phone)
                     if ($records.Count -eq 0) { continue }
                     $result = Send-RevoraBatch -Entity $entity -Records $records -ApiUrl $Config.RevoraApiUrl -Token $token
                     $entitySent += $records.Count

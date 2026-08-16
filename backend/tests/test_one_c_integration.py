@@ -138,8 +138,9 @@ def test_connector_token_round_trip_and_digest() -> None:
     assert token not in digest
 
 
-def test_allowlist_excludes_patient_and_payment_documents() -> None:
-    assert "Catalog_Заявки" not in SAFE_ONE_C_ENTITIES
+def test_allowlist_includes_only_field_protected_operational_sources() -> None:
+    assert "Catalog_Заявки" in SAFE_ONE_C_ENTITIES
+    assert "Catalog_Контрагенты" in SAFE_ONE_C_ENTITIES
     assert "Document_ПоступлениеДенежныхСредств" not in SAFE_ONE_C_ENTITIES
     assert "AccumulationRegister_Выручка_RecordType" in SAFE_ONE_C_ENTITIES
 
@@ -196,10 +197,38 @@ async def test_push_rejects_an_entity_outside_allowlist() -> None:
     with pytest.raises(AppError) as error:
         await service.ingest_one_c_push(
             token,
-            OneCPushRequest(entity="Catalog_Заявки", records=[{"Ref_Key": "pii"}]),
+            OneCPushRequest(
+                entity="Document_ПоступлениеДенежныхСредств",
+                records=[{"Ref_Key": "not-approved"}],
+            ),
         )
 
     assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_server_rejects_raw_patient_phone_even_for_approved_entity() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    service = IntegrationService(
+        FakeOneCRepository(tenant_id, connection_id, digest), FakeOneCWriter()
+    )
+
+    with pytest.raises(AppError) as error:
+        await service.ingest_one_c_push(
+            token,
+            OneCPushRequest(
+                entity="Catalog_Контрагенты",
+                records=[{
+                    "Ref_Key": "patient-1",
+                    "Description": "Пациент",
+                    "Телефон": "+7 700 000 00 00",
+                }],
+            ),
+        )
+
+    assert error.value.status_code == 422
+    assert error.value.code == "ONE_C_FIELDS_NOT_ALLOWED"
 
 
 @pytest.mark.asyncio
@@ -230,6 +259,7 @@ async def test_connector_can_upload_schema_without_patient_rows() -> None:
     assert len(result.fingerprint) == 64
     assert repository.metadata.entities[0]["name"] == "Catalog_Patients"
     assert "records" not in repository.metadata.entities[0]
+    assert repository.connection.settings["allowed_entities"] == list(SAFE_ONE_C_ENTITIES)
 
 
 @pytest.mark.asyncio
