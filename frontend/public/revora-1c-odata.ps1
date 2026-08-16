@@ -268,6 +268,11 @@ function Get-ODataPages {
 
     $encodedEntity = [Uri]::EscapeDataString($Entity)
     $queryUrl = "$BaseUrl/$encodedEntity`?`$format=json&`$top=$ConfiguredPageSize&allowedOnly=true"
+    # 1C can return an unstable physical order for catalogs/documents. Without
+    # an explicit key order, successive $skip pages may contain the same rows.
+    if ($Entity.StartsWith("Catalog_") -or $Entity.StartsWith("Document_")) {
+        $queryUrl += "&`$orderby=Ref_Key"
+    }
     if ($SelectFields) {
         $queryUrl += "&`$select=$([Uri]::EscapeDataString($SelectFields))"
     }
