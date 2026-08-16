@@ -11,6 +11,9 @@ type Profile = { id:string; source_entity:string; target_entity:string; version:
 type OneCToken = { connection_id:string; token:string; allowed_entities:string[] };
 type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; pending_records:number; normalized_records:number; quarantined_records:number; entities:{entity:string;records:number}[] };
 type OneCNormalize = { connection_id:string; processed:number; normalized:number; quarantined:number; remaining:number };
+type OneCMetadataProperty = { name:string; type:string; nullable:boolean|null };
+type OneCMetadataEntity = { name:string; entity_type:string; properties:OneCMetadataProperty[]; navigation_properties:{name:string;relationship:string|null;target_type:string|null}[] };
+type OneCMetadata = { schema_version:string; entities:OneCMetadataEntity[] };
 const example = JSON.stringify({
   external_id:{source_fields:["ID","Код пациента"],required:true,transform:"string"},
   full_name:{source_fields:["ФИО","Пациент"],required:true,transform:"string"},
@@ -96,6 +99,8 @@ function OneCIntegration(){
   const [normalizing,setNormalizing]=useState(false);
   const [normalizeProgress,setNormalizeProgress]=useState<{processed:number;normalized:number;quarantined:number;remaining:number}|null>(null);
   const [normalizeError,setNormalizeError]=useState("");
+  const [showMetadata,setShowMetadata]=useState(false);
+  const [metadataSearch,setMetadataSearch]=useState("");
   useEffect(()=>{if(!connectionId&&oneCConnections[0])setConnectionId(oneCConnections[0].id)},[connectionId,oneCConnections]);
   const create=useMutation({
     mutationFn:()=>api<Connection>("/integrations/connections",{method:"POST",body:JSON.stringify({provider:"1c_odata_push",name:"1С Stoma",settings:{}})}),
@@ -111,8 +116,25 @@ function OneCIntegration(){
     enabled:!!connectionId,
     refetchInterval:15000
   });
+  const metadata=useQuery({
+    queryKey:["one-c-metadata",connectionId],
+    queryFn:()=>api<OneCMetadata>(`/integrations/connections/${connectionId}/1c-metadata`),
+    enabled:!!connectionId&&showMetadata
+  });
   const status=sync.data;
+  const visibleMetadata=(metadata.data?.entities||[]).filter(entity=>{
+    const query=metadataSearch.trim().toLocaleLowerCase("ru-RU");
+    return !query||entity.name.toLocaleLowerCase("ru-RU").includes(query)||entity.properties.some(property=>property.name.toLocaleLowerCase("ru-RU").includes(query));
+  });
   async function copyToken(){if(!token)return;await navigator.clipboard.writeText(token.token);setCopied(true)}
+  function downloadMetadata(){
+    if(!metadata.data)return;
+    const blob=new Blob([JSON.stringify(metadata.data,null,2)],{type:"application/json;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const link=document.createElement("a");
+    link.href=url;link.download="revora-1c-odata-metadata.json";link.click();
+    URL.revokeObjectURL(url);
+  }
   async function normalizeExisting(){
     if(!connectionId||normalizing)return;
     setNormalizing(true);setNormalizeError("");
@@ -151,6 +173,19 @@ function OneCIntegration(){
       </div>}
       {(create.isError||rotate.isError||sync.isError)&&<div className="error-box">{(create.error||rotate.error||sync.error)?.message||"Не удалось выполнить запрос"}</div>}
       {status?.entities.length?<div className="table-wrap"><table><thead><tr><th>Данные 1С</th><th>Сохранено строк</th></tr></thead><tbody>{status.entities.map(x=><tr key={x.entity}><td>{oneCEntityLabels[x.entity]||x.entity}</td><td>{x.records}</td></tr>)}</tbody></table></div>:null}
+      <div className="setup-steps">
+        <div className="inline-form">
+          <button type="button" className="small" onClick={()=>setShowMetadata(value=>!value)}>{showMetadata?"Скрыть структуру OData":"Показать структуру OData"}</button>
+          {metadata.data&&<button type="button" className="small" onClick={downloadMetadata}>Скачать структуру JSON</button>}
+        </div>
+        {showMetadata&&metadata.isLoading&&<p className="hint">Загружаем структуру 1С…</p>}
+        {showMetadata&&metadata.isError&&<div className="error-box">{metadata.error.message}</div>}
+        {metadata.data&&<>
+          <p className="hint">Опубликовано сущностей: <strong>{metadata.data.entities.length}</strong>. Здесь только названия таблиц и полей, без данных пациентов.</p>
+          <input value={metadataSearch} onChange={event=>setMetadataSearch(event.target.value)} placeholder="Поиск таблицы или поля"/>
+          <div className="table-wrap"><table><thead><tr><th>Таблица OData</th><th>Поля</th></tr></thead><tbody>{visibleMetadata.map(entity=><tr key={entity.name}><td><strong>{entity.name}</strong></td><td><details><summary>{entity.properties.length} полей</summary><div className="hint">{entity.properties.map(property=>`${property.name} (${property.type})`).join(", ")}</div></details></td></tr>)}</tbody></table></div>
+        </>}
+      </div>
       <div className="inline-form">
         <button className="primary small" onClick={()=>rotate.mutate()} disabled={rotate.isPending}>{rotate.isPending?"Создаём ключ…":token?"Перевыпустить ключ":"Получить ключ коннектора"}</button>
         <a className="button-link" href="/revora-1c-odata.ps1" download>Скачать коннектор PowerShell</a>
