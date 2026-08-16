@@ -26,6 +26,13 @@ param(
     [Parameter(ParameterSetName = "Run")]
     [switch]$AllHistory,
 
+    [Parameter(ParameterSetName = "Run")]
+    [string]$ResumeEntity,
+
+    [Parameter(ParameterSetName = "Run")]
+    [ValidateRange(0, 100000000)]
+    [int]$ResumeOffset = 0,
+
     [string]$ConfigPath = "$env:LOCALAPPDATA\Revora\one-c-odata.xml",
 
     [ValidateRange(10, 500)]
@@ -73,6 +80,12 @@ $ApprovedEntityDefinitions = @($ApprovedEntityDefinitionBase64 | ForEach-Object 
 # and finance facts are normalized in Revora.
 $ApprovedEntityDefinitions = @($ApprovedEntityDefinitions[8..14] + $ApprovedEntityDefinitions[0..7])
 $ApprovedEntities = @($ApprovedEntityDefinitions | ForEach-Object { $_.entity })
+# The initial import can load the full patient directory. Subsequent runs only
+# need newly registered patients; otherwise every three-hour sync rereads the
+# entire catalog even though 1C exposes a registration date.
+$CounterpartyEntity = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("Q2F0YWxvZ1/QmtC+0L3RgtGA0LDQs9C10L3RgtGL"))
+$CounterpartyRegistrationDateField = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("0JTQsNGC0LDQoNC10LPQuNGB0YLRgNCw0YbQuNC4"))
+@($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $CounterpartyEntity })[0].date_field = $CounterpartyRegistrationDateField
 
 function Write-ConnectorLog {
     param(
@@ -263,14 +276,16 @@ function Get-ODataPages {
         [string]$SelectFields,
         [string]$DateField,
         [string]$StaticFilter,
-        [Parameter(Mandatory = $true)][int]$ConfiguredPageSize
+        [Parameter(Mandatory = $true)][int]$ConfiguredPageSize,
+        [ValidateRange(0, 100000000)][int]$InitialSkip = 0
     )
 
     $encodedEntity = [Uri]::EscapeDataString($Entity)
     $queryUrl = "$BaseUrl/$encodedEntity`?`$format=json&`$top=$ConfiguredPageSize&allowedOnly=true"
     # 1C can return an unstable physical order for catalogs/documents. Without
     # an explicit key order, successive $skip pages may contain the same rows.
-    if ($Entity.StartsWith("Catalog_") -or $Entity.StartsWith("Document_")) {
+    $isReferenceEntity = $Entity.StartsWith("Catalog_") -or $Entity.StartsWith("Document_")
+    if ($isReferenceEntity) {
         $queryUrl += "&`$orderby=Ref_Key"
     }
     if ($SelectFields) {
@@ -282,19 +297,26 @@ function Get-ODataPages {
         $dateText = ([datetime]$ChangedSince).ToString("yyyy-MM-ddTHH:mm:ss")
         $filterParts += "$DateField ge datetime'$dateText'"
     }
-    if ($filterParts.Count -gt 0) {
-        $filter = [Uri]::EscapeDataString(($filterParts -join " and "))
-        $queryUrl += "&`$filter=$filter"
-    }
-
     # 1C treats $top as the total result limit and does not necessarily emit
-    # odata.nextLink. Page explicitly with $skip so a register containing more
-    # than one batch is always read completely.
-    $skip = 0
-    $pageNumber = 0
+    # odata.nextLink. Registers use $skip. Catalogs/documents switch to a key
+    # cursor after the first page, avoiding increasingly expensive large skips.
+    $skip = $InitialSkip
+    $pageNumber = [int][Math]::Floor($InitialSkip / $ConfiguredPageSize)
     $previousFingerprint = $null
+    $lastReferenceKey = $null
     while ($true) {
-        $url = "$queryUrl&`$skip=$skip"
+        $pageFilterParts = @($filterParts)
+        if ($isReferenceEntity -and $lastReferenceKey) {
+            $pageFilterParts += "Ref_Key gt guid'$lastReferenceKey'"
+        }
+        $url = $queryUrl
+        if ($pageFilterParts.Count -gt 0) {
+            $filter = [Uri]::EscapeDataString(($pageFilterParts -join " and "))
+            $url += "&`$filter=$filter"
+        }
+        if (-not $isReferenceEntity -or -not $lastReferenceKey) {
+            $url += "&`$skip=$skip"
+        }
         $response = Invoke-OneCGet -Url $url -Credential $Credential
         $valueProperty = $response.PSObject.Properties["value"]
         $dProperty = $response.PSObject.Properties["d"]
@@ -326,6 +348,14 @@ function Get-ODataPages {
                 throw "1C returned the same OData page twice for $Entity; paging was stopped safely."
             }
             $previousFingerprint = $fingerprint
+            if ($isReferenceEntity) {
+                $keyProperty = $records[-1].PSObject.Properties["Ref_Key"]
+                if ($null -eq $keyProperty -or -not $keyProperty.Value) {
+                    throw "1C omitted Ref_Key required for safe paging of $Entity."
+                }
+                try { $lastReferenceKey = ([guid]$keyProperty.Value).ToString() }
+                catch { throw "1C returned an invalid Ref_Key while paging $Entity." }
+            }
         }
         Write-ConnectorLog -Message "${Entity}: page=$pageNumber, read=$($records.Count), offset=$skip"
         Write-Output -NoEnumerate ([pscustomobject]@{ Records = $records })
@@ -606,27 +636,50 @@ function Invoke-ConnectorSync {
         $totalDuplicates = 0
 
         try {
+            if ($ResumeOffset -gt 0 -and -not $ResumeEntity) {
+                throw "-ResumeOffset requires -ResumeEntity."
+            }
+            if ($ResumeEntity -and $ResumeEntity -notin @($Config.Entities)) {
+                throw "Resume entity '$ResumeEntity' is not enabled in the connector configuration."
+            }
+            $waitingForResumeEntity = [bool]$ResumeEntity
             foreach ($entity in @($Config.Entities)) {
+                if ($waitingForResumeEntity -and $entity -ne $ResumeEntity) { continue }
                 $entitySent = 0
+                $entityInitialSkip = if ($waitingForResumeEntity) { $ResumeOffset } else { 0 }
+                # A resumed initial import must keep the same unfiltered catalog
+                # that produced the saved offset. Normal future runs use dates.
+                $entityChangedSince = if ($waitingForResumeEntity -and $ResumeOffset -gt 0) { $null } else { $changedSince }
+                $waitingForResumeEntity = $false
                 $definition = @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $entity })[0]
                 if ($null -eq $definition) { throw "No field allowlist is defined for $entity." }
                 # Use the pipeline so every OData page is uploaded immediately.
                 # A regular foreach expression materializes all pages first and
                 # can leave the console silent for a long time during upload.
                 Get-ODataPages -Entity $entity -Credential $credential `
-                    -BaseUrl $Config.OneCBaseUrl -ChangedSince $changedSince `
+                    -BaseUrl $Config.OneCBaseUrl -ChangedSince $entityChangedSince `
                     -SelectFields $definition.select -DateField $definition.date_field `
-                    -StaticFilter $definition.static_filter -ConfiguredPageSize $configuredPageSize |
+                    -StaticFilter $definition.static_filter -ConfiguredPageSize $configuredPageSize `
+                    -InitialSkip $entityInitialSkip |
                 ForEach-Object {
                     $page = $_
                     $records = @(Protect-OneCRecords -Records @($page.Records) -PhoneField $definition.protect_phone)
                     if ($records.Count -eq 0) { continue }
-                    $result = Send-RevoraBatch -Entity $entity -Records $records -ApiUrl $Config.RevoraApiUrl -Token $token
-                    $entitySent += $records.Count
-                    $totalSent += $records.Count
-                    $totalStored += [int]$result.records_stored
-                    $totalDuplicates += [int]$result.records_duplicate
-                    Write-ConnectorLog -Message "${entity}: uploaded=$entitySent, stored=$($result.records_stored), duplicates=$($result.records_duplicate)"
+                    # Patient normalization is intentionally more expensive than
+                    # raw register ingestion. Smaller upload chunks stay below
+                    # proxy/request timeouts while retaining OData page size.
+                    $uploadBatchSize = if ($entity -eq $CounterpartyEntity) { 50 } else { $records.Count }
+                    for ($batchStart = 0; $batchStart -lt $records.Count; $batchStart += $uploadBatchSize) {
+                        $batchEnd = [Math]::Min($batchStart + $uploadBatchSize - 1, $records.Count - 1)
+                        $batch = @($records[$batchStart..$batchEnd])
+                        $result = Send-RevoraBatch -Entity $entity -Records $batch -ApiUrl $Config.RevoraApiUrl -Token $token
+                        $entitySent += $batch.Count
+                        $totalSent += $batch.Count
+                        $totalStored += [int]$result.records_stored
+                        $totalDuplicates += [int]$result.records_duplicate
+                        $uploadedThrough = $entityInitialSkip + $entitySent
+                        Write-ConnectorLog -Message "${entity}: uploaded_through=$uploadedThrough, stored=$($result.records_stored), duplicates=$($result.records_duplicate)"
+                    }
                 }
                 Write-ConnectorLog -Message "${entity}: sent=$entitySent"
             }
