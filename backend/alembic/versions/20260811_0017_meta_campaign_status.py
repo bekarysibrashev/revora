@@ -14,8 +14,13 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("meta_campaign_daily_metrics", sa.Column("status", sa.String(length=40), nullable=False, server_default="UNKNOWN"))
-    op.add_column("meta_campaign_daily_metrics", sa.Column("effective_status", sa.String(length=40), nullable=False, server_default="UNKNOWN"))
+    table = "meta_campaign_daily_metrics"
+    inspector = sa.inspect(op.get_bind())
+    columns = {column["name"] for column in inspector.get_columns(table)}
+    if "status" not in columns:
+        op.add_column(table, sa.Column("status", sa.String(length=40), nullable=False, server_default="UNKNOWN"))
+    if "effective_status" not in columns:
+        op.add_column(table, sa.Column("effective_status", sa.String(length=40), nullable=False, server_default="UNKNOWN"))
 
 
 def downgrade() -> None:

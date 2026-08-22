@@ -18,6 +18,10 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     table = "meta_campaign_daily_metrics"
+    inspector = sa.inspect(op.get_bind())
+    existing_columns = {
+        column["name"] for column in inspector.get_columns(table)
+    }
     for name in (
         "unique_clicks",
         "outbound_clicks",
@@ -27,20 +31,22 @@ def upgrade() -> None:
         "video_plays",
         "video_thruplays",
     ):
-        op.add_column(
-            table,
-            sa.Column(name, sa.Integer(), nullable=False, server_default="0"),
-        )
+        if name not in existing_columns:
+            op.add_column(
+                table,
+                sa.Column(name, sa.Integer(), nullable=False, server_default="0"),
+            )
     for name in ("action_values", "outbound_clicks_raw"):
-        op.add_column(
-            table,
-            sa.Column(
-                name,
-                postgresql.JSONB(astext_type=sa.Text()),
-                nullable=False,
-                server_default=sa.text("'[]'::jsonb"),
-            ),
-        )
+        if name not in existing_columns:
+            op.add_column(
+                table,
+                sa.Column(
+                    name,
+                    postgresql.JSONB(astext_type=sa.Text()),
+                    nullable=False,
+                    server_default=sa.text("'[]'::jsonb"),
+                ),
+            )
 
 
 def downgrade() -> None:
