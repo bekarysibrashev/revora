@@ -13,9 +13,15 @@ branch_labels = None
 depends_on = None
 
 def upgrade() -> None:
-    op.add_column("calls", sa.Column("external_user", sa.String(length=150), nullable=True))
-    op.add_column("calls", sa.Column("recording_url", sa.Text(), nullable=True))
-    op.create_index("ix_calls_external_user", "calls", ["external_user"])
+    inspector = sa.inspect(op.get_bind())
+    call_columns = {column["name"] for column in inspector.get_columns("calls")}
+    if "external_user" not in call_columns:
+        op.add_column("calls", sa.Column("external_user", sa.String(length=150), nullable=True))
+    if "recording_url" not in call_columns:
+        op.add_column("calls", sa.Column("recording_url", sa.Text(), nullable=True))
+    call_indexes = {index["name"] for index in inspector.get_indexes("calls")}
+    if "ix_calls_external_user" not in call_indexes:
+        op.create_index("ix_calls_external_user", "calls", ["external_user"])
     op.create_table("kcell_webhook_receipts", sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False), sa.Column("call_id", sa.String(length=200), nullable=False), sa.Column("command", sa.String(length=50), nullable=False), sa.Column("payload", postgresql.JSONB(), nullable=False), sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False), sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False), sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False), sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"), sa.PrimaryKeyConstraint("id"), sa.UniqueConstraint("tenant_id", "call_id", "command"))
     op.create_index("ix_kcell_webhook_receipts_tenant_id", "kcell_webhook_receipts", ["tenant_id"])
     op.create_index("ix_kcell_webhook_receipts_call_id", "kcell_webhook_receipts", ["call_id"])

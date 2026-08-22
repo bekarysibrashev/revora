@@ -12,7 +12,10 @@ branch_labels = None
 depends_on = None
 
 def upgrade() -> None:
-    op.add_column("calls", sa.Column("phone_masked", sa.String(length=30), nullable=True))
+    inspector = sa.inspect(op.get_bind())
+    columns = {column["name"] for column in inspector.get_columns("calls")}
+    if "phone_masked" not in columns:
+        op.add_column("calls", sa.Column("phone_masked", sa.String(length=30), nullable=True))
 
 def downgrade() -> None:
     op.drop_column("calls", "phone_masked")

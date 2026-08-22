@@ -15,10 +15,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "appointments",
-        sa.Column("is_primary", sa.Boolean(), server_default=sa.false(), nullable=False),
-    )
+    inspector = sa.inspect(op.get_bind())
+    appointment_columns = {
+        column["name"] for column in inspector.get_columns("appointments")
+    }
+    if "is_primary" not in appointment_columns:
+        op.add_column(
+            "appointments",
+            sa.Column("is_primary", sa.Boolean(), server_default=sa.false(), nullable=False),
+        )
     op.create_table(
         "payroll_facts",
         sa.Column("id", sa.UUID(), nullable=False),
