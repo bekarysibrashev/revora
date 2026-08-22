@@ -44,7 +44,7 @@ class AnalystToolRegistry:
         self._tools = {
             item.name: item for item in (
                 AnalystTool("finance_summary", "Финансовая сводка", "Начисленная и оплаченная выручка, расходы, прибыль, денежный поток и остаток.", MANAGEMENT, finance.summary),
-                AnalystTool("pnl", "Прибыли и убытки", "Выручка и расходы по категориям, валовая прибыль, EBITDA и чистая прибыль.", MANAGEMENT, finance.pnl),
+                AnalystTool("pnl", "Прибыли и убытки", "Выручка, расходы по категориям и управленческий результат с явным признаком полноты данных.", MANAGEMENT, finance.pnl),
                 AnalystTool("cashflow", "Движение денег", "Поступления, списания, чистый денежный поток и остаток.", MANAGEMENT, finance.cashflow),
                 AnalystTool("sales_overview", "Продажи и записи", "Лиды, конверсия, статусы записей, неявки и оплаченная выручка в разрешённом scope.", ALL, sales.overview),
                 AnalystTool("doctors_overview", "Эффективность врачей", "Нагрузка, завершение записей, выручка и рейтинги врачей.", OPERATIONS, doctors.overview),

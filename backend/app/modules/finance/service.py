@@ -29,16 +29,31 @@ class FinanceService:
         )
         gross_profit = totals.revenue_accrual - totals.variable_expenses
         net_profit = totals.revenue_accrual - total_expenses
+        classified_expenses = totals.variable_expenses + totals.fixed_expenses
+        classification_rate = (
+            classified_expenses / total_expenses if total_expenses else Decimal("0")
+        )
+        # Revora does not yet receive dedicated tax, bank-fee and depreciation
+        # ledgers. Even a 100% category match therefore cannot certify net profit.
+        profit_is_complete = False
         return PnlResponse(
             revenue_accrual=totals.revenue_accrual,
             revenue_payment=totals.revenue_payment,
             variable_expenses=totals.variable_expenses,
             fixed_expenses=totals.fixed_expenses,
             uncategorized_expenses=totals.uncategorized_expenses,
+            payroll_accrual=totals.payroll_accrual,
             total_expenses=total_expenses,
             gross_profit=gross_profit,
             ebitda=net_profit,
             net_profit=net_profit,
+            expense_classification_rate=classification_rate,
+            profit_is_complete=profit_is_complete,
+            profit_label=(
+                "Чистая прибыль"
+                if profit_is_complete
+                else "Операционная прибыль по доступным данным"
+            ),
             meta=AnalyticsMeta(
                 date_from=date_from,
                 date_to=date_to,

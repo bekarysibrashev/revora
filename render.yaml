@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: revora-api-bekarysibrashev
+    name: revora-san-api
     runtime: python
     plan: free
     region: frankfurt
@@ -10,13 +10,15 @@ services:
     healthCheckPath: /ready
     initialDeployHook: >-
       python -m app.cli.create_initial_owner
-      --tenant-name "Demo Clinic"
-      --tenant-slug demo
-      --branch-name "Main Branch"
-      --branch-code main
-      --email "$DEMO_OWNER_EMAIL"
-      --full-name "Clinic Owner"
-      --password "$DEMO_OWNER_PASSWORD"
+      --tenant-name "SAN Dental"
+      --tenant-slug sandental
+      --branch-name "Сейфуллина"
+      --branch-code seifullina
+      --extra-branch-name "Батыс Мура"
+      --extra-branch-code batys-mura
+      --email "$INITIAL_OWNER_EMAIL"
+      --full-name "Владелец SAN Dental"
+      --password "$INITIAL_OWNER_PASSWORD"
     envVars:
       - key: APP_ENV
         value: production
@@ -24,17 +26,17 @@ services:
         value: "false"
       - key: DATABASE_URL
         fromDatabase:
-          name: revora-db-bekarysibrashev
+          name: revora-san-db
           property: connectionString
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: MINIO_SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://revora-web-bekarysibrashev.onrender.com,https://revoradent.netlify.app
-      - key: DEMO_OWNER_EMAIL
+        value: https://revora-san-web.onrender.com
+      - key: INITIAL_OWNER_EMAIL
         sync: false
-      - key: DEMO_OWNER_PASSWORD
+      - key: INITIAL_OWNER_PASSWORD
         sync: false
       - key: LOGIN_MAX_ATTEMPTS
         value: "5"
@@ -51,7 +53,17 @@ services:
       - key: META_GRAPH_API_VERSION
         value: v25.0
       - key: META_TENANT_SLUG
-        value: test1
+        value: sandental
+      - key: META_ATTRIBUTION_WINDOWS
+        value: 7d_click,1d_view
+      - key: META_ACTION_REPORT_TIME
+        value: impression
+      - key: META_AUTO_SYNC_ENABLED
+        value: "true"
+      - key: META_AUTO_SYNC_INTERVAL_MINUTES
+        value: "180"
+      - key: META_AUTO_SYNC_LOOKBACK_DAYS
+        value: "30"
       - key: OPENAI_API_KEY
         sync: false
       - key: ANALYST_AI_PROVIDER
@@ -93,7 +105,7 @@ services:
       - key: WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID
         value: "2277685509673688"
       - key: WHATSAPP_TENANT_SLUG
-        value: test1
+        value: sandental
       - key: WHATSAPP_GRAPH_API_VERSION
         value: v25.0
       - key: WHATSAPP_AI_PROVIDER
@@ -110,16 +122,16 @@ services:
         value: "550"
 
   - type: web
-    name: revora-web-bekarysibrashev
+    name: revora-san-web
     runtime: static
     buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/out
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        value: https://revora-api-bekarysibrashev.onrender.com/api/v1
+        value: https://revora-san-api.onrender.com/api/v1
 
 databases:
-  - name: revora-db-bekarysibrashev
+  - name: revora-san-db
     plan: free
     region: frankfurt
     postgresMajorVersion: "16"

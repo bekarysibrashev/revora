@@ -73,10 +73,14 @@ class MetaAdsClient:
         access_token: str,
         graph_api_version: str,
         *,
+        attribution_windows: list[str] | None = None,
+        action_report_time: str = "impression",
         timeout_seconds: float = 30,
     ) -> None:
         self.access_token = access_token
         self.base_url = f"https://graph.facebook.com/{graph_api_version}"
+        self.attribution_windows = attribution_windows or ["7d_click", "1d_view"]
+        self.action_report_time = action_report_time
         self.timeout_seconds = timeout_seconds
 
     async def account(self, account_id: str) -> MetaAccountData:
@@ -103,6 +107,8 @@ class MetaAdsClient:
             "time_range": json.dumps(
                 {"since": date_from.isoformat(), "until": date_to.isoformat()}
             ),
+            "action_attribution_windows": json.dumps(self.attribution_windows),
+            "action_report_time": self.action_report_time,
             "limit": 500,
         }
         result: list[MetaCampaignDay] = []

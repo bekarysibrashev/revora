@@ -24,10 +24,14 @@ def pnl():
         variable_expenses=Decimal("200000"),
         fixed_expenses=Decimal("300000"),
         uncategorized_expenses=Decimal("50000"),
+        payroll_accrual=Decimal("250000"),
         total_expenses=Decimal("550000"),
         gross_profit=Decimal("800000"),
         ebitda=Decimal("450000"),
         net_profit=Decimal("450000"),
+        expense_classification_rate=Decimal("0.9091"),
+        profit_is_complete=False,
+        profit_label="Operating profit from available data",
         meta=meta(),
     )
 

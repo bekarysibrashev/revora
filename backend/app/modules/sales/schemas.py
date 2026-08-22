@@ -24,6 +24,9 @@ class SalesOverviewResponse(BaseModel):
     appointments_completed: int
     appointments_cancelled: int
     appointments_no_show: int
+    patients_total: int
+    patients_primary: int
+    patients_repeat: int
     appointment_completion_rate: Decimal
     paid_revenue: Decimal
     meta: SalesMeta

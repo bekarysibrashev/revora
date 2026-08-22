@@ -9,6 +9,7 @@ from app.modules.marketing.dependencies import get_marketing_service
 from app.modules.marketing.schemas import (
     MarketingOverviewResponse,
     MetaAdsOverviewResponse,
+    MetaAdsReconciliationResponse,
     MetaAdsStatusResponse,
     MetaAdsSyncResponse,
 )
@@ -56,3 +57,13 @@ async def synchronize_meta_ads(
     service: MarketingServiceDependency,
 ) -> MetaAdsSyncResponse:
     return await service.sync_meta(user, date_from, date_to)
+
+
+@router.get("/meta/reconcile", response_model=MetaAdsReconciliationResponse)
+async def reconcile_meta_ads(
+    date_from: date,
+    date_to: date,
+    user: CurrentUser,
+    service: MarketingServiceDependency,
+) -> MetaAdsReconciliationResponse:
+    return await service.reconcile_meta(user, date_from, date_to)

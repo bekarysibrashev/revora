@@ -9,8 +9,8 @@ type User = { id:string; email:string; full_name:string; role:string; branch_ids
 type Connection = { id:string; name:string; provider:string; status:string; settings?:Record<string,unknown> };
 type Profile = { id:string; source_entity:string; target_entity:string; version:number; is_active:boolean; rules:Record<string,unknown> };
 type OneCToken = { connection_id:string; token:string; allowed_entities:string[] };
-type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; pending_records:number; normalized_records:number; quarantined_records:number; entities:{entity:string;records:number}[] };
-type OneCNormalize = { connection_id:string; processed:number; normalized:number; quarantined:number; remaining:number };
+type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; pending_records:number; normalized_records:number; quarantined_records:number; entities:{entity:string;records:number}[]; branch_mappings:{structural_unit_key:string;structural_unit_name:string;branch_code:string}[] };
+type OneCNormalize = { connection_id:string; reset:number; processed:number; normalized:number; quarantined:number; remaining:number };
 type OneCMetadataProperty = { name:string; type:string; nullable:boolean|null };
 type OneCMetadataEntity = { name:string; entity_type:string; properties:OneCMetadataProperty[]; navigation_properties:{name:string;relationship:string|null;target_type:string|null}[] };
 type OneCMetadata = { schema_version:string; entities:OneCMetadataEntity[] };
@@ -86,7 +86,9 @@ const oneCEntityLabels:Record<string,string>={
   "AccumulationRegister_Продажи_RecordType":"Продажи",
   "AccumulationRegister_ПродажиСебестоимость_RecordType":"Себестоимость продаж",
   "AccumulationRegister_РабочееВремяСотрудников_RecordType":"Рабочее время",
-  "AccumulationRegister_РасчетыСПерсоналом_RecordType":"Расчёты с персоналом"
+  "AccumulationRegister_РасчетыСПерсоналом_RecordType":"Расчёты с персоналом",
+  "Catalog_СтруктурныеЕдиницы":"Филиалы 1С",
+  "Document_НачислениеЗарплаты":"Начисление зарплаты"
 };
 
 function OneCIntegration(){
@@ -135,14 +137,17 @@ function OneCIntegration(){
     link.href=url;link.download="revora-1c-odata-metadata.json";link.click();
     URL.revokeObjectURL(url);
   }
-  async function normalizeExisting(){
+  async function normalizeExisting(resetExisting=false){
     if(!connectionId||normalizing)return;
+    if(resetExisting&&!confirm("Пересчитать канонические показатели 1С за последние 90 дней? Исходные данные не удаляются."))return;
     setNormalizing(true);setNormalizeError("");
     let totals={processed:0,normalized:0,quarantined:0,remaining:status?.pending_records||0};
     setNormalizeProgress(totals);
     try{
+      let first=true;
       for(;;){
-        const batch=await api<OneCNormalize>(`/integrations/connections/${connectionId}/normalize-1c`,{method:"POST",body:JSON.stringify({history_days:90,batch_size:500})});
+        const batch=await api<OneCNormalize>(`/integrations/connections/${connectionId}/normalize-1c`,{method:"POST",body:JSON.stringify({history_days:90,batch_size:500,reset_existing:resetExisting&&first})});
+        first=false;
         totals={processed:totals.processed+batch.processed,normalized:totals.normalized+batch.normalized,quarantined:totals.quarantined+batch.quarantined,remaining:batch.remaining};
         setNormalizeProgress(totals);
         if(batch.remaining===0||batch.processed===0)break;
@@ -165,12 +170,24 @@ function OneCIntegration(){
         <span>Ожидают обработки: <strong>{status.pending_records||0}</strong></span>
         <span>Нужна проверка: <strong>{status.quarantined_records||0}</strong></span>
       </div>}
+      {status&&<div className="setup-steps">
+        <p><strong>Разделение 1С по филиалам:</strong></p>
+        {status.branch_mappings.length===2
+          ? <p className="success-box">{status.branch_mappings.map(x=>`${x.structural_unit_name} → ${x.branch_code}`).join(" · ")}</p>
+          : <p className="error-box">Ожидаются два сопоставленных филиала. Сначала синхронизируйте справочник «Структурные единицы» из 1С.</p>}
+      </div>}
       {!!status?.pending_records&&<div className="setup-steps">
         <p><strong>Сырые строки уже сохранены, но ещё не участвуют в дашбордах.</strong> Revora безопасно сопоставит выручку, продажи, затраты и движение денег за последние 90 дней. Неоднозначные строки не попадут в суммы.</p>
-        <button className="primary small" onClick={normalizeExisting} disabled={normalizing}>{normalizing?"Обрабатываем данные 1С…":"Добавить данные 1С в аналитику"}</button>
+        <button className="primary small" onClick={()=>normalizeExisting(false)} disabled={normalizing}>{normalizing?"Обрабатываем данные 1С…":"Добавить данные 1С в аналитику"}</button>
         {normalizeProgress&&<p className="hint">Обработано: {normalizeProgress.processed}. Добавлено в аналитику: {normalizeProgress.normalized}. Нужна проверка: {normalizeProgress.quarantined}. Осталось: {normalizeProgress.remaining}.</p>}
         {normalizeError&&<div className="error-box">{normalizeError}</div>}
       </div>}
+      <div className="setup-steps">
+        <p><strong>Пересчёт после обновления правил аналитики.</strong> Повторно сопоставляет уже загруженные строки 1С за 90 дней, не удаляя исходные данные.</p>
+        <button className="small" onClick={()=>normalizeExisting(true)} disabled={normalizing}>{normalizing?"Пересчитываем…":"Пересчитать аналитику 1С"}</button>
+        {normalizeProgress&&<p className="hint">Обработано: {normalizeProgress.processed}. Добавлено в аналитику: {normalizeProgress.normalized}. Нужна проверка: {normalizeProgress.quarantined}. Осталось: {normalizeProgress.remaining}.</p>}
+        {normalizeError&&<div className="error-box">{normalizeError}</div>}
+      </div>
       {(create.isError||rotate.isError||sync.isError)&&<div className="error-box">{(create.error||rotate.error||sync.error)?.message||"Не удалось выполнить запрос"}</div>}
       {status?.entities.length?<div className="table-wrap"><table><thead><tr><th>Данные 1С</th><th>Сохранено строк</th></tr></thead><tbody>{status.entities.map(x=><tr key={x.entity}><td>{oneCEntityLabels[x.entity]||x.entity}</td><td>{x.records}</td></tr>)}</tbody></table></div>:null}
       <div className="setup-steps">

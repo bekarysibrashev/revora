@@ -20,7 +20,14 @@ REVENUE_ENTITY = "AccumulationRegister_Выручка_RecordType"
 MONEY_ENTITY = "AccumulationRegister_ДенежныеСредства_RecordType"
 EXPENSE_ENTITY = "AccumulationRegister_Затраты_RecordType"
 SALES_ENTITY = "AccumulationRegister_Продажи_RecordType"
-MAPPABLE_ONE_C_ENTITIES = (REVENUE_ENTITY, MONEY_ENTITY, EXPENSE_ENTITY, SALES_ENTITY)
+PAYROLL_ENTITY = "Document_НачислениеЗарплаты"
+MAPPABLE_ONE_C_ENTITIES = (
+    REVENUE_ENTITY,
+    MONEY_ENTITY,
+    EXPENSE_ENTITY,
+    SALES_ENTITY,
+    PAYROLL_ENTITY,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,9 +59,17 @@ def normalize_one_c_finance_record(
 
     normalized = {_normalize_key(key): value for key, value in payload.items()}
     issues: list[MappingIssue] = []
-    occurred_at = _period(normalized, issues)
-    amount = _amount(normalized, issues)
+    if source_entity == PAYROLL_ENTITY:
+        occurred_at = _payroll_period(normalized, issues)
+        amount = _amount_from_aliases(normalized, issues, "СуммаДокумента")
+    else:
+        occurred_at = _period(normalized, issues)
+        amount = _amount(normalized, issues)
     if payload.get("Active") is False:
+        amount = Decimal("0")
+    if source_entity == PAYROLL_ENTITY and (
+        payload.get("DeletionMark") is True or payload.get("Posted") is False
+    ):
         amount = Decimal("0")
 
     external_id = "1c:" + sha256(
@@ -74,6 +89,10 @@ def normalize_one_c_finance_record(
                     field_name="branch_code",
                 )
             )
+        if source_entity == REVENUE_ENTITY and not _is_actual_patient_payment(normalized):
+            # Keep an excluded row as a zero-valued fact. Reprocessing can then
+            # safely correct canonical rows created by an older broader mapper.
+            amount = Decimal("0")
         base.update(
             {
                 "branch_code": branch_code,
@@ -86,7 +105,33 @@ def normalize_one_c_finance_record(
         )
         return OneCFinanceMapping("revenue_fact", base, issues)
 
+    if source_entity == PAYROLL_ENTITY:
+        if not branch_code:
+            issues.append(
+                MappingIssue(
+                    code="ONE_C_BRANCH_MAPPING_REQUIRED",
+                    message="A single/default Revora branch is required for 1C payroll",
+                    field_name="branch_code",
+                )
+            )
+        base.update(
+            {
+                "branch_code": branch_code,
+                "occurred_on": occurred_at.date() if occurred_at else None,
+                "amount": amount,
+            }
+        )
+        return OneCFinanceMapping("payroll_fact", base, issues)
+
     if source_entity == EXPENSE_ENTITY:
+        if not branch_code:
+            issues.append(
+                MappingIssue(
+                    code="ONE_C_BRANCH_MAPPING_REQUIRED",
+                    message="A Revora branch mapping is required for 1C expenses",
+                    field_name="branch_code",
+                )
+            )
         category = _text_value(
             normalized,
             "СтатьяЗатрат",
@@ -101,11 +146,20 @@ def normalize_one_c_finance_record(
                 "occurred_on": occurred_at.date() if occurred_at else None,
                 "amount": amount,
                 "category_name": category or "1С: Затраты",
+                "cost_behavior": _expense_cost_behavior(category),
                 "description": operation or "Затраты из 1С",
             }
         )
         return OneCFinanceMapping("expense_fact", base, issues)
 
+    if not branch_code:
+        issues.append(
+            MappingIssue(
+                code="ONE_C_BRANCH_MAPPING_REQUIRED",
+                message="A Revora branch mapping is required for 1C cash flow",
+                field_name="branch_code",
+            )
+        )
     direction = _cash_direction(normalized, amount, issues)
     base.update(
         {
@@ -210,6 +264,56 @@ def _amount(
             )
         )
         return None
+    return _decimal_value(raw, key, issues)
+
+
+def _amount_from_aliases(
+    source: dict[str, object], issues: list[MappingIssue], *aliases: str
+) -> Decimal | None:
+    key, raw = _find(source, *aliases)
+    if raw is None:
+        issues.append(
+            MappingIssue(
+                code="ONE_C_AMOUNT_MISSING",
+                message="1C row has no recognizable amount field",
+                field_name="/".join(aliases),
+            )
+        )
+        return None
+    return _decimal_value(raw, key, issues)
+
+
+def _payroll_period(
+    source: dict[str, object], issues: list[MappingIssue]
+) -> datetime | None:
+    _, raw = _find(source, "ДатаОкончанияПериода", "ДатаНачалаПериода", "Date")
+    if raw is None:
+        issues.append(
+            MappingIssue(
+                code="ONE_C_PERIOD_MISSING",
+                message="1C payroll document has no accounting period",
+                field_name="ДатаОкончанияПериода",
+            )
+        )
+        return None
+    try:
+        value = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw).strip())
+        return value if value.tzinfo else value.replace(tzinfo=timezone(timedelta(hours=5)))
+    except (TypeError, ValueError) as exc:
+        issues.append(
+            MappingIssue(
+                code="ONE_C_PERIOD_INVALID",
+                message=f"Cannot convert 1C payroll period: {exc}",
+                field_name="ДатаОкончанияПериода",
+                raw_value=raw,
+            )
+        )
+        return None
+
+
+def _decimal_value(
+    raw: object, key: str | None, issues: list[MappingIssue]
+) -> Decimal | None:
     try:
         if isinstance(raw, bool):
             raise InvalidOperation("boolean is not an amount")
@@ -246,6 +350,56 @@ def _reference_value(source: dict[str, object], *aliases: str) -> str | None:
     if not text or text == "00000000-0000-0000-0000-000000000000":
         return None
     return text
+
+
+def _is_actual_patient_payment(source: dict[str, object]) -> bool:
+    operation = _text_value(source, "ВидОперации")
+    normalized = _normalize_key(operation or "")
+    return any(
+        marker in normalized
+        for marker in (
+            "оплатаотпациента",
+            "взносналицевойсчет",
+            "возвратоплатыпациенту",
+        )
+    )
+
+
+def _expense_cost_behavior(category: str | None) -> str | None:
+    text = _normalize_key(category or "").replace("ё", "е")
+    if any(
+        marker in text
+        for marker in (
+            "лаборатор",
+            "материал",
+            "медикамент",
+            "расходн",
+            "себестоим",
+            "медицинскогоперсонала",
+        )
+    ):
+        return "variable"
+    if any(
+        marker in text
+        for marker in (
+            "аренд",
+            "реклам",
+            "коммуналь",
+            "бухгалтер",
+            "юридическ",
+            "офис",
+            "ремонт",
+            "обслуживаниеоборудования",
+            "телефон",
+            "интернет",
+            "транспорт",
+            "курьер",
+            "корпоратив",
+            "административ",
+        )
+    ):
+        return "fixed"
+    return None
 
 
 def _cash_direction(

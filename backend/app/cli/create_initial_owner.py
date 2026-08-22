@@ -22,8 +22,18 @@ async def create_initial_owner(args: argparse.Namespace) -> None:
         await session.flush()
         await AuthRepository(session).set_tenant_context(tenant.id)
 
-        branch = Branch(tenant_id=tenant.id, name=args.branch_name, code=args.branch_code)
-        session.add(branch)
+        branches = [
+            Branch(tenant_id=tenant.id, name=args.branch_name, code=args.branch_code)
+        ]
+        if args.extra_branch_name and args.extra_branch_code:
+            branches.append(
+                Branch(
+                    tenant_id=tenant.id,
+                    name=args.extra_branch_name,
+                    code=args.extra_branch_code,
+                )
+            )
+        session.add_all(branches)
         await session.flush()
 
         owner = User(
@@ -36,7 +46,9 @@ async def create_initial_owner(args: argparse.Namespace) -> None:
         )
         session.add(owner)
         await session.flush()
-        session.add(UserBranch(user_id=owner.id, branch_id=branch.id))
+        session.add_all(
+            UserBranch(user_id=owner.id, branch_id=branch.id) for branch in branches
+        )
 
     print(f"Created tenant '{tenant.slug}' and owner '{owner.email}'.")
 
@@ -47,12 +59,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tenant-slug", required=True)
     parser.add_argument("--branch-name", required=True)
     parser.add_argument("--branch-code", required=True)
+    parser.add_argument("--extra-branch-name")
+    parser.add_argument("--extra-branch-code")
     parser.add_argument("--email", required=True)
     parser.add_argument("--full-name", required=True)
     parser.add_argument("--password", required=True)
     args = parser.parse_args()
     if len(args.password) < 8:
         parser.error("--password must contain at least 8 characters")
+    if bool(args.extra_branch_name) != bool(args.extra_branch_code):
+        parser.error("--extra-branch-name and --extra-branch-code must be used together")
     return args
 
 

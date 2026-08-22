@@ -1,13 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { api } from "@/shared/api-client";
 import {
-  AsOf,
   DataState,
   DateFilters,
   Metric,
@@ -30,18 +29,14 @@ type Overview = {
 };
 
 type MetaStatus = {
-  configured: boolean;
-  requested_account_ids: string[];
   accounts: {
     external_account_id: string;
     name: string;
     account_status: number;
     currency: string;
     timezone_name: string;
-    last_synced_at: string | null;
     last_error: string | null;
   }[];
-  last_synced_at: string | null;
 };
 
 type MetaOverview = {
@@ -148,26 +143,12 @@ type MetaOverview = {
   data_as_of: string | null;
 };
 
-type SyncResult = {
-  accounts_synced: number;
-  rows_written: number;
-  synced_at: string;
-};
-
 function currency(value: string | number, code = "USD") {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency: code,
     maximumFractionDigits: 2,
   }).format(Number(value || 0));
-}
-
-function ratio(value: string | null) {
-  return value === null
-    ? "—"
-    : `${(Number(value) * 100).toLocaleString("ru-RU", {
-        maximumFractionDigits: 2,
-      })}%`;
 }
 
 function change(value: string | null, inverse = false) {
@@ -202,7 +183,6 @@ export default function MarketingPage() {
   const selectedAccount = search.get("meta_account_id") || "";
   const metaQuery = new URLSearchParams(query);
   if (selectedAccount) metaQuery.set("account_id", selectedAccount);
-  const queryClient = useQueryClient();
   const [showStopped, setShowStopped] = useState(false);
   const overview = useQuery({
     queryKey: ["marketing", query],
@@ -211,11 +191,13 @@ export default function MarketingPage() {
   const metaStatus = useQuery({
     queryKey: ["meta-status"],
     queryFn: () => api<MetaStatus>("/marketing/meta/status"),
+    refetchInterval: 60_000,
   });
   const meta = useQuery({
     queryKey: ["meta-overview", metaQuery.toString()],
     queryFn: () =>
       api<MetaOverview>(`/marketing/meta/overview?${metaQuery.toString()}`),
+    refetchInterval: 300_000,
   });
 
   function chooseMetaAccount(value: string) {
@@ -225,74 +207,29 @@ export default function MarketingPage() {
       : params.delete("meta_account_id");
     router.push(`${pathname}?${params.toString()}`);
   }
-  const sync = useMutation({
-    mutationFn: () =>
-      api<SyncResult>(`/marketing/meta/sync?${query}`, { method: "POST" }),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["meta-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["meta-overview"] }),
-      ]);
-    },
-  });
+  const availableMetaAccounts =
+    metaStatus.data?.accounts.filter((account) => account.account_status !== 0) ?? [];
+  const metaTokenExpired = metaStatus.data?.accounts.some((account) =>
+    /token|oauth|error 190|access.*expired|session.*expired/i.test(account.last_error ?? ""),
+  );
 
   return (
     <>
       <PageHeader
         title="Маркетинг"
-        subtitle="Рекламные расходы, WhatsApp-диалоги и возврат вложений"
+        subtitle="Какая реклама приносит обращения и куда направить бюджет"
         action={<DateFilters />}
       />
 
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <h2>Meta Ads</h2>
-            <p>
-              Два рекламных кабинета · данные хранятся по кампаниям и дням в
-              исходной валюте Meta
-            </p>
-          </div>
-          <button
-            className="primary small"
-            onClick={() => sync.mutate()}
-            disabled={!metaStatus.data?.configured || sync.isPending}
-          >
-            {sync.isPending ? "Синхронизация…" : "Синхронизировать Meta"}
-          </button>
-        </div>
-        {!metaStatus.isLoading && !metaStatus.data?.configured && (
+      {metaTokenExpired && (
+        <section className="panel">
           <div className="error-box">
-            Секреты Meta Ads ещё не обнаружены backend-сервисом.
+            Истёк доступ к Meta Ads. Попросите администратора переподключить Meta.
           </div>
-        )}
-        {sync.isError && (
-          <div className="error-box">
-            {sync.error instanceof Error
-              ? sync.error.message
-              : "Не удалось синхронизировать Meta"}
-          </div>
-        )}
-        {sync.data && (
-          <div className="success-box">
-            Загружено кабинетов: {sync.data.accounts_synced}; дневных строк:{" "}
-            {sync.data.rows_written}.
-          </div>
-        )}
-        {!!metaStatus.data?.accounts.length && (
-          <div className="status-list">
-            {metaStatus.data.accounts.map((account) => (
-              <span key={account.external_account_id}>
-                {account.name}
-                <strong>{account.currency}</strong>
-                {account.timezone_name}
-              </span>
-            ))}
-          </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      <DataState loading={meta.isLoading} error={meta.error}>
+      <DataState loading={meta.isLoading} error={null}>
         {meta.data && (
           <>
             <section className="panel">
@@ -307,7 +244,7 @@ export default function MarketingPage() {
                   onChange={(event) => chooseMetaAccount(event.target.value)}
                 >
                   <option value="">Все кабинеты</option>
-                  {metaStatus.data?.accounts.map((account) => (
+                  {availableMetaAccounts.map((account) => (
                     <option
                       key={account.external_account_id}
                       value={account.external_account_id}
@@ -383,24 +320,10 @@ export default function MarketingPage() {
                     </div>
                   </article>
                 ))}
-                {!meta.data.recommendations.length && <p className="empty">Синхронизируйте кампании, чтобы получить рекомендации.</p>}
+                {!meta.data.recommendations.length && <p className="empty">Пока недостаточно результатов для рекомендации.</p>}
               </div>
               <p className="advisor-note">Важно: пока нет связки с 1С, Revora оптимизирует рекламные диалоги и лиды, а не фактически оплаченные лечения. После интеграции добавим реальную выручку и ROMI.</p>
             </section>
-            <details className="panel technical-metrics">
-              <summary>Технические показатели рекламы</summary>
-              <p>Нужны маркетологу для диагностики, но не для ежедневного решения владельца.</p>
-              <div className="metric-grid">
-                <Metric label="Показы" value={meta.data.impressions.toLocaleString("ru-RU")} />
-                <Metric label="CTR" value={ratio(meta.data.ctr)} />
-                <Metric label="CPC · клик" value={meta.data.cpc ? currency(meta.data.cpc, meta.data.currency || "USD") : "—"} />
-                <Metric label="CPM · 1 000 показов" value={meta.data.cpm ? currency(meta.data.cpm, meta.data.currency || "USD") : "—"} />
-                <Metric label="Клик → диалог" value={ratio(meta.data.click_to_conversation_rate)} />
-                <Metric label="Переходы по ссылке" value={meta.data.link_clicks.toLocaleString("ru-RU")} />
-                <Metric label="Просмотры страницы" value={meta.data.landing_page_views.toLocaleString("ru-RU")} note={`Дошли после клика: ${ratio(meta.data.landing_page_view_rate)}`} />
-                <Metric label="Просмотры видео" value={meta.data.video_plays.toLocaleString("ru-RU")} note={`ThruPlay: ${meta.data.video_thruplays.toLocaleString("ru-RU")}`} />
-              </div>
-            </details>
             {!!meta.data.alerts.length && (
               <section className="insights">
                 <h2>Что требует внимания в Meta Ads</h2>
@@ -429,9 +352,7 @@ export default function MarketingPage() {
                       <tr>
                         <th>Кабинет</th>
                         <th>Расход</th>
-                        <th>Показы</th>
-                        <th>Клики</th>
-                        <th>CTR</th>
+                        <th>Лиды</th>
                         <th>Диалоги</th>
                         <th>Цена диалога</th>
                       </tr>
@@ -441,9 +362,7 @@ export default function MarketingPage() {
                         <tr key={account.account_external_id}>
                           <td><strong>{account.account_name}</strong></td>
                           <td>{currency(account.spend, account.currency)}</td>
-                          <td>{account.impressions.toLocaleString("ru-RU")}</td>
-                          <td>{account.clicks.toLocaleString("ru-RU")}</td>
-                          <td>{ratio(account.ctr)}</td>
+                          <td>{account.leads.toLocaleString("ru-RU")}</td>
                           <td>{account.conversations_started.toLocaleString("ru-RU")}</td>
                           <td>
                             {account.cost_per_conversation
@@ -466,10 +385,7 @@ export default function MarketingPage() {
                       <th>Кампания</th>
                       <th>Статус</th><th>Кабинет</th>
                       <th>Расход</th>
-                      <th>Показы</th>
-                      <th>Клики</th>
-                      <th>CTR</th>
-                      <th>CPM</th>
+                      <th>Лиды</th>
                       <th>CPL</th>
                       <th>Диалоги</th>
                       <th>Цена диалога</th>
@@ -485,14 +401,7 @@ export default function MarketingPage() {
                         </td>
                         <td><span className={`campaign-status ${campaign.effective_status.toLowerCase()}`}>{campaign.effective_status==="ACTIVE"?"Активна":campaign.effective_status==="UNKNOWN"?"Статус не получен":"Остановлена"}</span></td><td>{campaign.account_name}</td>
                         <td>{currency(campaign.spend, campaign.currency)}</td>
-                        <td>{campaign.impressions.toLocaleString("ru-RU")}</td>
-                        <td>{campaign.clicks.toLocaleString("ru-RU")}</td>
-                        <td>{ratio(campaign.ctr)}</td>
-                        <td>
-                          {campaign.cpm
-                            ? currency(campaign.cpm, campaign.currency)
-                            : "—"}
-                        </td>
+                        <td>{campaign.leads.toLocaleString("ru-RU")}</td>
                         <td>
                           {campaign.cost_per_lead
                             ? currency(
@@ -516,9 +425,8 @@ export default function MarketingPage() {
                     ))}
                     {!meta.data.campaigns.length && (
                       <tr>
-                        <td colSpan={11} className="empty">
-                          Нажмите «Синхронизировать Meta», чтобы загрузить данные
-                          выбранного периода.
+                        <td colSpan={8} className="empty">
+                          За выбранный период рекламы нет.
                         </td>
                       </tr>
                     )}
@@ -526,7 +434,6 @@ export default function MarketingPage() {
                 </table>
               </div>
             </section>
-            <AsOf value={meta.data.data_as_of} />
           </>
         )}
       </DataState>

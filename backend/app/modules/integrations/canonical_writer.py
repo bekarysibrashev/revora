@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.models import User
 from app.modules.doctors.models import Doctor, DoctorRating
-from app.modules.finance.models import AccountBalance, CashFlowFact, ExpenseCategory, ExpenseFact, RevenueFact
+from app.modules.finance.models import AccountBalance, CashFlowFact, ExpenseCategory, ExpenseFact, PayrollFact, RevenueFact
 from app.modules.marketing.models import AttributionFact, MarketingSpendFact
 from app.modules.sales.models import Appointment, Lead, Patient, ServiceDirection, TreatmentPlan
 from app.modules.tenancy.models import Branch
@@ -32,6 +32,7 @@ class CanonicalWriter:
         "appointment",
         "revenue_fact",
         "expense_fact",
+        "payroll_fact",
         "cash_flow_fact",
         "marketing_spend_fact",
         "attribution_fact",
@@ -145,12 +146,21 @@ class CanonicalWriter:
             "external_id": self._string(data, "external_id"),
             "starts_at": self._datetime(data, "starts_at"),
             "status": self._string(data, "status"),
+            "is_primary": bool(data.get("is_primary", False)),
         }
         return await self._upsert(
             Appointment,
             values,
             ["tenant_id", "external_id"],
-            ["branch_id", "patient_id", "doctor_id", "direction_id", "starts_at", "status"],
+            [
+                "branch_id",
+                "patient_id",
+                "doctor_id",
+                "direction_id",
+                "starts_at",
+                "status",
+                "is_primary",
+            ],
         )
 
     async def _write_revenue_fact(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
@@ -208,6 +218,22 @@ class CanonicalWriter:
                 "counterparty",
                 "description",
             ],
+        )
+
+    async def _write_payroll_fact(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
+        values = {
+            "tenant_id": tenant_id,
+            "branch_id": await self._optional_branch_id(tenant_id, data),
+            "external_id": self._string(data, "external_id"),
+            "occurred_on": self._date(data, "occurred_on"),
+            "amount": self._decimal(data, "amount"),
+            "currency": self._optional_string(data, "currency") or "KZT",
+        }
+        return await self._upsert(
+            PayrollFact,
+            values,
+            ["tenant_id", "external_id"],
+            ["branch_id", "occurred_on", "amount", "currency"],
         )
 
     async def _write_cash_flow_fact(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
@@ -399,9 +425,12 @@ class CanonicalWriter:
                 raise CanonicalWriteError("cost_behavior must be 'fixed' or 'variable'")
         values = {"id": uuid4(), "tenant_id": tenant_id, "name": name, "cost_behavior": behavior}
         statement = insert(ExpenseCategory).values(**values)
+        update_values = {"name": statement.excluded.name}
+        if behavior is not None:
+            update_values["cost_behavior"] = statement.excluded.cost_behavior
         statement = statement.on_conflict_do_update(
             index_elements=["tenant_id", "name"],
-            set_={"name": statement.excluded.name, "cost_behavior": statement.excluded.cost_behavior},
+            set_=update_values,
         ).returning(ExpenseCategory.id)
         return (await self.session.execute(statement)).scalar_one()
 

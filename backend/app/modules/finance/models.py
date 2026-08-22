@@ -49,6 +49,17 @@ class ExpenseFact(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
 
 
+class PayrollFact(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    __tablename__ = "payroll_facts"
+    __table_args__ = (UniqueConstraint("tenant_id", "external_id"),)
+    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("branches.id"), index=True)
+    external_id: Mapped[str] = mapped_column(String(150))
+    occurred_on: Mapped[date] = mapped_column(Date, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str] = mapped_column(String(3), default="KZT")
+
+
 class BankStatementUpload(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "bank_statement_uploads"
     tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True)

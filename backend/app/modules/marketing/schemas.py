@@ -31,6 +31,7 @@ class MetaAdsAccountResponse(BaseModel):
     account_status: int
     currency: str
     timezone_name: str
+    last_sync_attempted_at: datetime | None
     last_synced_at: datetime | None
     last_error: str | None
 
@@ -39,6 +40,10 @@ class MetaAdsStatusResponse(BaseModel):
     configured: bool
     requested_account_ids: list[str]
     accounts: list[MetaAdsAccountResponse]
+    attribution_windows: list[str]
+    action_report_time: str
+    auto_sync_enabled: bool
+    last_sync_attempted_at: datetime | None
     last_synced_at: datetime | None
 
 
@@ -50,6 +55,33 @@ class MetaAdsSyncResponse(BaseModel):
     date_from: date
     date_to: date
     synced_at: datetime
+
+
+class MetaReconciliationMetrics(BaseModel):
+    spend: Decimal
+    impressions: int
+    clicks: int
+    leads: int
+    conversations_started: int
+
+
+class MetaAccountReconciliation(BaseModel):
+    account_external_id: str
+    local: MetaReconciliationMetrics
+    live: MetaReconciliationMetrics
+    difference: MetaReconciliationMetrics
+    matches: bool
+
+
+class MetaAdsReconciliationResponse(BaseModel):
+    status: str
+    matches: bool
+    accounts: list[MetaAccountReconciliation]
+    attribution_windows: list[str]
+    action_report_time: str
+    date_from: date
+    date_to: date
+    checked_at: datetime
 
 
 class MetaCampaignPerformance(BaseModel):

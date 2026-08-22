@@ -18,6 +18,7 @@ class FakeFinanceRepository:
             variable_expenses=Decimal("250000"),
             fixed_expenses=Decimal("300000"),
             uncategorized_expenses=Decimal("50000"),
+            payroll_accrual=Decimal("250000"),
             data_as_of=datetime(2026, 7, 20, 10, tzinfo=UTC),
         )
 
@@ -55,6 +56,17 @@ async def test_finance_summary_calculates_profit_and_cashflow() -> None:
     assert response.net_cash_flow == Decimal("300000")
     assert response.closing_balance == Decimal("1200000")
     assert response.meta.data_as_of == datetime(2026, 7, 20, 11, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_partial_expense_classification_is_not_called_net_profit() -> None:
+    response = await FinanceService(FakeFinanceRepository()).pnl(
+        make_user(UserRole.OWNER), date(2026, 7, 1), date(2026, 7, 31), None
+    )
+
+    assert response.expense_classification_rate == Decimal("550000") / Decimal("600000")
+    assert response.profit_is_complete is False
+    assert response.profit_label == "Операционная прибыль по доступным данным"
 
 
 @pytest.mark.asyncio

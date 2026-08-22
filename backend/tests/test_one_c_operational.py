@@ -70,6 +70,44 @@ def test_appointment_with_reception_is_completed() -> None:
     assert result.issues == []
 
 
+def test_appointment_no_show_precedes_generic_completed_marker() -> None:
+    result = normalize_one_c_operational_record(
+        source_entity=APPOINTMENT_ENTITY,
+        source_record_id="appointment-no-show",
+        payload={
+            "Ref_Key": "appointment-no-show",
+            "Date": "2026-07-10T09:30:00",
+            "Контрагент_Key": "patient-1",
+            "Статус": "Прием не состоялся",
+            "СтатусПациента": "Первичный",
+        },
+        branch_code="main",
+    )
+
+    assert result is not None
+    assert result.data["status"] == "no_show"
+    assert result.data["is_primary"] is True
+
+
+def test_deleted_appointment_is_excluded_from_operational_counts() -> None:
+    result = normalize_one_c_operational_record(
+        source_entity=APPOINTMENT_ENTITY,
+        source_record_id="appointment-deleted",
+        payload={
+            "Ref_Key": "appointment-deleted",
+            "Date": "2026-07-10T09:30:00",
+            "Контрагент_Key": "patient-1",
+            "Статус": "Прием окончен",
+            "СсылкаНаПрием_Key": "reception-1",
+            "DeletionMark": True,
+        },
+        branch_code="main",
+    )
+
+    assert result is not None
+    assert result.data["status"] == "deleted"
+
+
 def test_non_service_nomenclature_is_not_mapped_to_service_direction() -> None:
     result = normalize_one_c_operational_record(
         source_entity=SERVICE_ENTITY,

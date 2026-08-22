@@ -30,6 +30,7 @@ from app.modules.doctors.router import router as doctors_router
 from app.modules.finance.router import router as finance_router
 from app.modules.integrations.router import router as integrations_router
 from app.modules.marketing.router import router as marketing_router
+from app.modules.marketing.embedded_worker import EmbeddedMetaSyncWorker
 from app.modules.sales.router import router as sales_router
 from app.modules.tenancy.router import router as tenancy_router
 from app.modules.whatsapp.router import router as whatsapp_router
@@ -41,15 +42,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(settings.log_level)
     logger = logging.getLogger(__name__)
     call_worker = EmbeddedCallWorker(settings)
+    meta_sync_worker = EmbeddedMetaSyncWorker(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.info("Starting %s in %s", settings.app_name, settings.app_env)
         call_worker.start()
+        meta_sync_worker.start()
         try:
             yield
         finally:
             await call_worker.stop()
+            await meta_sync_worker.stop()
             logger.info("Stopping %s", settings.app_name)
 
     application = FastAPI(

@@ -12,12 +12,15 @@ from app.modules.marketing.schemas import (
     MetaAdsAccountResponse,
     MetaAccountPerformance,
     MetaAdsOverviewResponse,
+    MetaAdsReconciliationResponse,
     MetaAdsStatusResponse,
     MetaAdsSyncResponse,
+    MetaAccountReconciliation,
     MetaCampaignAlert,
     MetaBudgetRecommendation,
     MetaCampaignPerformance,
     MetaPeriodComparison,
+    MetaReconciliationMetrics,
 )
 
 
@@ -27,10 +30,16 @@ class MarketingService:
         repository: MarketingRepository,
         meta_client: MetaAdsClient | None = None,
         meta_account_ids: list[str] | None = None,
+        meta_attribution_windows: list[str] | None = None,
+        meta_action_report_time: str = "impression",
+        meta_auto_sync_enabled: bool = False,
     ) -> None:
         self.repository = repository
         self.meta_client = meta_client
         self.meta_account_ids = meta_account_ids or []
+        self.meta_attribution_windows = meta_attribution_windows or ["7d_click", "1d_view"]
+        self.meta_action_report_time = meta_action_report_time
+        self.meta_auto_sync_enabled = meta_auto_sync_enabled
 
     async def overview(
         self, user: User, date_from: date, date_to: date, branch_id: UUID | None
@@ -73,10 +82,19 @@ class MarketingService:
         self._require_marketing_role(user)
         accounts = await self.repository.list_meta_accounts(user.tenant_id)
         timestamps = [item.last_synced_at for item in accounts if item.last_synced_at]
+        attempts = [
+            item.last_sync_attempted_at
+            for item in accounts
+            if item.last_sync_attempted_at
+        ]
         return MetaAdsStatusResponse(
             configured=self.meta_client is not None and bool(self.meta_account_ids),
             requested_account_ids=self.meta_account_ids,
             accounts=[MetaAdsAccountResponse.model_validate(item) for item in accounts],
+            attribution_windows=self.meta_attribution_windows,
+            action_report_time=self.meta_action_report_time,
+            auto_sync_enabled=self.meta_auto_sync_enabled,
+            last_sync_attempted_at=max(attempts) if attempts else None,
             last_synced_at=max(timestamps) if timestamps else None,
         )
 
@@ -85,6 +103,11 @@ class MarketingService:
     ) -> MetaAdsSyncResponse:
         if user.role != UserRole.OWNER:
             raise AppError("FORBIDDEN", "Only the owner can synchronize Meta Ads", 403)
+        return await self.sync_meta_for_tenant(user.tenant_id, date_from, date_to)
+
+    async def sync_meta_for_tenant(
+        self, tenant_id: UUID, date_from: date, date_to: date
+    ) -> MetaAdsSyncResponse:
         self._validate_dates(date_from, date_to, maximum_days=90)
         if self.meta_client is None or not self.meta_account_ids:
             raise AppError(
@@ -102,17 +125,32 @@ class MarketingService:
             for account_id in self.meta_account_ids:
                 account_data = await self.meta_client.account(account_id)
                 account = await self.repository.upsert_meta_account(
-                    user.tenant_id, account_data, synced_at
+                    tenant_id, account_data, synced_at
                 )
                 rows = await self.meta_client.campaign_days(
                     account_id, comparison_date_from, date_to
                 )
                 rows_received += len(rows)
                 rows_written += await self.repository.upsert_meta_campaign_days(
-                    user.tenant_id, account.id, rows
+                    tenant_id, account.id, rows
+                )
+                await self.repository.mark_meta_sync_succeeded(
+                    tenant_id, account_id, synced_at
                 )
         except MetaAdsError as exc:
-            raise AppError("META_SYNC_FAILED", str(exc), 502) from exc
+            await self.repository.mark_meta_sync_failed(
+                tenant_id, account_id, synced_at, str(exc)
+            )
+            # Error health must survive the request rollback so the UI can explain
+            # why fresh data is unavailable. Successful rows from earlier accounts
+            # are idempotent and safe to keep as well.
+            await self.repository.commit()
+            raise AppError(
+                "META_SYNC_FAILED",
+                str(exc),
+                502,
+                details={"account_id": account_id},
+            ) from exc
 
         return MetaAdsSyncResponse(
             status="completed",
@@ -326,6 +364,71 @@ class MarketingService:
             data_as_of=max(timestamps) if timestamps else None,
         )
 
+    async def reconcile_meta(
+        self, user: User, date_from: date, date_to: date
+    ) -> MetaAdsReconciliationResponse:
+        self._require_marketing_role(user)
+        self._validate_dates(date_from, date_to, maximum_days=90)
+        if self.meta_client is None or not self.meta_account_ids:
+            raise AppError(
+                "META_NOT_CONFIGURED",
+                "Meta Ads secrets are not configured on the backend",
+                503,
+            )
+
+        local_rows = await self.repository.meta_campaign_totals(
+            user.tenant_id, date_from, date_to, None
+        )
+        results: list[MetaAccountReconciliation] = []
+        try:
+            for account_id in self.meta_account_ids:
+                live_rows = await self.meta_client.campaign_days(
+                    account_id, date_from, date_to
+                )
+                local = self._reconciliation_metrics(
+                    row for row in local_rows if row.account_external_id == account_id
+                )
+                live = self._reconciliation_metrics(live_rows)
+                difference = MetaReconciliationMetrics(
+                    spend=live.spend - local.spend,
+                    impressions=live.impressions - local.impressions,
+                    clicks=live.clicks - local.clicks,
+                    leads=live.leads - local.leads,
+                    conversations_started=(
+                        live.conversations_started - local.conversations_started
+                    ),
+                )
+                matches = (
+                    abs(difference.spend) <= Decimal("0.01")
+                    and difference.impressions == 0
+                    and difference.clicks == 0
+                    and difference.leads == 0
+                    and difference.conversations_started == 0
+                )
+                results.append(
+                    MetaAccountReconciliation(
+                        account_external_id=account_id,
+                        local=local,
+                        live=live,
+                        difference=difference,
+                        matches=matches,
+                    )
+                )
+        except MetaAdsError as exc:
+            raise AppError("META_RECONCILIATION_FAILED", str(exc), 502) from exc
+
+        matches = all(item.matches for item in results)
+        return MetaAdsReconciliationResponse(
+            status="matched" if matches else "mismatch",
+            matches=matches,
+            accounts=results,
+            attribution_windows=self.meta_attribution_windows,
+            action_report_time=self.meta_action_report_time,
+            date_from=date_from,
+            date_to=date_to,
+            checked_at=datetime.now(UTC),
+        )
+
     @staticmethod
     def _require_marketing_role(user: User) -> None:
         if user.role not in {UserRole.OWNER, UserRole.MANAGER}:
@@ -351,6 +454,17 @@ class MarketingService:
         if not denominator:
             return None
         return Decimal(numerator) / Decimal(denominator)
+
+    @staticmethod
+    def _reconciliation_metrics(rows) -> MetaReconciliationMetrics:
+        rows = list(rows)
+        return MetaReconciliationMetrics(
+            spend=sum((row.spend for row in rows), Decimal("0")),
+            impressions=sum(row.impressions for row in rows),
+            clicks=sum(row.clicks for row in rows),
+            leads=sum(row.leads for row in rows),
+            conversations_started=sum(row.conversations_started for row in rows),
+        )
 
     @staticmethod
     def _change(current, previous) -> Decimal | None:

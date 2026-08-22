@@ -38,6 +38,7 @@ class MetaAdsAccount(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Bas
     account_status: Mapped[int] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(3))
     timezone_name: Mapped[str] = mapped_column(String(100))
+    last_sync_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
 

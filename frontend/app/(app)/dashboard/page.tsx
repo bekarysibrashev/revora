@@ -6,8 +6,8 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { api } from "@/shared/api-client";
 import { AsOf, DataState, DateFilters, PageHeader, money, percent, queryString } from "@/shared/ui";
 
-type Dashboard = { finance:{revenue_accrual:string;revenue_payment:string;total_expenses:string;net_profit:string;net_cash_flow:string;closing_balance:string|null;meta:{data_as_of:string|null}};sales:{leads_total:number;leads_won:number;lead_conversion_rate:string;appointments_total:number;appointments_completed:number;appointments_cancelled:number;appointments_no_show:number;appointment_completion_rate:string;paid_revenue:string;meta:{data_as_of:string|null}};top_doctors:{doctor_id:string;full_name:string;specialty:string|null;appointments_completed:number;completion_rate:string;revenue_accrual:string}[];marketing:{total_spend:string;total_attributed_revenue:string;roas:string|null} };
-type Pnl = { revenue_accrual:string;revenue_payment:string;total_expenses:string;gross_profit:string;ebitda:string;net_profit:string;meta:{data_as_of:string|null} };
+type Dashboard = { finance:{revenue_accrual:string;revenue_payment:string;total_expenses:string;net_profit:string;net_cash_flow:string;closing_balance:string|null;meta:{data_as_of:string|null}};sales:{leads_total:number;leads_won:number;lead_conversion_rate:string;appointments_total:number;appointments_completed:number;appointments_cancelled:number;appointments_no_show:number;patients_total:number;patients_primary:number;patients_repeat:number;appointment_completion_rate:string;paid_revenue:string;meta:{data_as_of:string|null}};top_doctors:{doctor_id:string;full_name:string;specialty:string|null;appointments_completed:number;completion_rate:string;revenue_accrual:string}[];marketing:{total_spend:string;total_attributed_revenue:string;roas:string|null} };
+type Pnl = { revenue_accrual:string;revenue_payment:string;total_expenses:string;payroll_accrual:string;gross_profit:string;ebitda:string;net_profit:string;expense_classification_rate:string;profit_is_complete:boolean;profit_label:string;meta:{data_as_of:string|null} };
 type Meta = { total_spend:string;currency:string|null;leads:number;conversations_started:number;cost_per_lead:string|null;data_as_of:string|null };
 type Contacts = { summary:{unique_contacts:number;first_only:number;repeat_contacts:number;total_calls:number;qualified_calls:number} };
 type Insights = {items:{id:string;severity:string;title:string;description:string}[]};
@@ -47,18 +47,19 @@ export default function DashboardPage() {
         const previousRevenue=Number(previousDashboard.data?.finance.revenue_accrual||0);
         const growth=previousRevenue?((currentRevenue-previousRevenue)/previousRevenue):null;
         const margin=currentRevenue?Number(pnl.data.net_profit)/currentRevenue:null;
+        const averageCheck=dashboard.data.sales.appointments_completed?currentRevenue/dashboard.data.sales.appointments_completed:null;
         const hasSales=Boolean(dashboard.data.sales.meta.data_as_of);
         const metaLeads=(meta.data?.leads||0)+(contacts.data?.summary.unique_contacts||0);
         const cpl=metaLeads&&meta.data?Number(meta.data.total_spend)/metaLeads:null;
         const chartData=[
           {name:"Выручка",previous:previousRevenue,current:currentRevenue},
           {name:"Расходы",previous:Number(previousDashboard.data?.finance.total_expenses||0),current:Number(dashboard.data.finance.total_expenses||0)},
-          {name:"Прибыль",previous:Number(previousDashboard.data?.finance.net_profit||0),current:Number(dashboard.data.finance.net_profit||0)},
+          {name:pnl.data.profit_is_complete?"Прибыль":"Доступный результат",previous:Number(previousDashboard.data?.finance.net_profit||0),current:Number(dashboard.data.finance.net_profit||0)},
         ];
         return <>
           <section className="ceo-hero">
             <div><p className="eyebrow">Управленческий срез</p><h2>{money(currentRevenue)}</h2><span>выручка за выбранный период</span></div>
-            <div className="ceo-hero-stats"><span>Чистая прибыль<strong>{money(pnl.data.net_profit)}</strong></span><span>Денежный поток<strong>{money(dashboard.data.finance.net_cash_flow)}</strong></span><span>Рост<strong>{growth===null?"—":percent(growth)}</strong></span></div>
+            <div className="ceo-hero-stats"><span>{pnl.data.profit_label}<strong>{money(pnl.data.net_profit)}</strong></span><span>Денежный поток<strong>{money(dashboard.data.finance.net_cash_flow)}</strong></span><span>Рост<strong>{growth===null?"—":percent(growth)}</strong></span></div>
           </section>
 
           <SectionTitle title="Финансы" subtitle="Фактические показатели из финансовых регистров 1С"/>
@@ -68,19 +69,21 @@ export default function DashboardPage() {
             <Kpi label="Предыдущий период" value={money(previousRevenue)} source="1С" note="Период той же длины"/>
             <Kpi label="Темп роста" value={growth===null?"—":percent(growth)} source="Расчёт" tone={growth!==null&&growth>=0?"good":"bad"}/>
             <Kpi label="Валовая прибыль" value={money(pnl.data.gross_profit)} source="1С"/>
-            <Kpi label="EBITDA" value={money(pnl.data.ebitda)} source="1С"/>
-            <Kpi label="Чистая прибыль" value={money(pnl.data.net_profit)} source="1С" tone={Number(pnl.data.net_profit)>=0?"good":"bad"}/>
+            <Kpi label="Начислено зарплаты" value={money(pnl.data.payroll_accrual)} source="1С" note="Справочно, без повторного прибавления к расходам"/>
+            <Kpi label="EBITDA по доступным данным" value={money(pnl.data.ebitda)} source="1С"/>
+            <Kpi label={pnl.data.profit_label} value={money(pnl.data.net_profit)} source="1С" tone={Number(pnl.data.net_profit)>=0?"good":"bad"} note={pnl.data.profit_is_complete?undefined:`Классифицировано ${(Number(pnl.data.expense_classification_rate)*100).toFixed(1)}% расходов`}/>
             <Kpi label="Маржинальность" value={margin===null?"—":percent(margin)} source="Расчёт"/>
-            <Kpi label="Средний чек" source="1С" missing/>
-            <Kpi label="Количество пациентов" source="1С" missing/>
+            <Kpi label="Средний чек завершённого приёма" value={averageCheck===null?"—":money(averageCheck)} source="Расчёт 1С" missing={averageCheck===null}/>
+            <Kpi label="Количество пациентов" value={String(dashboard.data.sales.patients_total)} source="1С" missing={!hasSales}/>
           </section>
           <section className="panel ceo-chart"><div className="panel-head"><div><h2>Динамика к предыдущему периоду</h2><p>Сопоставление периодов одинаковой длины, KZT</p></div></div><ResponsiveContainer width="100%" height={280}><BarChart data={chartData}><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="name"/><YAxis tickFormatter={value=>`${Math.round(Number(value)/1000000)}м`}/><Tooltip formatter={(value)=>money(Number(value))}/><Bar dataKey="previous" name="Предыдущий" fill="#BFC9C3" radius={[6,6,0,0]}/><Bar dataKey="current" name="Текущий" fill="#2F725B" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></section>
 
           <SectionTitle title="Продажи и пациенты" subtitle="Воронка от обращения до оплаты лечения"/>
           <section className="ceo-kpi-grid">
             <Kpi label="Записи на приём" value={String(dashboard.data.sales.appointments_total)} source="1С" missing={!hasSales}/>
-            <Kpi label="Первичные пациенты" source="1С" missing/>
-            <Kpi label="Повторные пациенты" source="1С" missing/>
+            <Kpi label="Пациенты" value={String(dashboard.data.sales.patients_total)} source="1С" missing={!hasSales}/>
+            <Kpi label="Первичные пациенты" value={String(dashboard.data.sales.patients_primary)} source="1С" missing={!hasSales}/>
+            <Kpi label="Повторные пациенты" value={String(dashboard.data.sales.patients_repeat)} source="1С" missing={!hasSales}/>
             <Kpi label="Обращение → лечение" source="1С" missing/>
             <Kpi label="Консультация → план" source="1С" missing/>
             <Kpi label="План → оплата" source="1С" missing/>

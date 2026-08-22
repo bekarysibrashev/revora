@@ -192,10 +192,12 @@ class OneCMetadataResponse(BaseModel):
 class OneCNormalizeRequest(BaseModel):
     history_days: int = Field(default=90, ge=1, le=3650)
     batch_size: int = Field(default=200, ge=10, le=500)
+    reset_existing: bool = False
 
 
 class OneCNormalizeResponse(BaseModel):
     connection_id: UUID
+    reset: int = 0
     processed: int
     normalized: int
     quarantined: int
@@ -205,6 +207,12 @@ class OneCNormalizeResponse(BaseModel):
 class EntitySyncCount(BaseModel):
     entity: str
     records: int
+
+
+class OneCBranchMapping(BaseModel):
+    structural_unit_key: str
+    structural_unit_name: str
+    branch_code: str
 
 
 class ConnectionSyncStatusResponse(BaseModel):
@@ -217,3 +225,4 @@ class ConnectionSyncStatusResponse(BaseModel):
     normalized_records: int = 0
     quarantined_records: int = 0
     entities: list[EntitySyncCount] = Field(default_factory=list)
+    branch_mappings: list[OneCBranchMapping] = Field(default_factory=list)

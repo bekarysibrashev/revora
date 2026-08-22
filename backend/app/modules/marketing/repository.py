@@ -52,6 +52,9 @@ class MarketingRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def commit(self) -> None:
+        await self.session.commit()
+
     async def overview(
         self, tenant_id: UUID, date_from: date, date_to: date, branch_id: UUID | None
     ) -> MarketingTotals:
@@ -97,7 +100,7 @@ class MarketingRepository:
         )
 
     async def upsert_meta_account(
-        self, tenant_id: UUID, data: MetaAccountData, synced_at: datetime
+        self, tenant_id: UUID, data: MetaAccountData, attempted_at: datetime
     ) -> MetaAdsAccount:
         statement = insert(MetaAdsAccount).values(
             tenant_id=tenant_id,
@@ -106,8 +109,7 @@ class MarketingRepository:
             account_status=data.account_status,
             currency=data.currency,
             timezone_name=data.timezone_name,
-            last_synced_at=synced_at,
-            last_error=None,
+            last_sync_attempted_at=attempted_at,
         )
         statement = statement.on_conflict_do_update(
             index_elements=["tenant_id", "external_account_id"],
@@ -116,12 +118,55 @@ class MarketingRepository:
                 "account_status": statement.excluded.account_status,
                 "currency": statement.excluded.currency,
                 "timezone_name": statement.excluded.timezone_name,
-                "last_synced_at": statement.excluded.last_synced_at,
-                "last_error": None,
+                "last_sync_attempted_at": statement.excluded.last_sync_attempted_at,
                 "updated_at": func.now(),
             },
         ).returning(MetaAdsAccount)
         return (await self.session.scalars(statement)).one()
+
+    async def mark_meta_sync_succeeded(
+        self, tenant_id: UUID, external_account_id: str, synced_at: datetime
+    ) -> None:
+        await self.session.execute(
+            MetaAdsAccount.__table__.update()
+            .where(
+                MetaAdsAccount.tenant_id == tenant_id,
+                MetaAdsAccount.external_account_id == external_account_id,
+            )
+            .values(
+                last_sync_attempted_at=synced_at,
+                last_synced_at=synced_at,
+                last_error=None,
+                updated_at=func.now(),
+            )
+        )
+
+    async def mark_meta_sync_failed(
+        self,
+        tenant_id: UUID,
+        external_account_id: str,
+        attempted_at: datetime,
+        error: str,
+    ) -> None:
+        statement = insert(MetaAdsAccount).values(
+            tenant_id=tenant_id,
+            external_account_id=external_account_id,
+            name=external_account_id,
+            account_status=0,
+            currency="---",
+            timezone_name="Unknown",
+            last_sync_attempted_at=attempted_at,
+            last_error=error,
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=["tenant_id", "external_account_id"],
+            set_={
+                "last_sync_attempted_at": statement.excluded.last_sync_attempted_at,
+                "last_error": statement.excluded.last_error,
+                "updated_at": func.now(),
+            },
+        )
+        await self.session.execute(statement)
 
     async def upsert_meta_campaign_days(
         self,

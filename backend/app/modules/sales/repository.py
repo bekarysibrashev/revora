@@ -22,6 +22,9 @@ class SalesTotals:
     appointments_completed: int
     appointments_cancelled: int
     appointments_no_show: int
+    patients_total: int
+    patients_primary: int
+    patients_repeat: int
     paid_revenue: Decimal
     data_as_of: datetime | None
 
@@ -68,9 +71,26 @@ class SalesRepository:
             func.sum(case((Appointment.status == "completed", 1), else_=0)),
             func.sum(case((Appointment.status == "cancelled", 1), else_=0)),
             func.sum(case((Appointment.status == "no_show", 1), else_=0)),
+            func.count(
+                func.distinct(
+                    case((Appointment.status == "completed", Appointment.patient_id))
+                )
+            ),
+            func.count(
+                func.distinct(
+                    case(
+                        (
+                            (Appointment.status == "completed")
+                            & (Appointment.is_primary.is_(True)),
+                            Appointment.patient_id,
+                        )
+                    )
+                )
+            ),
             func.max(Appointment.updated_at),
         ).where(
             Appointment.tenant_id == tenant_id,
+            Appointment.status != "deleted",
             Appointment.starts_at >= self._start(date_from),
             Appointment.starts_at < self._end(date_to),
         )
@@ -100,8 +120,10 @@ class SalesRepository:
             )
         revenue_row = (await self.session.execute(revenue_statement)).one()
         timestamps = [
-            value for value in (lead_row[4], appointment_row[4], revenue_row[1]) if value
+            value for value in (lead_row[4], appointment_row[6], revenue_row[1]) if value
         ]
+        patients_total = int(appointment_row[4] or 0)
+        patients_primary = int(appointment_row[5] or 0)
         return SalesTotals(
             leads_total=int(lead_row[0] or 0),
             leads_new=int(lead_row[1] or 0),
@@ -111,6 +133,9 @@ class SalesRepository:
             appointments_completed=int(appointment_row[1] or 0),
             appointments_cancelled=int(appointment_row[2] or 0),
             appointments_no_show=int(appointment_row[3] or 0),
+            patients_total=patients_total,
+            patients_primary=patients_primary,
+            patients_repeat=max(0, patients_total - patients_primary),
             paid_revenue=Decimal(revenue_row[0]),
             data_as_of=max(timestamps) if timestamps else None,
         )

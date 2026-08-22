@@ -11,6 +11,7 @@ from app.modules.auth.models import User, UserRole
 from app.modules.marketing.meta_client import (
     MetaAccountData,
     MetaAdsClient,
+    MetaAdsError,
     MetaCampaignDay,
 )
 from app.modules.marketing.repository import MetaCampaignTotals
@@ -71,6 +72,9 @@ class FakeMetaClient:
 class FakeMetaRepository:
     def __init__(self):
         self.rows = []
+        self.successes = []
+        self.failures = []
+        self.commits = 0
 
     async def upsert_meta_account(self, tenant_id, data, synced_at):
         return SimpleNamespace(id=uuid4())
@@ -78,6 +82,15 @@ class FakeMetaRepository:
     async def upsert_meta_campaign_days(self, tenant_id, account_id, rows):
         self.rows.extend(rows)
         return len(rows)
+
+    async def mark_meta_sync_succeeded(self, tenant_id, account_id, synced_at):
+        self.successes.append(account_id)
+
+    async def mark_meta_sync_failed(self, tenant_id, account_id, attempted_at, error):
+        self.failures.append((account_id, error))
+
+    async def commit(self):
+        self.commits += 1
 
     async def meta_campaign_totals(
         self, tenant_id, date_from, date_to, account_external_id=None
@@ -113,6 +126,7 @@ class FakeMetaRepository:
                 account_status=1,
                 currency="USD",
                 timezone_name="Asia/Almaty",
+                last_sync_attempted_at=datetime(2026, 7, 27, tzinfo=UTC),
                 last_synced_at=datetime(2026, 7, 27, tzinfo=UTC),
                 last_error=None,
             )
@@ -151,6 +165,30 @@ def test_meta_client_extracts_conversations_from_actions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_meta_client_sends_explicit_attribution_settings() -> None:
+    class CapturingClient(MetaAdsClient):
+        def __init__(self):
+            super().__init__(
+                "token",
+                "v25.0",
+                attribution_windows=["7d_click", "1d_view"],
+                action_report_time="impression",
+            )
+            self.calls = []
+
+        async def _get(self, path, params):
+            self.calls.append((path, dict(params)))
+            return {"data": []}
+
+    client = CapturingClient()
+    await client.campaign_days("act_1", date(2026, 7, 1), date(2026, 7, 2))
+
+    insights = next(params for path, params in client.calls if path.endswith("/insights"))
+    assert insights["action_attribution_windows"] == '["7d_click", "1d_view"]'
+    assert insights["action_report_time"] == "impression"
+
+
+@pytest.mark.asyncio
 async def test_meta_sync_is_idempotent_repository_input() -> None:
     repository = FakeMetaRepository()
     client = FakeMetaClient()
@@ -165,6 +203,63 @@ async def test_meta_sync_is_idempotent_repository_input() -> None:
     assert len(repository.rows) == 2
     assert client.last_date_from == date(2026, 6, 4)
     assert client.last_date_to == date(2026, 7, 27)
+    assert repository.successes == ["act_1", "act_2"]
+
+
+@pytest.mark.asyncio
+async def test_meta_sync_persists_failed_attempt_without_marking_success() -> None:
+    class FailingClient(FakeMetaClient):
+        async def campaign_days(self, account_id, date_from, date_to):
+            raise MetaAdsError("Meta API error 190: token expired")
+
+    repository = FakeMetaRepository()
+    with pytest.raises(AppError) as error:
+        await MarketingService(
+            repository,
+            meta_client=FailingClient(),
+            meta_account_ids=["act_1"],
+        ).sync_meta(make_user(), date(2026, 7, 1), date(2026, 7, 27))
+
+    assert error.value.code == "META_SYNC_FAILED"
+    assert error.value.details == {"account_id": "act_1"}
+    assert repository.successes == []
+    assert repository.failures == [("act_1", "Meta API error 190: token expired")]
+    assert repository.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_meta_status_exposes_data_contract_and_health() -> None:
+    response = await MarketingService(
+        FakeMetaRepository(),
+        meta_client=FakeMetaClient(),
+        meta_account_ids=["act_1"],
+        meta_attribution_windows=["7d_click", "1d_view"],
+        meta_action_report_time="impression",
+        meta_auto_sync_enabled=True,
+    ).meta_status(make_user())
+
+    assert response.configured is True
+    assert response.attribution_windows == ["7d_click", "1d_view"]
+    assert response.action_report_time == "impression"
+    assert response.auto_sync_enabled is True
+    assert response.last_sync_attempted_at == datetime(2026, 7, 27, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_meta_reconciliation_reports_live_differences() -> None:
+    response = await MarketingService(
+        FakeMetaRepository(),
+        meta_client=FakeMetaClient(),
+        meta_account_ids=["act_1"],
+    ).reconcile_meta(make_user(), date(2026, 7, 1), date(2026, 7, 27))
+
+    account = response.accounts[0]
+    assert response.matches is False
+    assert response.status == "mismatch"
+    assert account.local.spend == Decimal("100")
+    assert account.live.spend == Decimal("25.50")
+    assert account.difference.spend == Decimal("-74.50")
+    assert account.difference.leads == -6
 
 
 @pytest.mark.asyncio

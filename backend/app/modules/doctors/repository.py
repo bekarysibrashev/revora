@@ -47,6 +47,7 @@ class DoctorsRepository:
             .where(
                 Appointment.tenant_id == tenant_id,
                 Appointment.doctor_id.is_not(None),
+                Appointment.status != "deleted",
                 Appointment.starts_at >= self._start(date_from),
                 Appointment.starts_at < self._end(date_to),
             )

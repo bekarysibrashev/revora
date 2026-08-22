@@ -45,6 +45,9 @@ class FakeSalesRepository:
             appointments_completed=6,
             appointments_cancelled=1,
             appointments_no_show=1,
+            patients_total=6,
+            patients_primary=2,
+            patients_repeat=4,
             paid_revenue=Decimal("500000"),
             data_as_of=datetime(2026, 7, 20, tzinfo=UTC),
         )

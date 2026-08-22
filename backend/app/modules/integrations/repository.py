@@ -1,9 +1,11 @@
 """Persistence for connections, raw rows, mapping and normalization state."""
 
 from datetime import UTC, datetime
+import re
+import unicodedata
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -168,8 +170,7 @@ class IntegrationRepository:
         if source_entities:
             conditions.append(RawRecord.source_entity.in_(source_entities))
         if period_from:
-            period_text = period_from.replace(tzinfo=None).isoformat(timespec="seconds")
-            conditions.append(RawRecord.payload["Period"].astext >= period_text)
+            conditions.append(self._one_c_history_condition(period_from))
         rows = await self.session.execute(
             select(RawRecord.status, func.count(RawRecord.id))
             .where(*conditions)
@@ -189,6 +190,92 @@ class IntegrationRepository:
         )
         return str(codes[0]) if len(codes) == 1 else None
 
+    async def one_c_branch_code_map(
+        self, tenant_id: UUID, connection_id: UUID
+    ) -> dict[str, str]:
+        """Match 1C structural units to Revora branches by their human names.
+
+        A mapping is returned only for an unambiguous match. This intentionally
+        fails closed: an unknown 1C unit must never be silently assigned to the
+        default branch of a multi-branch clinic.
+        """
+
+        branches = list(
+            (
+                await self.session.scalars(
+                    select(Branch).where(
+                        Branch.tenant_id == tenant_id, Branch.is_active.is_(True)
+                    )
+                )
+            ).all()
+        )
+        units = list(
+            (
+                await self.session.scalars(
+                    select(RawRecord).where(
+                        RawRecord.tenant_id == tenant_id,
+                        RawRecord.connection_id == connection_id,
+                        RawRecord.source_entity == "Catalog_СтруктурныеЕдиницы",
+                    )
+                )
+            ).all()
+        )
+        mapping: dict[str, str] = {}
+        normalized_branches = [
+            (branch, self._normalize_branch_name(branch.name)) for branch in branches
+        ]
+        for unit in units:
+            payload = dict(unit.payload or {})
+            key = str(payload.get("Ref_Key") or "").strip().lower()
+            unit_name = self._normalize_branch_name(payload.get("Description"))
+            if not key or not unit_name:
+                continue
+            matches = [
+                branch
+                for branch, branch_name in normalized_branches
+                if branch_name
+                and (
+                    branch_name == unit_name
+                    or branch_name in unit_name
+                    or unit_name in branch_name
+                )
+            ]
+            if len(matches) == 1:
+                mapping[key] = str(matches[0].code)
+        return mapping
+
+    async def one_c_branch_mapping_details(
+        self, tenant_id: UUID, connection_id: UUID
+    ) -> list[tuple[str, str, str]]:
+        mapping = await self.one_c_branch_code_map(tenant_id, connection_id)
+        if not mapping:
+            return []
+        units = list(
+            (
+                await self.session.scalars(
+                    select(RawRecord).where(
+                        RawRecord.tenant_id == tenant_id,
+                        RawRecord.connection_id == connection_id,
+                        RawRecord.source_entity == "Catalog_СтруктурныеЕдиницы",
+                    )
+                )
+            ).all()
+        )
+        details: list[tuple[str, str, str]] = []
+        for unit in units:
+            payload = dict(unit.payload or {})
+            key = str(payload.get("Ref_Key") or "").strip().lower()
+            if key in mapping:
+                details.append(
+                    (key, str(payload.get("Description") or key), mapping[key])
+                )
+        return sorted(details, key=lambda item: item[1].casefold())
+
+    @staticmethod
+    def _normalize_branch_name(value: object) -> str:
+        text_value = unicodedata.normalize("NFKD", str(value or "")).casefold()
+        return re.sub(r"[^a-zа-я0-9]+", "", text_value)
+
     async def pending_one_c_records(
         self,
         *,
@@ -198,7 +285,6 @@ class IntegrationRepository:
         period_from: datetime,
         limit: int,
     ) -> list[RawRecord]:
-        period_text = period_from.replace(tzinfo=None).isoformat(timespec="seconds")
         return list(
             (
                 await self.session.scalars(
@@ -208,7 +294,7 @@ class IntegrationRepository:
                         RawRecord.connection_id == connection_id,
                         RawRecord.source_entity.in_(source_entities),
                         RawRecord.status == "pending",
-                        RawRecord.payload["Period"].astext >= period_text,
+                        self._one_c_history_condition(period_from),
                     )
                     .order_by(RawRecord.received_at, RawRecord.id)
                     .limit(limit)
@@ -224,17 +310,54 @@ class IntegrationRepository:
         source_entities: tuple[str, ...],
         period_from: datetime,
     ) -> int:
-        period_text = period_from.replace(tzinfo=None).isoformat(timespec="seconds")
         count = await self.session.scalar(
             select(func.count(RawRecord.id)).where(
                 RawRecord.tenant_id == tenant_id,
                 RawRecord.connection_id == connection_id,
                 RawRecord.source_entity.in_(source_entities),
                 RawRecord.status == "pending",
-                RawRecord.payload["Period"].astext >= period_text,
+                self._one_c_history_condition(period_from),
             )
         )
         return int(count or 0)
+
+    async def reset_one_c_records_for_reprocessing(
+        self,
+        *,
+        tenant_id: UUID,
+        connection_id: UUID,
+        source_entities: tuple[str, ...],
+        period_from: datetime,
+    ) -> int:
+        result = await self.session.execute(
+            update(RawRecord)
+            .where(
+                RawRecord.tenant_id == tenant_id,
+                RawRecord.connection_id == connection_id,
+                RawRecord.source_entity.in_(source_entities),
+                RawRecord.status.in_(("normalized", "quarantined")),
+                self._one_c_history_condition(period_from),
+            )
+            .values(status="pending")
+        )
+        await self.session.flush()
+        return int(result.rowcount or 0)
+
+    @staticmethod
+    def _one_c_history_condition(period_from: datetime):
+        period_text = period_from.replace(tzinfo=None).isoformat(timespec="seconds")
+        business_date = func.coalesce(
+            RawRecord.payload["Period"].astext,
+            RawRecord.payload["Date"].astext,
+            RawRecord.payload["Дата"].astext,
+            RawRecord.payload["ДатаСоздания"].astext,
+        )
+        # Catalogs are dependencies for documents and usually have no business
+        # period. They must be available before appointments are retried.
+        return or_(
+            RawRecord.source_entity.startswith("Catalog_", autoescape=True),
+            business_date >= period_text,
+        )
 
     async def mark_raw_normalized(self, raw_record: RawRecord) -> None:
         raw_record.status = "normalized"

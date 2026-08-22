@@ -105,7 +105,12 @@ def normalize_one_c_operational_record(
             "patient_external_id": patient_id,
             "doctor_external_id": _guid(payload.get("Врач_Key")),
             "starts_at": starts_at,
-            "status": _appointment_status(payload.get("Статус"), payload.get("СсылкаНаПрием_Key")),
+            "status": _appointment_status(
+                payload.get("Статус"),
+                payload.get("СсылкаНаПрием_Key"),
+                bool(payload.get("DeletionMark")),
+            ),
+            "is_primary": _is_primary_patient_status(payload.get("СтатусПациента")),
         }, issues)
 
     if source_entity == TREATMENT_PLAN_ENTITY:
@@ -181,17 +186,26 @@ def _lead_status(value: object) -> str:
     return "new"
 
 
-def _appointment_status(value: object, reception_key: object) -> str:
-    if _guid(reception_key):
-        return "completed"
+def _appointment_status(value: object, reception_key: object, deleted: bool = False) -> str:
+    if deleted:
+        return "deleted"
     text = (_text(value) or "").casefold().replace("ё", "е")
-    if any(marker in text for marker in ("не приш", "неяв", "no_show")):
+    # This check must precede the generic "состоял" marker. Otherwise the
+    # literal 1C status "Прием не состоялся" is incorrectly counted as done.
+    if any(marker in text for marker in ("не состоял", "не приш", "неяв", "no_show")):
         return "no_show"
     if any(marker in text for marker in ("отмен", "аннулир")):
         return "cancelled"
-    if any(marker in text for marker in ("заверш", "выполн", "состоял", "пришел")):
+    if _guid(reception_key):
+        return "completed"
+    if any(marker in text for marker in ("окончен", "заверш", "выполн", "состоял", "пришел")):
         return "completed"
     return "scheduled"
+
+
+def _is_primary_patient_status(value: object) -> bool:
+    text = (_text(value) or "").casefold().replace("ё", "е")
+    return "первич" in text
 
 
 def _is_positive_status(value: str) -> bool:

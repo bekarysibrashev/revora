@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     meta_ad_account_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
     meta_graph_api_version: str = "v25.0"
     meta_tenant_slug: str = "demo"
+    meta_attribution_windows: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["7d_click", "1d_view"]
+    )
+    meta_action_report_time: Literal["impression", "conversion", "mixed"] = "impression"
+    meta_auto_sync_enabled: bool = False
+    meta_auto_sync_interval_minutes: int = Field(default=180, ge=15, le=1440)
+    meta_auto_sync_lookback_days: int = Field(default=30, ge=1, le=90)
 
     # LLM analyst. The API key never reaches the browser or tenant data tables.
     analyst_ai_provider: Literal["openai", "groq"] = "groq"
@@ -128,16 +135,20 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
-    @field_validator("meta_ad_account_ids", mode="before")
+    @field_validator("meta_ad_account_ids", "meta_attribution_windows", mode="before")
     @classmethod
-    def split_meta_ad_account_ids(cls, value: object) -> object:
+    def split_meta_lists(cls, value: object) -> object:
         if isinstance(value, str):
-            return [
-                account.strip()
-                for account in value.split(",")
-                if account.strip()
-            ]
+            return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("meta_attribution_windows")
+    @classmethod
+    def validate_meta_attribution_windows(cls, value: list[str]) -> list[str]:
+        allowed = {"1d_click", "7d_click", "28d_click", "1d_view", "7d_view", "28d_view"}
+        if not value or any(item not in allowed for item in value):
+            raise ValueError("META_ATTRIBUTION_WINDOWS contains an unsupported window")
+        return list(dict.fromkeys(value))
 
     @model_validator(mode="after")
     def reject_development_secrets_in_production(self) -> "Settings":

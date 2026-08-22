@@ -14,7 +14,7 @@ from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityR
 from app.modules.doctors.models import Doctor, DoctorCompensationRule, DoctorRating
 from app.modules.finance.models import (
     AccountBalance, BankStatementUpload, CashFlowFact, ExpenseCategory, ExpenseFact,
-    RawBankTransaction, RevenueFact,
+    PayrollFact, RawBankTransaction, RevenueFact,
 )
 from app.modules.integrations.models import (
     IntegrationConnection,

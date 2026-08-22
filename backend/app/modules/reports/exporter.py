@@ -23,10 +23,14 @@ def export_pnl(report: PnlResponse, output_format: ReportFormat) -> bytes:
         ("Variable expenses", report.variable_expenses),
         ("Fixed expenses", report.fixed_expenses),
         ("Uncategorized expenses", report.uncategorized_expenses),
+        ("Payroll accrual (reference, not added twice)", report.payroll_accrual),
         ("Total expenses", report.total_expenses),
         ("Gross profit", report.gross_profit),
-        ("EBITDA", report.ebitda),
-        ("Net profit", report.net_profit),
+        ("EBITDA from available data", report.ebitda),
+        (
+            "Net profit" if report.profit_is_complete else "Operating profit from available data",
+            report.net_profit,
+        ),
     ]
     return _export("Profit and Loss", rows, report.meta, output_format)
 

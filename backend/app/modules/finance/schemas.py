@@ -20,10 +20,14 @@ class PnlResponse(BaseModel):
     variable_expenses: Decimal
     fixed_expenses: Decimal
     uncategorized_expenses: Decimal
+    payroll_accrual: Decimal
     total_expenses: Decimal
     gross_profit: Decimal
     ebitda: Decimal
     net_profit: Decimal
+    expense_classification_rate: Decimal
+    profit_is_complete: bool
+    profit_label: str
     meta: AnalyticsMeta
 
 

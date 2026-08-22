@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -69,6 +69,7 @@ class Appointment(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     external_id: Mapped[str] = mapped_column(String(150))
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(50), index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
 
 class TreatmentPlan(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):

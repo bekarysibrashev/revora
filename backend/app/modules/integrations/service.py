@@ -22,10 +22,17 @@ from app.modules.integrations.one_c import (
     source_record_id,
 )
 from app.modules.integrations.one_c_finance import (
+    EXPENSE_ENTITY,
     MAPPABLE_ONE_C_ENTITIES as MAPPABLE_ONE_C_FINANCE_ENTITIES,
+    MONEY_ENTITY,
+    PAYROLL_ENTITY,
+    REVENUE_ENTITY,
+    SALES_ENTITY,
     normalize_one_c_finance_record,
 )
 from app.modules.integrations.one_c_operational import (
+    APPOINTMENT_ENTITY,
+    LEAD_ENTITY,
     MAPPABLE_OPERATIONAL_ENTITIES,
     normalize_one_c_operational_record,
 )
@@ -46,6 +53,7 @@ from app.modules.integrations.schemas import (
     OneCNormalizeResponse,
     OneCMetadataRequest,
     OneCMetadataResponse,
+    OneCBranchMapping,
     OneCPushRequest,
     OneCPushResponse,
 )
@@ -53,6 +61,15 @@ from app.modules.integrations.tabular_adapter import InvalidTabularFile, Unsuppo
 
 
 MAPPABLE_ONE_C_ENTITIES = (*MAPPABLE_ONE_C_FINANCE_ENTITIES, *MAPPABLE_OPERATIONAL_ENTITIES)
+REPROCESSABLE_ONE_C_ENTITIES = (
+    REVENUE_ENTITY,
+    MONEY_ENTITY,
+    EXPENSE_ENTITY,
+    SALES_ENTITY,
+    PAYROLL_ENTITY,
+    LEAD_ENTITY,
+    APPOINTMENT_ENTITY,
+)
 
 
 class IntegrationService:
@@ -131,6 +148,9 @@ class IntegrationService:
             period_from=period_from,
         )
         settings = connection.settings or {}
+        branch_mappings = await self.repository.one_c_branch_mapping_details(
+            user.tenant_id, connection.id
+        )
         last_synced_at = None
         if settings.get("last_synced_at"):
             try:
@@ -147,6 +167,14 @@ class IntegrationService:
             normalized_records=status_counts.get("normalized", 0),
             quarantined_records=status_counts.get("quarantined", 0),
             entities=[EntitySyncCount(entity=entity, records=count) for entity, count in counts],
+            branch_mappings=[
+                OneCBranchMapping(
+                    structural_unit_key=key,
+                    structural_unit_name=name,
+                    branch_code=branch_code,
+                )
+                for key, name, branch_code in branch_mappings
+            ],
         )
 
     async def ingest_one_c_push(
@@ -190,6 +218,9 @@ class IntegrationService:
             if connection.settings.get("default_branch_code")
             else await self.repository.single_active_branch_code(parts.tenant_id)
         )
+        branch_code_map = await self.repository.one_c_branch_code_map(
+            parts.tenant_id, connection.id
+        )
         for record in payload.records:
             raw_record, created = await self.repository.store_raw_record(
                 tenant_id=parts.tenant_id,
@@ -209,7 +240,9 @@ class IntegrationService:
                 outcome = await self._normalize_one_c_raw_record(
                     tenant_id=parts.tenant_id,
                     raw_record=raw_record,
-                    branch_code=branch_code,
+                    branch_code=self._one_c_record_branch_code(
+                        record, branch_code_map, branch_code
+                    ),
                 )
                 normalized += int(outcome == "normalized")
                 quarantined += int(outcome == "quarantined")
@@ -318,7 +351,18 @@ class IntegrationService:
             if connection.settings.get("default_branch_code")
             else await self.repository.single_active_branch_code(user.tenant_id)
         )
+        branch_code_map = await self.repository.one_c_branch_code_map(
+            user.tenant_id, connection.id
+        )
         period_from = datetime.now(UTC) - timedelta(days=payload.history_days)
+        reset = 0
+        if payload.reset_existing:
+            reset = await self.repository.reset_one_c_records_for_reprocessing(
+                tenant_id=user.tenant_id,
+                connection_id=connection.id,
+                source_entities=REPROCESSABLE_ONE_C_ENTITIES,
+                period_from=period_from,
+            )
         records = await self.repository.pending_one_c_records(
             tenant_id=user.tenant_id,
             connection_id=connection.id,
@@ -332,7 +376,9 @@ class IntegrationService:
             outcome = await self._normalize_one_c_raw_record(
                 tenant_id=user.tenant_id,
                 raw_record=raw_record,
-                branch_code=branch_code,
+                branch_code=self._one_c_record_branch_code(
+                    dict(raw_record.payload), branch_code_map, branch_code
+                ),
             )
             normalized += int(outcome == "normalized")
             quarantined += int(outcome == "quarantined")
@@ -344,6 +390,7 @@ class IntegrationService:
         )
         return OneCNormalizeResponse(
             connection_id=connection.id,
+            reset=reset,
             processed=len(records),
             normalized=normalized,
             quarantined=quarantined,
@@ -396,6 +443,18 @@ class IntegrationService:
             return "quarantined"
         await self.repository.mark_raw_normalized(raw_record)
         return "normalized"
+
+    @staticmethod
+    def _one_c_record_branch_code(
+        payload: dict[str, object],
+        branch_code_map: dict[str, str],
+        fallback_branch_code: str | None,
+    ) -> str | None:
+        structure_key = str(payload.get("СтруктурнаяЕдиница_Key") or "").strip().lower()
+        empty_guid = "00000000-0000-0000-0000-000000000000"
+        if structure_key and structure_key != empty_guid:
+            return branch_code_map.get(structure_key)
+        return fallback_branch_code
 
     async def create_mapping_profile(
         self, user: User, connection_id: UUID, definition: MappingDefinition

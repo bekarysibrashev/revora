@@ -13,6 +13,7 @@ from app.modules.finance.models import (
     CashFlowFact,
     ExpenseCategory,
     ExpenseFact,
+    PayrollFact,
     RevenueFact,
 )
 
@@ -26,6 +27,7 @@ class PnlTotals:
     variable_expenses: Decimal
     fixed_expenses: Decimal
     uncategorized_expenses: Decimal
+    payroll_accrual: Decimal
     data_as_of: datetime | None
 
 
@@ -107,13 +109,25 @@ class FinanceRepository:
         if branch_id:
             expense_statement = expense_statement.where(ExpenseFact.branch_id == branch_id)
         expense = (await self.session.execute(expense_statement)).one()
-        timestamps = [value for value in (revenue[2], expense[3]) if value is not None]
+        payroll_statement = select(
+            func.coalesce(func.sum(PayrollFact.amount), 0),
+            func.max(PayrollFact.updated_at),
+        ).where(
+            PayrollFact.tenant_id == tenant_id,
+            PayrollFact.occurred_on >= date_from,
+            PayrollFact.occurred_on <= date_to,
+        )
+        if branch_id:
+            payroll_statement = payroll_statement.where(PayrollFact.branch_id == branch_id)
+        payroll = (await self.session.execute(payroll_statement)).one()
+        timestamps = [value for value in (revenue[2], expense[3], payroll[1]) if value is not None]
         return PnlTotals(
             revenue_accrual=Decimal(revenue[0]),
             revenue_payment=Decimal(revenue[1]),
             variable_expenses=Decimal(expense[0]),
             fixed_expenses=Decimal(expense[1]),
             uncategorized_expenses=Decimal(expense[2]),
+            payroll_accrual=Decimal(payroll[0]),
             data_as_of=max(timestamps) if timestamps else None,
         )
 

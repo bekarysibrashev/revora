@@ -36,6 +36,7 @@ class FakeOneCRepository:
         self.finished = None
         self.quarantined = []
         self.metadata = None
+        self.reset_count = 0
 
     async def set_tenant_context(self, tenant_id):
         self.context = tenant_id
@@ -66,6 +67,9 @@ class FakeOneCRepository:
     async def single_active_branch_code(self, tenant_id):
         return "main"
 
+    async def one_c_branch_code_map(self, tenant_id, connection_id):
+        return {}
+
     async def mark_raw_normalized(self, raw_record):
         raw_record.status = "normalized"
 
@@ -91,6 +95,15 @@ class FakeOneCRepository:
                 limit=100_000,
             )
         )
+
+    async def reset_one_c_records_for_reprocessing(self, **kwargs):
+        reset = 0
+        for row in self.raw_records.values():
+            if row.status in {"normalized", "quarantined"}:
+                row.status = "pending"
+                reset += 1
+        self.reset_count += reset
+        return reset
 
     async def finish_sync_run(self, run, **kwargs):
         self.finished = kwargs
@@ -143,6 +156,27 @@ def test_allowlist_includes_only_field_protected_operational_sources() -> None:
     assert "Catalog_Контрагенты" in SAFE_ONE_C_ENTITIES
     assert "Document_ПоступлениеДенежныхСредств" not in SAFE_ONE_C_ENTITIES
     assert "AccumulationRegister_Выручка_RecordType" in SAFE_ONE_C_ENTITIES
+    assert "Catalog_СтруктурныеЕдиницы" in SAFE_ONE_C_ENTITIES
+
+
+def test_structural_unit_mapping_overrides_default_branch() -> None:
+    payload = {"СтруктурнаяЕдиница_Key": "UNIT-SEIFULLINA"}
+
+    assert IntegrationService._one_c_record_branch_code(
+        payload, {"unit-seifullina": "seifullina"}, "default"
+    ) == "seifullina"
+
+
+def test_unknown_structural_unit_never_falls_back_to_default_branch() -> None:
+    payload = {"СтруктурнаяЕдиница_Key": "UNKNOWN-UNIT"}
+
+    assert IntegrationService._one_c_record_branch_code(
+        payload, {"known-unit": "batys-mura"}, "default"
+    ) is None
+
+
+def test_record_without_structural_unit_can_use_single_branch_fallback() -> None:
+    assert IntegrationService._one_c_record_branch_code({}, {}, "main") == "main"
 
 
 def test_source_record_id_is_stable_for_register_rows() -> None:
@@ -291,3 +325,35 @@ async def test_existing_pending_rows_can_be_backfilled_into_canonical_tables() -
     assert result.remaining == 0
     assert raw.status == "normalized"
     assert writer.writes[0]["target_entity"] == "revenue_fact"
+
+
+@pytest.mark.asyncio
+async def test_existing_normalized_rows_can_be_reset_for_new_rules() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    _, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    writer = FakeOneCWriter()
+    service = IntegrationService(repository, writer)
+    raw = SimpleNamespace(
+        id=uuid4(),
+        status="normalized",
+        source_entity="AccumulationRegister_Выручка_RecordType",
+        source_record_id="payment-old|1",
+        payload={
+            "Period": datetime.now(UTC).isoformat(),
+            "Сумма": 5000,
+            "ВидОперации": "Оплата от пациента",
+        },
+    )
+    repository.raw_records["old-normalized"] = raw
+    user = SimpleNamespace(tenant_id=tenant_id, role="owner")
+
+    result = await service.normalize_existing_one_c_records(
+        user,
+        connection_id,
+        OneCNormalizeRequest(history_days=90, batch_size=200, reset_existing=True),
+    )
+
+    assert result.reset == 1
+    assert result.normalized == 1
+    assert raw.status == "normalized"

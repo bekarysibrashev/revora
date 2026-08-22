@@ -26,9 +26,11 @@ SAFE_ONE_C_ENTITIES = (
     "Catalog_Контрагенты",
     "Catalog_Сотрудники",
     "Catalog_Номенклатура",
+    "Catalog_СтруктурныеЕдиницы",
     "Catalog_Заявки",
     "Document_Событие",
     "Document_ПланЛечения",
+    "Document_НачислениеЗарплаты",
     "InformationRegister_РекламныеРасходы",
 )
 
@@ -44,9 +46,11 @@ SAFE_ONE_C_FIELDS: dict[str, frozenset[str]] = {
     "Catalog_Контрагенты": frozenset(("Ref_Key", "Description", "DeletionMark", "ДатаРегистрации", "ИсточникИнформации_Key", "КаналПривлечения_Key", "КаналПривлеченияЗначение", "СотрудникРегистрации_Key", "СтруктурнаяЕдиница_Key", "PhoneHash")),
     "Catalog_Сотрудники": frozenset(("Ref_Key", "Description", "DeletionMark", "Должность_Key", "Имя", "Отчество", "Фамилия", "НаименованиеСокращенное", "ПредставлениеДляОнлайнЗаписи", "Роль", "Служебный")),
     "Catalog_Номенклатура": frozenset(("Ref_Key", "Description", "DeletionMark", "НаименованиеПолное", "Специализация_Key", "ТипНоменклатуры", "НормаВремени", "ЭтоУслуга", "ЭтоЗапас")),
+    "Catalog_СтруктурныеЕдиницы": frozenset(("Ref_Key", "Description", "Code", "DeletionMark")),
     "Catalog_Заявки": frozenset(("Ref_Key", "DeletionMark", "utm_campaign", "utm_content", "utm_medium", "utm_source", "utm_term", "ДатаОбработки", "ДатаСоздания", "КаналПривлечения_Key", "КаналПривлеченияЗначение", "PhoneHash", "ОсновнойКлиент_Key", "ОсновнойМенеджер_Key", "РекламныйИсточник_Key", "Статус", "СтатусПациента", "СтруктурнаяЕдиница_Key", "Направление_Key", "Категория_Key")),
     "Document_Событие": frozenset(("Ref_Key", "Number", "Date", "DeletionMark", "Posted", "Врач_Key", "ДатаОкончания", "ДатаСоздания", "ИсточникЗаписи_Key", "Контрагент_Key", "ПричинаОтмены_Key", "Сделка_Key", "СсылкаНаПрием_Key", "Статус", "СтатусПациента", "СтруктурнаяЕдиница_Key", "ТипСобытия")),
     "Document_ПланЛечения": frozenset(("Ref_Key", "Number", "Date", "DeletionMark", "Posted", "Контрагент_Key", "Куратор_Key", "Сотрудник_Key", "Статус", "СтруктурнаяЕдиница_Key", "СуммаДокумента", "СуммаОплачено")),
+    "Document_НачислениеЗарплаты": frozenset(("Ref_Key", "Number", "Date", "DeletionMark", "Posted", "ДатаНачалаПериода", "ДатаОкончанияПериода", "Сотрудник_Key", "СтруктурнаяЕдиница_Key", "СуммаДокумента", "СтатьяРасходов_Key")),
     "InformationRegister_РекламныеРасходы": frozenset(("utmCampaign", "utmContent", "utmMedium", "utmSource", "utmTerm", "Дата", "Сумма")),
 }
 
