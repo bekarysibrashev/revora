@@ -222,7 +222,12 @@ class IntegrationRepository:
         )
         mapping: dict[str, str] = {}
         normalized_branches = [
-            (branch, self._normalize_branch_name(branch.name)) for branch in branches
+            (
+                branch,
+                self._normalize_branch_name(branch.name),
+                self._normalize_branch_name(branch.code),
+            )
+            for branch in branches
         ]
         for unit in units:
             payload = dict(unit.payload or {})
@@ -232,12 +237,11 @@ class IntegrationRepository:
                 continue
             matches = [
                 branch
-                for branch, branch_name in normalized_branches
-                if branch_name
-                and (
-                    branch_name == unit_name
-                    or branch_name in unit_name
-                    or unit_name in branch_name
+                for branch, branch_name, branch_code in normalized_branches
+                if self._branch_matches_unit(
+                    unit_name,
+                    branch_name=branch_name,
+                    branch_code=branch_code,
                 )
             ]
             if len(matches) == 1:
@@ -275,6 +279,41 @@ class IntegrationRepository:
     def _normalize_branch_name(value: object) -> str:
         text_value = unicodedata.normalize("NFKD", str(value or "")).casefold()
         return re.sub(r"[^a-zа-я0-9]+", "", text_value)
+
+    @classmethod
+    def _branch_matches_unit(
+        cls, unit_name: str, *, branch_name: str, branch_code: str
+    ) -> bool:
+        """Match 1C Cyrillic names to stable Latin branch codes, fail closed."""
+
+        unit_aliases = {unit_name, cls._transliterate_branch_name(unit_name)}
+        branch_aliases = {branch_name, branch_code}
+        return any(
+            branch_alias
+            and unit_alias
+            and (
+                branch_alias == unit_alias
+                or branch_alias in unit_alias
+                or unit_alias in branch_alias
+            )
+            for branch_alias in branch_aliases
+            for unit_alias in unit_aliases
+        )
+
+    @staticmethod
+    def _transliterate_branch_name(value: str) -> str:
+        table = str.maketrans(
+            {
+                "а": "a", "б": "b", "в": "v", "г": "g", "д": "d",
+                "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i",
+                "й": "i", "к": "k", "л": "l", "м": "m", "н": "n",
+                "о": "o", "п": "p", "р": "r", "с": "s", "т": "t",
+                "у": "u", "ф": "f", "х": "h", "ц": "ts", "ч": "ch",
+                "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "",
+                "э": "e", "ю": "yu", "я": "ya",
+            }
+        )
+        return value.translate(table)
 
     async def pending_one_c_records(
         self,

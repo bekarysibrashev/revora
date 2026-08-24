@@ -17,6 +17,7 @@ from app.modules.integrations.schemas import (
     OneCNormalizeRequest,
     OneCPushRequest,
 )
+from app.modules.integrations.repository import IntegrationRepository
 from app.modules.integrations.service import IntegrationService
 
 
@@ -177,6 +178,27 @@ def test_unknown_structural_unit_never_falls_back_to_default_branch() -> None:
 
 def test_record_without_structural_unit_can_use_single_branch_fallback() -> None:
     assert IntegrationService._one_c_record_branch_code({}, {}, "main") == "main"
+
+
+def test_cyrillic_structural_units_match_latin_branch_codes() -> None:
+    assert IntegrationRepository._branch_matches_unit(
+        IntegrationRepository._normalize_branch_name("SAN (Сейфуллина)"),
+        branch_name="seifullina",
+        branch_code="seifullina",
+    )
+    assert IntegrationRepository._branch_matches_unit(
+        IntegrationRepository._normalize_branch_name("SAN (Батыс Мура)"),
+        branch_name="batysmura",
+        branch_code="batysmura",
+    )
+
+
+def test_unrelated_structural_unit_is_not_mapped() -> None:
+    assert not IntegrationRepository._branch_matches_unit(
+        IntegrationRepository._normalize_branch_name("ИП Dent.Co"),
+        branch_name="seifullina",
+        branch_code="seifullina",
+    )
 
 
 def test_source_record_id_is_stable_for_register_rows() -> None:
