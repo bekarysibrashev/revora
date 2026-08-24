@@ -5,7 +5,7 @@ import re
 import unicodedata
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select, text, update
+from sqlalchemy import case, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -324,6 +324,21 @@ class IntegrationRepository:
         period_from: datetime,
         limit: int,
     ) -> list[RawRecord]:
+        dependency_order = case(
+            {
+                "Catalog_СтруктурныеЕдиницы": 0,
+                "Catalog_Контрагенты": 1,
+                "Catalog_Сотрудники": 1,
+                "Catalog_Номенклатура": 1,
+                "Document_Событие": 2,
+                "AccumulationRegister_Продажи_RecordType": 3,
+                "AccumulationRegister_Выручка_RecordType": 4,
+                "AccumulationRegister_РасчетыСПерсоналом_RecordType": 4,
+                "Document_НачислениеЗарплаты": 5,
+            },
+            value=RawRecord.source_entity,
+            else_=10,
+        )
         return list(
             (
                 await self.session.scalars(
@@ -335,7 +350,7 @@ class IntegrationRepository:
                         RawRecord.status == "pending",
                         self._one_c_history_condition(period_from),
                     )
-                    .order_by(RawRecord.received_at, RawRecord.id)
+                    .order_by(dependency_order, RawRecord.received_at, RawRecord.id)
                     .limit(limit)
                 )
             ).all()

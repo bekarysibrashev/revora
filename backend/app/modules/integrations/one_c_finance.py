@@ -21,12 +21,14 @@ MONEY_ENTITY = "AccumulationRegister_ДенежныеСредства_RecordType
 EXPENSE_ENTITY = "AccumulationRegister_Затраты_RecordType"
 SALES_ENTITY = "AccumulationRegister_Продажи_RecordType"
 PAYROLL_ENTITY = "Document_НачислениеЗарплаты"
+PAYROLL_REGISTER_ENTITY = "AccumulationRegister_РасчетыСПерсоналом_RecordType"
 MAPPABLE_ONE_C_ENTITIES = (
     REVENUE_ENTITY,
     MONEY_ENTITY,
     EXPENSE_ENTITY,
     SALES_ENTITY,
     PAYROLL_ENTITY,
+    PAYROLL_REGISTER_ENTITY,
 )
 
 
@@ -61,7 +63,16 @@ def normalize_one_c_finance_record(
     issues: list[MappingIssue] = []
     if source_entity == PAYROLL_ENTITY:
         occurred_at = _payroll_period(normalized, issues)
-        amount = _amount_from_aliases(normalized, issues, "СуммаДокумента")
+        # Payroll documents are retained as zero-valued facts so a reprocess
+        # removes values written by the old document-based mapper. The verified
+        # 1C payroll report is movement-based and is sourced from the personnel
+        # settlement register below.
+        amount = Decimal("0")
+    elif source_entity == PAYROLL_REGISTER_ENTITY:
+        occurred_at = _payroll_register_period(normalized, issues)
+        amount = _amount(normalized, issues)
+        if not _is_payroll_accrual(normalized, issues):
+            amount = Decimal("0")
     else:
         occurred_at = _period(normalized, issues)
         amount = _amount(normalized, issues)
@@ -81,14 +92,6 @@ def normalize_one_c_finance_record(
     }
 
     if source_entity in {REVENUE_ENTITY, SALES_ENTITY}:
-        if not branch_code:
-            issues.append(
-                MappingIssue(
-                    code="ONE_C_BRANCH_MAPPING_REQUIRED",
-                    message="A single/default Revora branch is required for 1C revenue",
-                    field_name="branch_code",
-                )
-            )
         if source_entity == REVENUE_ENTITY and not _is_actual_patient_payment(normalized):
             # Keep an excluded row as a zero-valued fact. Reprocessing can then
             # safely correct canonical rows created by an older broader mapper.
@@ -97,7 +100,9 @@ def normalize_one_c_finance_record(
             {
                 "branch_code": branch_code,
                 "patient_external_id": _reference_value(normalized, "Контрагент_Key"),
-                "doctor_external_id": _reference_value(normalized, "Сотрудник_Key"),
+                "doctor_external_id": _reference_value(
+                    normalized, "Сотрудник_Key", "Куратор_Key"
+                ),
                 "recognition_type": "payment" if source_entity == REVENUE_ENTITY else "accrual",
                 "occurred_at": occurred_at,
                 "amount": amount,
@@ -105,7 +110,7 @@ def normalize_one_c_finance_record(
         )
         return OneCFinanceMapping("revenue_fact", base, issues)
 
-    if source_entity == PAYROLL_ENTITY:
+    if source_entity in {PAYROLL_ENTITY, PAYROLL_REGISTER_ENTITY}:
         if not branch_code:
             issues.append(
                 MappingIssue(
@@ -267,22 +272,6 @@ def _amount(
     return _decimal_value(raw, key, issues)
 
 
-def _amount_from_aliases(
-    source: dict[str, object], issues: list[MappingIssue], *aliases: str
-) -> Decimal | None:
-    key, raw = _find(source, *aliases)
-    if raw is None:
-        issues.append(
-            MappingIssue(
-                code="ONE_C_AMOUNT_MISSING",
-                message="1C row has no recognizable amount field",
-                field_name="/".join(aliases),
-            )
-        )
-        return None
-    return _decimal_value(raw, key, issues)
-
-
 def _payroll_period(
     source: dict[str, object], issues: list[MappingIssue]
 ) -> datetime | None:
@@ -309,6 +298,56 @@ def _payroll_period(
             )
         )
         return None
+
+
+def _payroll_register_period(
+    source: dict[str, object], issues: list[MappingIssue]
+) -> datetime | None:
+    _, raw = _find(source, "МесяцНачисления", "Period", "Период")
+    if raw is None:
+        issues.append(
+            MappingIssue(
+                code="ONE_C_PERIOD_MISSING",
+                message="1C personnel settlement row has no accrual month",
+                field_name="МесяцНачисления",
+            )
+        )
+        return None
+    try:
+        value = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw).strip())
+        return value if value.tzinfo else value.replace(tzinfo=timezone(timedelta(hours=5)))
+    except (TypeError, ValueError) as exc:
+        issues.append(
+            MappingIssue(
+                code="ONE_C_PERIOD_INVALID",
+                message=f"Cannot convert 1C payroll month: {exc}",
+                field_name="МесяцНачисления",
+                raw_value=raw,
+            )
+        )
+        return None
+
+
+def _is_payroll_accrual(
+    source: dict[str, object], issues: list[MappingIssue]
+) -> bool:
+    _, raw = _find(source, "RecordType", "ТипДвижения", "ВидДвижения")
+    text = _normalize_key(raw or "").replace("ё", "е")
+    if any(marker in text for marker in ("receipt", "приход")):
+        return True
+    if any(marker in text for marker in ("expense", "расход")):
+        return False
+    if _reference_value(source, "ДокументНачисления_Key"):
+        return True
+    issues.append(
+        MappingIssue(
+            code="ONE_C_PAYROLL_MOVEMENT_UNKNOWN",
+            message="Personnel settlement movement is neither accrual nor payment",
+            field_name="RecordType",
+            raw_value=raw,
+        )
+    )
+    return False
 
 
 def _decimal_value(

@@ -3,9 +3,10 @@ from decimal import Decimal
 from app.modules.integrations.one_c_finance import (
     EXPENSE_ENTITY,
     MONEY_ENTITY,
+    PAYROLL_ENTITY,
+    PAYROLL_REGISTER_ENTITY,
     REVENUE_ENTITY,
     SALES_ENTITY,
-    PAYROLL_ENTITY,
     normalize_one_c_finance_record,
 )
 
@@ -122,7 +123,7 @@ def test_expense_behavior_is_inferred_only_for_known_categories() -> None:
     assert rent is not None and rent.data["cost_behavior"] == "fixed"
 
 
-def test_payroll_document_uses_accounting_month_not_posting_date() -> None:
+def test_old_payroll_document_is_zeroed_after_switch_to_register() -> None:
     result = normalize_one_c_finance_record(
         source_entity=PAYROLL_ENTITY,
         source_record_id="payroll-july",
@@ -138,7 +139,62 @@ def test_payroll_document_uses_accounting_month_not_posting_date() -> None:
     assert result is not None and result.is_valid
     assert result.target_entity == "payroll_fact"
     assert result.data["occurred_on"].isoformat() == "2026-07-31"
+    assert result.data["amount"] == Decimal("0")
+
+
+def test_payroll_register_uses_accrual_month_and_receipt_movement() -> None:
+    result = normalize_one_c_finance_record(
+        source_entity=PAYROLL_REGISTER_ENTITY,
+        source_record_id="payroll-register-july",
+        branch_code="main",
+        payload={
+            "Period": "2026-08-05T10:00:00",
+            "МесяцНачисления": "2026-07-31T23:59:59",
+            "RecordType": "Receipt",
+            "Сумма": "24549806.17",
+            "Active": True,
+        },
+    )
+
+    assert result is not None and result.is_valid
+    assert result.target_entity == "payroll_fact"
+    assert result.data["occurred_on"].isoformat() == "2026-07-31"
     assert result.data["amount"] == Decimal("24549806.17")
+
+
+def test_payroll_register_payment_movement_is_zeroed() -> None:
+    result = normalize_one_c_finance_record(
+        source_entity=PAYROLL_REGISTER_ENTITY,
+        source_record_id="payroll-register-payment",
+        branch_code="main",
+        payload={
+            "Period": "2026-08-05T10:00:00",
+            "МесяцНачисления": "2026-07-31T23:59:59",
+            "RecordType": "Expense",
+            "Сумма": "23199091.80",
+        },
+    )
+
+    assert result is not None and result.is_valid
+    assert result.data["amount"] == Decimal("0")
+
+
+def test_revenue_without_structural_unit_can_be_inferred_from_appointment() -> None:
+    result = normalize_one_c_finance_record(
+        source_entity=REVENUE_ENTITY,
+        source_record_id="payment-without-branch",
+        branch_code=None,
+        payload={
+            "Period": "2026-07-20T12:00:00",
+            "Сумма": "150000",
+            "ВидОперации": "Оплата от пациента",
+            "Контрагент_Key": "patient-1",
+        },
+    )
+
+    assert result is not None and result.is_valid
+    assert result.data["branch_code"] is None
+    assert result.data["patient_external_id"] == "patient-1"
 
 
 def test_money_register_infers_cash_direction() -> None:

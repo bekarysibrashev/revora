@@ -1,6 +1,6 @@
 """Load normalized dictionaries into the source-agnostic canonical model."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from uuid import UUID, uuid4
@@ -126,8 +126,8 @@ class CanonicalWriter:
         )
 
     async def _write_appointment(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
-        patient_id = await self._required_external_id(
-            Patient, tenant_id, self._string(data, "patient_external_id"), "patient"
+        patient_id = await self._ensure_patient_id(
+            tenant_id, self._string(data, "patient_external_id")
         )
         doctor_id = await self._optional_external_id(
             Doctor, tenant_id, self._optional_string(data, "doctor_external_id")
@@ -167,18 +167,32 @@ class CanonicalWriter:
         recognition_type = self._string(data, "recognition_type").lower()
         if recognition_type not in {"accrual", "payment"}:
             raise CanonicalWriteError("recognition_type must be 'accrual' or 'payment'")
+        patient_external_id = self._optional_string(data, "patient_external_id")
+        doctor_external_id = self._optional_string(data, "doctor_external_id")
+        patient_id = (
+            await self._ensure_patient_id(tenant_id, patient_external_id)
+            if patient_external_id
+            else None
+        )
+        doctor_id = await self._optional_external_id(
+            Doctor, tenant_id, doctor_external_id
+        )
+        occurred_at = self._datetime(data, "occurred_at")
+        branch_id = await self._revenue_branch_id(
+            tenant_id=tenant_id,
+            data=data,
+            patient_id=patient_id,
+            doctor_id=doctor_id,
+            occurred_at=occurred_at,
+        )
         values = {
             "tenant_id": tenant_id,
-            "branch_id": await self._branch_id(tenant_id, data),
-            "patient_id": await self._optional_external_id(
-                Patient, tenant_id, self._optional_string(data, "patient_external_id")
-            ),
-            "doctor_id": await self._optional_external_id(
-                Doctor, tenant_id, self._optional_string(data, "doctor_external_id")
-            ),
+            "branch_id": branch_id,
+            "patient_id": patient_id,
+            "doctor_id": doctor_id,
             "external_id": self._string(data, "external_id"),
             "recognition_type": recognition_type,
-            "occurred_at": self._datetime(data, "occurred_at"),
+            "occurred_at": occurred_at,
             "amount": self._decimal(data, "amount"),
             "currency": self._optional_string(data, "currency") or "KZT",
         }
@@ -397,6 +411,109 @@ class CanonicalWriter:
         if record_id is None:
             raise CanonicalWriteError(f"Unknown {label} external_id '{external_id}'")
         return record_id
+
+    async def _ensure_patient_id(self, tenant_id: UUID, external_id: str) -> UUID:
+        """Resolve a patient or create a safe stub for document-first OData syncs."""
+
+        existing = await self._optional_external_id(Patient, tenant_id, external_id)
+        if existing is not None:
+            return existing
+        values = {
+            "id": uuid4(),
+            "tenant_id": tenant_id,
+            "external_id": external_id,
+            "full_name": None,
+            "phone_e164_encrypted": None,
+            "phone_hash": None,
+            "lead_source": None,
+        }
+        statement = (
+            insert(Patient)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["tenant_id", "external_id"])
+            .returning(Patient.id)
+        )
+        created = (await self.session.execute(statement)).scalar_one_or_none()
+        if created is not None:
+            return created
+        resolved = await self._optional_external_id(Patient, tenant_id, external_id)
+        if resolved is None:
+            raise CanonicalWriteError(f"Could not create patient '{external_id}'")
+        return resolved
+
+    async def _revenue_branch_id(
+        self,
+        *,
+        tenant_id: UUID,
+        data: dict[str, object],
+        patient_id: UUID | None,
+        doctor_id: UUID | None,
+        occurred_at: datetime,
+    ) -> UUID:
+        explicit = await self._optional_branch_id(tenant_id, data)
+        if explicit is not None:
+            return explicit
+
+        inferred = await self._nearest_appointment_branch(
+            tenant_id=tenant_id,
+            occurred_at=occurred_at,
+            patient_id=patient_id,
+            doctor_id=None,
+            window=timedelta(days=31),
+        )
+        if inferred is None and doctor_id is not None:
+            inferred = await self._nearest_appointment_branch(
+                tenant_id=tenant_id,
+                occurred_at=occurred_at,
+                patient_id=None,
+                doctor_id=doctor_id,
+                window=timedelta(days=1),
+            )
+        if inferred is None:
+            raise CanonicalWriteError(
+                "branch_code is missing and no unambiguous appointment branch was found"
+            )
+        return inferred
+
+    async def _nearest_appointment_branch(
+        self,
+        *,
+        tenant_id: UUID,
+        occurred_at: datetime,
+        patient_id: UUID | None,
+        doctor_id: UUID | None,
+        window: timedelta,
+    ) -> UUID | None:
+        if patient_id is None and doctor_id is None:
+            return None
+        statement = select(Appointment.branch_id, Appointment.starts_at).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.status != "deleted",
+            Appointment.starts_at >= occurred_at - window,
+            Appointment.starts_at <= occurred_at + window,
+        )
+        if patient_id is not None:
+            statement = statement.where(Appointment.patient_id == patient_id)
+        if doctor_id is not None:
+            statement = statement.where(Appointment.doctor_id == doctor_id)
+        rows = list((await self.session.execute(statement.limit(100))).all())
+        return self._select_nearest_branch(rows, occurred_at)
+
+    @staticmethod
+    def _select_nearest_branch(
+        rows: list[tuple[UUID, datetime]], occurred_at: datetime
+    ) -> UUID | None:
+        if not rows:
+            return None
+        distances = [
+            (abs((starts_at - occurred_at).total_seconds()), branch_id)
+            for branch_id, starts_at in rows
+        ]
+        nearest_distance = min(distance for distance, _ in distances)
+        nearest_branches = {
+            branch_id for distance, branch_id in distances if distance == nearest_distance
+        }
+        return next(iter(nearest_branches)) if len(nearest_branches) == 1 else None
 
     async def _optional_external_id(
         self, model, tenant_id: UUID, external_id: str | None
