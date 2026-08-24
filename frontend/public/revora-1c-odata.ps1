@@ -80,7 +80,11 @@ $ApprovedEntityDefinitions = @($ApprovedEntityDefinitionBase64 | ForEach-Object 
 })
 # Dependencies first: patients and staff must exist before leads, appointments
 # and finance facts are normalized in Revora.
-$ApprovedEntityDefinitions = @($ApprovedEntityDefinitions[16] + $ApprovedEntityDefinitions[8..15] + $ApprovedEntityDefinitions[0..7])
+$ApprovedEntityDefinitions = @(
+    $ApprovedEntityDefinitions[16]
+    $ApprovedEntityDefinitions[8..15]
+    $ApprovedEntityDefinitions[0..7]
+)
 $ApprovedEntities = @($ApprovedEntityDefinitions | ForEach-Object { $_.entity })
 # The initial import can load the full patient directory. Subsequent runs only
 # need newly registered patients; otherwise every three-hour sync rereads the
