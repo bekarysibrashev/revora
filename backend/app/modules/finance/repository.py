@@ -152,23 +152,42 @@ class FinanceRepository:
             statement = statement.where(CashFlowFact.branch_id == branch_id)
         row = (await self.session.execute(statement)).one()
 
-        balance_statement = (
-            select(AccountBalance.amount, AccountBalance.updated_at)
+        latest_balance = (
+            select(
+                AccountBalance.account_ref.label("account_ref"),
+                AccountBalance.branch_id.label("branch_id"),
+                func.max(AccountBalance.balance_at).label("balance_at"),
+            )
             .where(
                 AccountBalance.tenant_id == tenant_id,
                 AccountBalance.balance_at < self._end_exclusive(date_to),
             )
-            .order_by(AccountBalance.balance_at.desc())
-            .limit(1)
+            .group_by(AccountBalance.account_ref, AccountBalance.branch_id)
         )
         if branch_id:
-            balance_statement = balance_statement.where(AccountBalance.branch_id == branch_id)
-        balance = (await self.session.execute(balance_statement)).first()
-        timestamps = [value for value in (row[2], balance[1] if balance else None) if value is not None]
+            latest_balance = latest_balance.where(AccountBalance.branch_id == branch_id)
+        latest_balance = latest_balance.subquery()
+        balance_statement = (
+            select(
+                func.sum(AccountBalance.amount),
+                func.max(AccountBalance.updated_at),
+            )
+            .join(
+                latest_balance,
+                (latest_balance.c.account_ref == AccountBalance.account_ref)
+                & (latest_balance.c.balance_at == AccountBalance.balance_at)
+                & (latest_balance.c.branch_id.is_not_distinct_from(AccountBalance.branch_id)),
+            )
+            .where(AccountBalance.tenant_id == tenant_id)
+        )
+        balance = (await self.session.execute(balance_statement)).one()
+        closing_balance = Decimal(balance[0]) if balance[0] is not None else None
+
+        timestamps = [value for value in (row[2], balance[1]) if value is not None]
         return CashFlowTotals(
             inflow=Decimal(row[0]),
             outflow=Decimal(row[1]),
-            closing_balance=Decimal(balance[0]) if balance else None,
+            closing_balance=closing_balance,
             data_as_of=max(timestamps) if timestamps else None,
         )
 

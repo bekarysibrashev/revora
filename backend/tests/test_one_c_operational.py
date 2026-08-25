@@ -1,5 +1,7 @@
 from app.modules.integrations.one_c_operational import (
     APPOINTMENT_ENTITY,
+    APPOINTMENT_SERVICE_ENTITY,
+    EMPLOYEE_ENTITY,
     LEAD_ENTITY,
     MARKETING_SPEND_ENTITY,
     PATIENT_ENTITY,
@@ -25,6 +27,25 @@ def test_patient_mapping_accepts_only_local_phone_hash() -> None:
     assert result.target_entity == "patient"
     assert result.data["phone_hash"] == "a" * 64
     assert "phone" not in result.data
+    assert result.issues == []
+
+
+def test_patient_name_falls_back_to_explicit_name_fields() -> None:
+    result = normalize_one_c_operational_record(
+        source_entity=PATIENT_ENTITY,
+        source_record_id="patient-name-fields",
+        payload={
+            "Ref_Key": "patient-name-fields",
+            "Description": "",
+            "Фамилия": "Иванова",
+            "Имя": "Анна",
+            "Отчество": "Сергеевна",
+        },
+        branch_code="main",
+    )
+
+    assert result is not None
+    assert result.data["full_name"] == "Иванова Анна Сергеевна"
     assert result.issues == []
 
 
@@ -68,6 +89,58 @@ def test_appointment_with_reception_is_completed() -> None:
     assert result.target_entity == "appointment"
     assert result.data["status"] == "completed"
     assert result.issues == []
+
+
+def test_schedule_block_without_patient_is_not_an_appointment() -> None:
+    result = normalize_one_c_operational_record(
+        source_entity=APPOINTMENT_ENTITY,
+        source_record_id="schedule-block",
+        payload={
+            "Ref_Key": "schedule-block",
+            "Date": "2026-08-02T09:30:00",
+            "Врач_Key": "doctor-1",
+            "ТипСобытия": "Резерв",
+        },
+        branch_code="main",
+    )
+
+    assert result is None
+
+
+def test_appointment_service_updates_parent_direction() -> None:
+    result = normalize_one_c_operational_record(
+        source_entity=APPOINTMENT_SERVICE_ENTITY,
+        source_record_id="appointment-1|1",
+        payload={
+            "Ref_Key": "appointment-1",
+            "Date": "2026-08-02T09:30:00",
+            "Контрагент_Key": "patient-1",
+            "Врач_Key": "doctor-1",
+            "_DirectionExternalId": "service-1",
+        },
+        branch_code="main",
+    )
+
+    assert result is not None
+    assert result.data["external_id"] == "appointment-1"
+    assert result.data["direction_external_id"] == "service-1"
+
+
+def test_employee_uses_resolved_specialty_not_generic_role() -> None:
+    result = normalize_one_c_operational_record(
+        source_entity=EMPLOYEE_ENTITY,
+        source_record_id="doctor-1",
+        payload={
+            "Ref_Key": "doctor-1",
+            "Description": "Доктор Иванов",
+            "Роль": "Врач",
+            "_ResolvedSpecialty": "Ортодонт",
+        },
+        branch_code="main",
+    )
+
+    assert result is not None
+    assert result.data["specialty"] == "Ортодонт"
 
 
 def test_appointment_no_show_precedes_generic_completed_marker() -> None:

@@ -252,6 +252,65 @@ class IntegrationRepository:
         )
         return dict(parent.payload) if parent is not None else None
 
+    async def one_c_latest_payload_by_ref(
+        self,
+        tenant_id: UUID,
+        connection_id: UUID,
+        source_entity: str,
+        ref_key: str,
+    ) -> dict[str, object] | None:
+        """Return the latest non-superseded OData object for one 1C reference."""
+
+        record = await self.session.scalar(
+            select(RawRecord)
+            .where(
+                RawRecord.tenant_id == tenant_id,
+                RawRecord.connection_id == connection_id,
+                RawRecord.source_entity == source_entity,
+                RawRecord.payload["Ref_Key"].astext == ref_key,
+                RawRecord.status != "superseded",
+            )
+            .order_by(RawRecord.received_at.desc(), RawRecord.id.desc())
+            .limit(1)
+        )
+        return dict(record.payload) if record is not None else None
+
+    async def one_c_latest_child_payloads(
+        self,
+        tenant_id: UUID,
+        connection_id: UUID,
+        source_entity: str,
+        ref_key: str,
+    ) -> list[dict[str, object]]:
+        """Return one latest version per table-part line for a parent object."""
+
+        records = list(
+            (
+                await self.session.scalars(
+                    select(RawRecord)
+                    .where(
+                        RawRecord.tenant_id == tenant_id,
+                        RawRecord.connection_id == connection_id,
+                        RawRecord.source_entity == source_entity,
+                        RawRecord.payload["Ref_Key"].astext == ref_key,
+                        RawRecord.status != "superseded",
+                    )
+                    .order_by(RawRecord.received_at.desc(), RawRecord.id.desc())
+                )
+            ).all()
+        )
+        latest: dict[str, RawRecord] = {}
+        for record in records:
+            identity = record.source_record_id or record.record_hash or str(record.id)
+            latest.setdefault(identity, record)
+        return [
+            dict(record.payload)
+            for record in sorted(
+                latest.values(),
+                key=lambda item: int((item.payload or {}).get("LineNumber") or 0),
+            )
+        ]
+
     async def one_c_source_summaries(
         self,
         tenant_id: UUID,
@@ -312,6 +371,27 @@ class IntegrationRepository:
             amount_expression = cast(
                 func.nullif(RawRecord.payload[amount_field].astext, ""), Numeric(20, 2)
             )
+            row_is_current = []
+            if entity.startswith("AccumulationRegister_"):
+                row_is_current.append(
+                    or_(
+                        RawRecord.payload["Active"].astext.is_(None),
+                        func.lower(RawRecord.payload["Active"].astext) == "true",
+                    )
+                )
+            elif entity.startswith("Document_"):
+                row_is_current.extend(
+                    (
+                        or_(
+                            RawRecord.payload["DeletionMark"].astext.is_(None),
+                            func.lower(RawRecord.payload["DeletionMark"].astext) == "false",
+                        ),
+                        or_(
+                            RawRecord.payload["Posted"].astext.is_(None),
+                            func.lower(RawRecord.payload["Posted"].astext) == "true",
+                        ),
+                    )
+                )
             rows = await self.session.execute(
                 select(
                     value_expression,
@@ -327,6 +407,7 @@ class IntegrationRepository:
                         mapped_structure_keys
                     ),
                     self._one_c_history_condition(period_from),
+                    *row_is_current,
                 )
                 .group_by(value_expression)
                 .order_by(value_expression)
@@ -486,15 +567,21 @@ class IntegrationRepository:
         dependency_order = case(
             {
                 "Catalog_СтруктурныеЕдиницы": 0,
+                "Catalog_Специализации": 0,
+                "Catalog_СтатьиДвиженияДенежныхСредств": 0,
+                "Catalog_СтатьиДоходовИРасходов": 0,
+                "Catalog_НачисленияИУдержанияСотрудников": 0,
                 "Catalog_Контрагенты": 1,
                 "Catalog_Сотрудники": 1,
                 "Catalog_Номенклатура": 1,
-                "Document_Событие": 2,
-                "AccumulationRegister_Продажи_RecordType": 3,
-                "AccumulationRegister_Выручка_RecordType": 4,
-                "AccumulationRegister_РасчетыСПерсоналом_RecordType": 4,
-                "Document_НачислениеЗарплаты": 5,
-                "Document_НачислениеЗарплаты_РасчетЗарплаты": 6,
+                "Catalog_Сотрудники_СпецилазацииСотрудника": 2,
+                "Document_Событие": 3,
+                "Document_Событие_Услуги": 4,
+                "AccumulationRegister_Продажи_RecordType": 5,
+                "AccumulationRegister_Выручка_RecordType": 6,
+                "AccumulationRegister_РасчетыСПерсоналом_RecordType": 6,
+                "Document_НачислениеЗарплаты": 7,
+                "Document_НачислениеЗарплаты_РасчетЗарплаты": 8,
             },
             value=RawRecord.source_entity,
             else_=10,
@@ -655,6 +742,9 @@ class IntegrationRepository:
             RawRecord.payload["Date"].astext,
             RawRecord.payload["Дата"].astext,
             RawRecord.payload["ДатаСоздания"].astext,
+            RawRecord.payload["ДатаНачала"].astext,
+            RawRecord.payload["ПериодПо"].astext,
+            RawRecord.payload["ПериодС"].astext,
         )
         # Catalogs are dependencies for documents and usually have no business
         # period. They must be available before appointments are retried.
@@ -665,6 +755,14 @@ class IntegrationRepository:
 
     async def mark_raw_normalized(self, raw_record: RawRecord) -> None:
         raw_record.status = "normalized"
+        await self.session.execute(
+            update(NormalizationError)
+            .where(
+                NormalizationError.raw_record_id == raw_record.id,
+                NormalizationError.status == "open",
+            )
+            .values(status="resolved", resolved_at=datetime.now(UTC))
+        )
         await self.session.flush()
 
     async def create_mapping_profile(
@@ -791,6 +889,28 @@ class IntegrationRepository:
         )
         created = (await self.session.execute(statement)).scalar_one_or_none()
         if created is not None:
+            if source_record_id:
+                previous_ids = select(RawRecord.id).where(
+                    RawRecord.tenant_id == tenant_id,
+                    RawRecord.connection_id == connection_id,
+                    RawRecord.source_entity == source_entity,
+                    RawRecord.source_record_id == source_record_id,
+                    RawRecord.id != created.id,
+                    RawRecord.status != "superseded",
+                )
+                await self.session.execute(
+                    update(NormalizationError)
+                    .where(
+                        NormalizationError.raw_record_id.in_(previous_ids),
+                        NormalizationError.status == "open",
+                    )
+                    .values(status="resolved", resolved_at=datetime.now(UTC))
+                )
+                await self.session.execute(
+                    update(RawRecord)
+                    .where(RawRecord.id.in_(previous_ids))
+                    .values(status="superseded")
+                )
             return created, True
         existing = await self.session.scalar(
             select(RawRecord).where(

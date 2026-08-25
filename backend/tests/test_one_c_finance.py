@@ -196,6 +196,26 @@ def test_payroll_calculation_line_uses_employee_amount() -> None:
     assert result.data["amount"] == Decimal("481048.99")
 
 
+def test_payroll_deduction_line_is_not_counted_as_accrued_salary() -> None:
+    result = normalize_one_c_finance_record(
+        source_entity=PAYROLL_LINE_ENTITY,
+        source_record_id="payroll-july|2",
+        branch_code="main",
+        payload={
+            "Ref_Key": "payroll-july",
+            "LineNumber": 2,
+            "Сотрудник_Key": "employee-1",
+            "ДатаОкончанияПериода": "2026-07-31T23:59:59",
+            "Сумма": "50000",
+            "_ResolvedPayrollKind": "Удержание",
+        },
+    )
+
+    assert result is not None and result.is_valid
+    assert result.data["employee_external_id"] == "employee-1"
+    assert result.data["amount"] == Decimal("0")
+
+
 def test_payroll_register_is_zeroed_after_switch_to_documents() -> None:
     result = normalize_one_c_finance_record(
         source_entity=PAYROLL_REGISTER_ENTITY,
@@ -294,6 +314,26 @@ def test_money_register_infers_cash_direction() -> None:
     assert outgoing is not None and outgoing.is_valid
     assert outgoing.data["direction"] == "out"
     assert outgoing.data["amount"] == Decimal("12000")
+
+
+def test_money_register_keeps_resolved_category_and_account() -> None:
+    result = normalize_one_c_finance_record(
+        source_entity=MONEY_ENTITY,
+        source_record_id="money|categorized",
+        branch_code="main",
+        payload={
+            "Period": "2026-07-16T00:00:00",
+            "RecordType": "Expense",
+            "Сумма": 12000,
+            "БанковскийСчетКасса": "cashbox-1",
+            "_ResolvedCategoryName": "Реклама",
+        },
+    )
+
+    assert result is not None and result.is_valid
+    assert result.data["direction"] == "out"
+    assert result.data["category_name"] == "Реклама"
+    assert result.data["account_ref"] == "cashbox-1"
 
 
 def test_money_without_branch_is_quarantined() -> None:

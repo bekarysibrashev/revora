@@ -79,19 +79,43 @@ $ApprovedEntityDefinitionBase64 = @(
 $ApprovedEntityDefinitions = @($ApprovedEntityDefinitionBase64 | ForEach-Object {
     [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) | ConvertFrom-Json
 })
-# Dependencies first: patients and staff must exist before leads, appointments
-# and finance facts are normalized in Revora.
-$ApprovedEntityDefinitions = @(
-    $ApprovedEntityDefinitions[16]
-    $ApprovedEntityDefinitions[8..15]
-    $ApprovedEntityDefinitions[17]
-    $ApprovedEntityDefinitions[0..7]
+$AdditionalEntityDefinitionBase64 = @(
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LERlc2NyaXB0aW9uLENvZGUsUGFyZW50X0tleSxJc0ZvbGRlcixEZWxldGlvbk1hcmsiLCJlbnRpdHkiOiJDYXRhbG9nX9Ch0L/QtdGG0LjQsNC70LjQt9Cw0YbQuNC4IiwiZGF0ZV9maWVsZCI6bnVsbCwic3RhdGljX2ZpbHRlciI6IkRlbGV0aW9uTWFyayBlcSBmYWxzZSJ9",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LExpbmVOdW1iZXIs0KHQv9C10YbQuNCw0LvQuNC30LDRhtC40Y9fS2V5LNCe0YHQvdC+0LLQvdCw0Y8iLCJlbnRpdHkiOiJDYXRhbG9nX9Ch0L7RgtGA0YPQtNC90LjQutC4X9Ch0L/QtdGG0LjQu9Cw0LfQsNGG0LjQuNCh0L7RgtGA0YPQtNC90LjQutCwIiwiZGF0ZV9maWVsZCI6bnVsbCwic3RhdGljX2ZpbHRlciI6bnVsbH0=",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LERlc2NyaXB0aW9uLENvZGUsUGFyZW50X0tleSxJc0ZvbGRlcixEZWxldGlvbk1hcmss0J7Qv9C40YHQsNC90LjQtSIsImVudGl0eSI6IkNhdGFsb2df0KHRgtCw0YLRjNC40JTQstC40LbQtdC90LjRj9CU0LXQvdC10LbQvdGL0YXQodGA0LXQtNGB0YLQsiIsImRhdGVfZmllbGQiOm51bGwsInN0YXRpY19maWx0ZXIiOiJEZWxldGlvbk1hcmsgZXEgZmFsc2UifQ==",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LERlc2NyaXB0aW9uLENvZGUsUGFyZW50X0tleSxJc0ZvbGRlcixEZWxldGlvbk1hcmss0JLQuNC00KHRgtCw0YLRjNC40JTQvtGF0L7QtNC+0LLQmNCg0LDRgdGF0L7QtNC+0LIs0JLQuNC00KDQsNGB0L/RgNC10LTQtdC70LXQvdC40Y/QoNCw0YHRhdC+0LTQvtCyIiwiZW50aXR5IjoiQ2F0YWxvZ1/QodGC0LDRgtGM0LjQlNC+0YXQvtC00L7QstCY0KDQsNGB0YXQvtC00L7QsiIsImRhdGVfZmllbGQiOm51bGwsInN0YXRpY19maWx0ZXIiOiJEZWxldGlvbk1hcmsgZXEgZmFsc2UifQ==",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LERlc2NyaXB0aW9uLENvZGUsRGVsZXRpb25NYXJrLNCh0YLRgNGD0LrRgtGD0YDQvdCw0Y/QldC00LjQvdC40YbQsF9LZXks0J3QsNGH0LjRgdC70LXQvdC40LXQo9C00LXRgNC20LDQvdC40LUs0KLQuNC/0J3QsNGH0LjRgdC70LXQvdC40Y/Qo9C00LXRgNC20LDQvdC40Y8s0J/Qu9GO0YHQnNC40L3Rg9GBLNCf0L7Qu9C90L7QtdCd0LDQuNC80LXQvdC+0LLQsNC90LjQtSIsImVudGl0eSI6IkNhdGFsb2df0J3QsNGH0LjRgdC70LXQvdC40Y/QmNCj0LTQtdGA0LbQsNC90LjRj9Ch0L7RgtGA0YPQtNC90LjQutC+0LIiLCJkYXRlX2ZpZWxkIjpudWxsLCJzdGF0aWNfZmlsdGVyIjoiRGVsZXRpb25NYXJrIGVxIGZhbHNlIn0=",
+    "eyJwcm90ZWN0X3Bob25lIjpudWxsLCJzZWxlY3QiOiJSZWZfS2V5LExpbmVOdW1iZXIs0JTQsNGC0LDQndCw0YfQsNC70LAs0JTQsNGC0LDQntC60L7QvdGH0LDQvdC40Y8s0J3QvtC80LXQvdC60LvQsNGC0YPRgNCwX0tleSzQndC+0YDQvNCw0JLRgNC10LzQtdC90Lgs0J/QvtC80LXRidC10L3QuNC1X0tleSzQn9GA0LjRh9C40L3QsNCX0LDQv9C40YHQuF9LZXks0KHQvtGC0YDRg9C00L3QuNC6X0tleSzQptC10L3QsCIsImVudGl0eSI6IkRvY3VtZW50X9Ch0L7QsdGL0YLQuNC1X9Cj0YHQu9GD0LPQuCIsImRhdGVfZmllbGQiOiLQlNCw0YLQsNCd0LDRh9Cw0LvQsCIsInN0YXRpY19maWx0ZXIiOm51bGx9"
 )
+$ApprovedEntityDefinitions += @($AdditionalEntityDefinitionBase64 | ForEach-Object {
+    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) | ConvertFrom-Json
+})
+
+# Expand two existing allowlists without placing Cyrillic source names in this
+# ASCII-compatible script body.
+$PatientSelect = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("UmVmX0tleSxEZXNjcmlwdGlvbixEZWxldGlvbk1hcmss0JTQsNGC0LDQoNC10LPQuNGB0YLRgNCw0YbQuNC4LNCY0LzRjyzQntGC0YfQtdGB0YLQstC+LNCk0LDQvNC40LvQuNGPLNCd0LDQuNC80LXQvdC+0LLQsNC90LjQtdCf0L7Qu9C90L7QtSzQmNGB0YLQvtGH0L3QuNC60JjQvdGE0L7RgNC80LDRhtC40LhfS2V5LNCa0LDQvdCw0LvQn9GA0LjQstC70LXRh9C10L3QuNGPX0tleSzQmtCw0L3QsNC70J/RgNC40LLQu9C10YfQtdC90LjRj9CX0L3QsNGH0LXQvdC40LUs0KHQvtGC0YDRg9C00L3QuNC60KDQtdCz0LjRgdGC0YDQsNGG0LjQuF9LZXks0KHRgtGA0YPQutGC0YPRgNC90LDRj9CV0LTQuNC90LjRhtCwX0tleSzQotC10LvQtdGE0L7QvQ=="))
+$MoneySelect = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("UmVjb3JkZXIsUGVyaW9kLExpbmVOdW1iZXIsQWN0aXZlLFJlY29yZFR5cGUs0KHRgtGA0YPQutGC0YPRgNC90LDRj9CV0LTQuNC90LjRhtCwX0tleSzQotC40L/QlNC10L3QtdC20L3Ri9GF0KHRgNC10LTRgdGC0LIs0JHQsNC90LrQvtCy0YHQutC40LnQodGH0LXRgtCa0LDRgdGB0LAs0KHRg9C80LzQsCzQodGC0LDRgtGM0Y/QlNCU0KFfS2V5LFJlY29yZGVyX1R5cGU="))
+$PatientEntityName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("Q2F0YWxvZ1/QmtC+0L3RgtGA0LDQs9C10L3RgtGL"))
+$MoneyEntityName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("QWNjdW11bGF0aW9uUmVnaXN0ZXJf0JTQtdC90LXQttC90YvQtdCh0YDQtdC00YHRgtCy0LBfUmVjb3JkVHlwZQ=="))
+@($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $PatientEntityName })[0].select = $PatientSelect
+@($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $MoneyEntityName })[0].select = $MoneySelect
+
+# Dependencies first. Table parts follow their parents so they can update the
+# already-created canonical object with the resolved specialty/direction.
+foreach ($definition in $ApprovedEntityDefinitions) {
+    $order = if ($definition.entity.StartsWith("Catalog_")) { 10 }
+        elseif ($definition.entity.StartsWith("Document_")) { 20 }
+        elseif ($definition.entity.StartsWith("InformationRegister_")) { 30 }
+        else { 40 }
+    if ([string]$definition.select -match "LineNumber" -and $order -lt 30) { $order += 5 }
+    $definition | Add-Member -NotePropertyName "sync_order" -NotePropertyValue $order -Force
+}
+$ApprovedEntityDefinitions = @($ApprovedEntityDefinitions | Sort-Object sync_order, entity)
 $ApprovedEntities = @($ApprovedEntityDefinitions | ForEach-Object { $_.entity })
 # The initial import can load the full patient directory. Subsequent runs only
 # need newly registered patients; otherwise every three-hour sync rereads the
 # entire catalog even though 1C exposes a registration date.
-$CounterpartyEntity = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("Q2F0YWxvZ1/QmtC+0L3RgtGA0LDQs9C10L3RgtGL"))
+$CounterpartyEntity = $PatientEntityName
 $CounterpartyRegistrationDateField = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("0JTQsNGC0LDQoNC10LPQuNGB0YLRgNCw0YbQuNC4"))
 @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $CounterpartyEntity })[0].date_field = $CounterpartyRegistrationDateField
 
@@ -297,11 +321,24 @@ function Get-ODataPages {
 
     $encodedEntity = [Uri]::EscapeDataString($Entity)
     $queryUrl = "$BaseUrl/$encodedEntity`?`$format=json&`$top=$ConfiguredPageSize&allowedOnly=true"
-    # 1C can return an unstable physical order for catalogs/documents. Without
-    # an explicit key order, successive $skip pages may contain the same rows.
-    $isReferenceEntity = $Entity.StartsWith("Catalog_") -or $Entity.StartsWith("Document_")
-    if ($isReferenceEntity) {
-        $queryUrl += "&`$orderby=Ref_Key"
+    # Every paged query needs a stable business key. A mutable physical order
+    # can skip or repeat register rows while the clinic keeps working in 1C.
+    if ($Entity.StartsWith("Catalog_") -or $Entity.StartsWith("Document_")) {
+        $referenceOrder = if ($SelectFields -match "(^|,)LineNumber(,|$)") {
+            "Ref_Key,LineNumber"
+        }
+        else { "Ref_Key" }
+        $queryUrl += "&`$orderby=$referenceOrder"
+    }
+    elseif ($Entity.StartsWith("AccumulationRegister_")) {
+        $registerOrder = if ($SelectFields -match "(^|,)Recorder_Key(,|$)") {
+            "Period,Recorder_Key,LineNumber"
+        }
+        else { "Period,Recorder_Type,Recorder,LineNumber" }
+        $queryUrl += "&`$orderby=$registerOrder"
+    }
+    elseif ($DateField) {
+        $queryUrl += "&`$orderby=$([Uri]::EscapeDataString($DateField))"
     }
     if ($SelectFields) {
         $queryUrl += "&`$select=$([Uri]::EscapeDataString($SelectFields))"
@@ -652,7 +689,17 @@ function Invoke-ConnectorSync {
                 $entityInitialSkip = if ($waitingForResumeEntity) { $ResumeOffset } else { 0 }
                 # A resumed initial import must keep the same unfiltered catalog
                 # that produced the saved offset. Normal future runs use dates.
-                $entityChangedSince = if ($waitingForResumeEntity -and $ResumeOffset -gt 0) { $null } else { $changedSince }
+                $entityChangedSince = if ($waitingForResumeEntity -and $ResumeOffset -gt 0) {
+                    $null
+                }
+                elseif ($entity -eq $CounterpartyEntity -and ($ForceFull -or $null -eq $lastSuccessful)) {
+                    # Documents in the selected period can reference patients
+                    # created years earlier. A full rebuild therefore needs the
+                    # complete patient directory; regular scheduled runs remain
+                    # incremental by registration date.
+                    $null
+                }
+                else { $changedSince }
                 $waitingForResumeEntity = $false
                 $definition = @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $entity })[0]
                 if ($null -eq $definition) { throw "No field allowlist is defined for $entity." }

@@ -3,8 +3,8 @@ export type DatasetHealth = {
   name: string;
   record_count: number;
   latest_at: string | null;
-  status: "ready" | "stale" | "empty" | "unknown";
-  scope: "tenant" | "period";
+  status: "ready" | "stale" | "empty" | "unknown" | "not_connected";
+  scope: "tenant" | "period" | "external";
 };
 
 export type QualityIssue = {

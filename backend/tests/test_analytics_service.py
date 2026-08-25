@@ -34,9 +34,9 @@ class FakeAnalyticsRepository:
             DatasetSnapshot("revenue", "Выручка", 15, now),
             DatasetSnapshot("expenses", "Расходы", 8, now),
             DatasetSnapshot("cashflow", "ДДС", 7, now),
-            DatasetSnapshot("balances", "Остатки", 1, now),
-            DatasetSnapshot("marketing_spend", "Маркетинг", 0, None),
-            DatasetSnapshot("attribution", "Атрибуция", 0, None),
+            DatasetSnapshot("balances", "Остатки", 1, now, "external"),
+            DatasetSnapshot("marketing_spend", "Маркетинг", 0, None, "external"),
+            DatasetSnapshot("attribution", "Атрибуция", 0, None, "external"),
         ]
         self.issues = [
             IssueSnapshot(
@@ -76,8 +76,13 @@ async def test_quality_exposes_only_active_issues_and_score() -> None:
     assert response.summary.score == 92
     assert response.summary.status == "good"
     assert response.summary.critical_issues == 1
+    assert response.summary.ready_datasets == 7
+    assert response.summary.total_datasets == 8
     assert len(response.issues) == 1
     assert response.issues[0].affected_records == 2
+    statuses = {item.key: item.status for item in response.datasets}
+    assert statuses["marketing_spend"] == "not_connected"
+    assert statuses["attribution"] == "not_connected"
 
 
 @pytest.mark.asyncio

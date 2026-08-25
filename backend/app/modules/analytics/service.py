@@ -133,7 +133,9 @@ class AnalyticsService:
                 name=item.name,
                 record_count=item.count,
                 latest_at=item.latest_at,
-                status=self._dataset_status(item.count, item.latest_at, now),
+                status=self._dataset_status(
+                    item.count, item.latest_at, now, item.scope
+                ),
                 scope=item.scope,
             )
             for item in snapshots
@@ -165,12 +167,17 @@ class AnalyticsService:
             status = "warning"
         else:
             status = "critical"
+        applicable_datasets = [
+            item for item in datasets if item.status != "not_connected"
+        ]
         return DataQualityResponse(
             summary=DataQualitySummary(
                 score=score,
                 status=status,
-                ready_datasets=sum(1 for item in datasets if item.record_count > 0),
-                total_datasets=len(datasets),
+                ready_datasets=sum(
+                    1 for item in applicable_datasets if item.record_count > 0
+                ),
+                total_datasets=len(applicable_datasets),
                 critical_issues=critical,
                 warning_issues=warnings,
             ),
@@ -234,10 +241,10 @@ class AnalyticsService:
 
     @staticmethod
     def _dataset_status(
-        count: int, latest_at: datetime | None, now: datetime
+        count: int, latest_at: datetime | None, now: datetime, scope: str = "period"
     ) -> str:
         if count == 0:
-            return "empty"
+            return "not_connected" if scope == "external" else "empty"
         if latest_at is None:
             return "unknown"
         comparable = latest_at if latest_at.tzinfo else latest_at.replace(tzinfo=UTC)

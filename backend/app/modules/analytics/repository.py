@@ -15,9 +15,14 @@ from app.modules.finance.models import (
 from app.modules.integrations.models import (
     IntegrationConnection,
     NormalizationError,
+    RawRecord,
     SyncRun,
 )
-from app.modules.marketing.models import AttributionFact, MarketingSpendFact
+from app.modules.marketing.models import (
+    AttributionFact,
+    MarketingSpendFact,
+    MetaCampaignDailyMetric,
+)
 from app.modules.sales.models import Appointment, Lead, Patient
 from app.modules.tenancy.models import Branch
 
@@ -120,18 +125,34 @@ class AnalyticsRepository:
             CashFlowFact.occurred_at >= period_start,
             CashFlowFact.occurred_at < period_end,
         )
+        # A closing balance is a point-in-time bank/account statement value.
+        # It cannot be reconstructed safely from a partial movement window, so
+        # only dedicated balance rows qualify this dataset as connected.
         balance_query = select(
             func.count(AccountBalance.id), func.max(AccountBalance.updated_at)
         ).where(
             AccountBalance.tenant_id == tenant_id,
             AccountBalance.balance_at < period_end,
         )
-        marketing_query = select(
-            func.count(MarketingSpendFact.id), func.max(MarketingSpendFact.updated_at)
-        ).where(
+        marketing_fact_count = select(func.count(MarketingSpendFact.id)).where(
             MarketingSpendFact.tenant_id == tenant_id,
             MarketingSpendFact.spend_date >= date_from,
             MarketingSpendFact.spend_date <= date_to,
+        )
+        marketing_fact_latest = select(func.max(MarketingSpendFact.updated_at)).where(
+            MarketingSpendFact.tenant_id == tenant_id,
+            MarketingSpendFact.spend_date >= date_from,
+            MarketingSpendFact.spend_date <= date_to,
+        )
+        meta_count = select(func.count(MetaCampaignDailyMetric.id)).where(
+            MetaCampaignDailyMetric.tenant_id == tenant_id,
+            MetaCampaignDailyMetric.metric_date >= date_from,
+            MetaCampaignDailyMetric.metric_date <= date_to,
+        )
+        meta_latest = select(func.max(MetaCampaignDailyMetric.updated_at)).where(
+            MetaCampaignDailyMetric.tenant_id == tenant_id,
+            MetaCampaignDailyMetric.metric_date >= date_from,
+            MetaCampaignDailyMetric.metric_date <= date_to,
         )
         attribution_query = (
             select(func.count(AttributionFact.id), func.max(AttributionFact.updated_at))
@@ -150,8 +171,21 @@ class AnalyticsRepository:
             expense_query = expense_query.where(ExpenseFact.branch_id == branch_id)
             cashflow_query = cashflow_query.where(CashFlowFact.branch_id == branch_id)
             balance_query = balance_query.where(AccountBalance.branch_id == branch_id)
-            marketing_query = marketing_query.where(MarketingSpendFact.branch_id == branch_id)
+            marketing_fact_count = marketing_fact_count.where(MarketingSpendFact.branch_id == branch_id)
+            marketing_fact_latest = marketing_fact_latest.where(MarketingSpendFact.branch_id == branch_id)
+            # Meta campaigns are clinic-wide until an explicit branch mapping
+            # exists, so they are not presented as branch-specific spend.
+            meta_count = select(func.count(MetaCampaignDailyMetric.id)).where(False)
+            meta_latest = select(func.max(MetaCampaignDailyMetric.updated_at)).where(False)
             attribution_query = attribution_query.where(Lead.branch_id == branch_id)
+
+        marketing_query = select(
+            marketing_fact_count.scalar_subquery() + meta_count.scalar_subquery(),
+            func.greatest(
+                marketing_fact_latest.scalar_subquery(),
+                meta_latest.scalar_subquery(),
+            ),
+        )
 
         queries = [
             ("appointments", "Записи на приём", appointment_query),
@@ -159,12 +193,13 @@ class AnalyticsRepository:
             ("revenue", "Начисления и оплаты", revenue_query),
             ("expenses", "Расходы", expense_query),
             ("cashflow", "Движение денег", cashflow_query),
-            ("balances", "Остатки на счетах", balance_query),
-            ("marketing_spend", "Расходы на маркетинг", marketing_query),
-            ("attribution", "Маркетинговая атрибуция", attribution_query),
+            ("balances", "Остатки на счетах", balance_query, "external"),
+            ("marketing_spend", "Расходы на маркетинг", marketing_query, "external"),
+            ("attribution", "Маркетинговая атрибуция", attribution_query, "external"),
         ]
-        for key, name, query in queries:
-            results.append(await self._snapshot(key, name, query))
+        for item in queries:
+            key, name, query, *scope = item
+            results.append(await self._snapshot(key, name, query, scope[0] if scope else "period"))
         return results
 
     async def quality_issues(
@@ -211,7 +246,9 @@ class AnalyticsRepository:
                 "critical",
                 "appointments",
                 select(func.count(Appointment.id)).where(
-                    *appointments_base, Appointment.doctor_id.is_(None)
+                    *appointments_base,
+                    Appointment.status.in_(["scheduled", "completed"]),
+                    Appointment.doctor_id.is_(None),
                 ),
             ),
             (
@@ -221,7 +258,9 @@ class AnalyticsRepository:
                 "warning",
                 "appointments",
                 select(func.count(Appointment.id)).where(
-                    *appointments_base, Appointment.direction_id.is_(None)
+                    *appointments_base,
+                    Appointment.status.in_(["scheduled", "completed"]),
+                    Appointment.direction_id.is_(None),
                 ),
             ),
             (
@@ -231,7 +270,10 @@ class AnalyticsRepository:
                 "critical",
                 "revenue",
                 select(func.count(RevenueFact.id)).where(
-                    *revenue_base, RevenueFact.doctor_id.is_(None)
+                    *revenue_base,
+                    RevenueFact.recognition_type == "accrual",
+                    RevenueFact.amount != 0,
+                    RevenueFact.doctor_id.is_(None),
                 ),
             ),
             (
@@ -241,7 +283,9 @@ class AnalyticsRepository:
                 "warning",
                 "revenue",
                 select(func.count(RevenueFact.id)).where(
-                    *revenue_base, RevenueFact.patient_id.is_(None)
+                    *revenue_base,
+                    RevenueFact.amount != 0,
+                    RevenueFact.patient_id.is_(None),
                 ),
             ),
             (
@@ -272,8 +316,12 @@ class AnalyticsRepository:
                 "Недоступен корректный срез по специализациям.",
                 "warning",
                 "doctors",
-                select(func.count(Doctor.id)).where(
+                select(func.count(func.distinct(Doctor.id)))
+                .select_from(Doctor)
+                .join(Appointment, Appointment.doctor_id == Doctor.id)
+                .where(
                     Doctor.tenant_id == tenant_id,
+                    *appointments_base,
                     (Doctor.specialty.is_(None)) | (Doctor.specialty == ""),
                 ),
             ),
@@ -283,8 +331,12 @@ class AnalyticsRepository:
                 "Запись существует, но карточка пациента заполнена не полностью.",
                 "warning",
                 "patients",
-                select(func.count(Patient.id)).where(
+                select(func.count(func.distinct(Patient.id)))
+                .select_from(Patient)
+                .join(Appointment, Appointment.patient_id == Patient.id)
+                .where(
                     Patient.tenant_id == tenant_id,
+                    *appointments_base,
                     (Patient.full_name.is_(None)) | (Patient.full_name == ""),
                 ),
             ),
@@ -294,9 +346,29 @@ class AnalyticsRepository:
                 "Строки источников находятся в карантине и не попали в аналитику.",
                 "critical",
                 "integrations",
-                select(func.count(NormalizationError.id)).where(
+                select(func.count(func.distinct(RawRecord.id)))
+                .select_from(NormalizationError)
+                .join(RawRecord, RawRecord.id == NormalizationError.raw_record_id)
+                .where(
                     NormalizationError.tenant_id == tenant_id,
                     NormalizationError.status == "open",
+                    RawRecord.status == "quarantined",
+                    func.coalesce(
+                        RawRecord.payload["Period"].astext,
+                        RawRecord.payload["Date"].astext,
+                        RawRecord.payload["Дата"].astext,
+                        RawRecord.payload["ДатаСоздания"].astext,
+                        RawRecord.payload["ДатаНачала"].astext,
+                        RawRecord.payload["ПериодПо"].astext,
+                    ) >= period_start.replace(tzinfo=None).isoformat(timespec="seconds"),
+                    func.coalesce(
+                        RawRecord.payload["Period"].astext,
+                        RawRecord.payload["Date"].astext,
+                        RawRecord.payload["Дата"].astext,
+                        RawRecord.payload["ДатаСоздания"].astext,
+                        RawRecord.payload["ДатаНачала"].astext,
+                        RawRecord.payload["ПериодПо"].astext,
+                    ) < period_end.replace(tzinfo=None).isoformat(timespec="seconds"),
                 ),
             ),
         ]

@@ -34,8 +34,13 @@ from app.modules.integrations.one_c_finance import (
 )
 from app.modules.integrations.one_c_operational import (
     APPOINTMENT_ENTITY,
+    APPOINTMENT_SERVICE_ENTITY,
+    EMPLOYEE_ENTITY,
+    EMPLOYEE_SPECIALTY_ENTITY,
     LEAD_ENTITY,
     MAPPABLE_OPERATIONAL_ENTITIES,
+    PATIENT_ENTITY,
+    SERVICE_ENTITY,
     normalize_one_c_operational_record,
 )
 from app.modules.integrations.repository import IntegrationRepository
@@ -73,9 +78,15 @@ REPROCESSABLE_ONE_C_ENTITIES = (
     PAYROLL_ENTITY,
     PAYROLL_LINE_ENTITY,
     PAYROLL_REGISTER_ENTITY,
-    LEAD_ENTITY,
-    APPOINTMENT_ENTITY,
+    *MAPPABLE_OPERATIONAL_ENTITIES,
 )
+
+SPECIALTY_CATALOG_ENTITY = "Catalog_Специализации"
+CASH_CATEGORY_ENTITY = "Catalog_СтатьиДвиженияДенежныхСредств"
+EXPENSE_CATEGORY_ENTITY = "Catalog_СтатьиДоходовИРасходов"
+PAYROLL_KIND_ENTITY = "Catalog_НачисленияИУдержанияСотрудников"
+STRUCTURAL_UNIT_ENTITY = "Catalog_СтруктурныеЕдиницы"
+EXCLUDED_BRANCH_CODE = "__excluded_one_c_unit__"
 
 
 class IntegrationService:
@@ -219,7 +230,10 @@ class IntegrationService:
     ) -> OneCPushResponse:
         parts, connection = await self._connector_connection(connector_token)
 
-        allowed_entities = set(connection.settings.get("allowed_entities", []))
+        # The server-side allowlist is authoritative and versioned with the
+        # deployed code. Existing clinic tokens must immediately gain newly
+        # approved fields/entities without being rotated or recreated.
+        allowed_entities = set(SAFE_ONE_C_ENTITIES)
         if payload.entity not in allowed_entities:
             raise AppError(
                 "ONE_C_ENTITY_NOT_ALLOWED",
@@ -459,6 +473,11 @@ class IntegrationService:
             source_record_id=source_identity,
         )
         payload = mapping_payload or dict(raw_record.payload)
+        if branch_code == EXCLUDED_BRANCH_CODE:
+            # DentCO and any other non-SAN unit are outside this tenant. They
+            # are valid 1C rows, not normalization failures.
+            await self.repository.mark_raw_normalized(raw_record)
+            return "skipped"
         mapping = normalize_one_c_operational_record(
             source_entity=raw_record.source_entity,
             source_record_id=source_identity,
@@ -473,6 +492,7 @@ class IntegrationService:
                 branch_code=branch_code,
             )
         if mapping is None:
+            await self.repository.mark_raw_normalized(raw_record)
             return "skipped"
         if mapping.issues:
             await self.repository.quarantine(
@@ -506,17 +526,108 @@ class IntegrationService:
         raw_record,
     ) -> dict[str, object]:
         payload = dict(raw_record.payload)
-        if raw_record.source_entity != PAYROLL_LINE_ENTITY:
-            return payload
+        entity = raw_record.source_entity
+        connection_id = getattr(raw_record, "connection_id", None)
         ref_key = str(payload.get("Ref_Key") or "").strip()
-        if not ref_key:
-            return payload
-        parent = await self.repository.one_c_payroll_document_payload(
-            tenant_id,
-            raw_record.connection_id,
-            ref_key,
-        )
-        return {**(parent or {}), **payload}
+
+        if entity == PAYROLL_LINE_ENTITY and ref_key and connection_id:
+            parent = await self.repository.one_c_payroll_document_payload(
+                tenant_id, connection_id, ref_key
+            )
+            payload = {**(parent or {}), **payload}
+            kind_key = str(payload.get("НачислениеУдержание_Key") or "").strip()
+            if kind_key:
+                kind = await self.repository.one_c_latest_payload_by_ref(
+                    tenant_id, connection_id, PAYROLL_KIND_ENTITY, kind_key
+                )
+                if kind:
+                    payload["_ResolvedPayrollKind"] = " ".join(
+                        str(kind.get(field) or "")
+                        for field in (
+                            "НачислениеУдержание",
+                            "ТипНачисленияУдержания",
+                            "ПлюсМинус",
+                            "Description",
+                        )
+                    ).strip()
+
+        if entity in {EMPLOYEE_ENTITY, EMPLOYEE_SPECIALTY_ENTITY} and ref_key and connection_id:
+            if entity == EMPLOYEE_SPECIALTY_ENTITY:
+                parent = await self.repository.one_c_latest_payload_by_ref(
+                    tenant_id, connection_id, EMPLOYEE_ENTITY, ref_key
+                )
+                payload = {**(parent or {}), **payload}
+            specialties = await self.repository.one_c_latest_child_payloads(
+                tenant_id, connection_id, EMPLOYEE_SPECIALTY_ENTITY, ref_key
+            )
+            selected = next(
+                (item for item in specialties if item.get("Основная") is True),
+                specialties[0] if specialties else None,
+            )
+            specialty_key = str((selected or {}).get("Специализация_Key") or "").strip()
+            if specialty_key:
+                specialty = await self.repository.one_c_latest_payload_by_ref(
+                    tenant_id, connection_id, SPECIALTY_CATALOG_ENTITY, specialty_key
+                )
+                if specialty:
+                    payload["_ResolvedSpecialty"] = specialty.get("Description")
+
+        if entity in {APPOINTMENT_ENTITY, APPOINTMENT_SERVICE_ENTITY} and ref_key and connection_id:
+            if entity == APPOINTMENT_SERVICE_ENTITY:
+                parent = await self.repository.one_c_latest_payload_by_ref(
+                    tenant_id, connection_id, APPOINTMENT_ENTITY, ref_key
+                )
+                payload = {**(parent or {}), **payload}
+            services = await self.repository.one_c_latest_child_payloads(
+                tenant_id, connection_id, APPOINTMENT_SERVICE_ENTITY, ref_key
+            )
+            selected = next(
+                (
+                    item
+                    for item in services
+                    if str(item.get("Номенклатура_Key") or "").strip()
+                    not in {"", "00000000-0000-0000-0000-000000000000"}
+                ),
+                None,
+            )
+            if selected:
+                payload["_DirectionExternalId"] = selected.get("Номенклатура_Key")
+
+        if entity == LEAD_ENTITY and connection_id and not payload.get("СтруктурнаяЕдиница_Key"):
+            patient_key = str(payload.get("ОсновнойКлиент_Key") or "").strip()
+            if patient_key:
+                patient = await self.repository.one_c_latest_payload_by_ref(
+                    tenant_id, connection_id, PATIENT_ENTITY, patient_key
+                )
+                if patient:
+                    payload["_ResolvedStructureUnitKey"] = patient.get(
+                        "СтруктурнаяЕдиница_Key"
+                    )
+
+        if entity == MONEY_ENTITY and connection_id:
+            category_key = str(payload.get("СтатьяДДС_Key") or "").strip()
+            if category_key:
+                category = await self.repository.one_c_latest_payload_by_ref(
+                    tenant_id, connection_id, CASH_CATEGORY_ENTITY, category_key
+                )
+                if category:
+                    payload["_ResolvedCategoryName"] = category.get("Description")
+
+        if entity == EXPENSE_ENTITY and connection_id:
+            category_key = str(payload.get("СтатьяЗатрат") or "").strip()
+            if category_key:
+                for category_entity in (EXPENSE_CATEGORY_ENTITY, SERVICE_ENTITY):
+                    category = await self.repository.one_c_latest_payload_by_ref(
+                        tenant_id, connection_id, category_entity, category_key
+                    )
+                    if category:
+                        payload["_ResolvedCategoryName"] = (
+                            category.get("Description")
+                            or category.get("НаименованиеПолное")
+                        )
+                        break
+
+        return payload
 
     @staticmethod
     def _one_c_record_branch_code(
@@ -525,9 +636,13 @@ class IntegrationService:
         fallback_branch_code: str | None,
     ) -> str | None:
         structure_key = str(payload.get("СтруктурнаяЕдиница_Key") or "").strip().lower()
+        if not structure_key:
+            structure_key = str(
+                payload.get("_ResolvedStructureUnitKey") or ""
+            ).strip().lower()
         empty_guid = "00000000-0000-0000-0000-000000000000"
         if structure_key and structure_key != empty_guid:
-            return branch_code_map.get(structure_key)
+            return branch_code_map.get(structure_key, EXCLUDED_BRANCH_CODE)
         return fallback_branch_code
 
     async def create_mapping_profile(

@@ -66,8 +66,11 @@ def normalize_one_c_finance_record(
     if source_entity == PAYROLL_LINE_ENTITY:
         occurred_at = _payroll_period(normalized, issues)
         # The verified report's "Начислено" column is the sum of employee
-        # calculation lines, including negative corrections.
+        # accrual calculation lines, including negative corrections. 1C keeps
+        # deductions in the same table, so resolved deduction rows are zeroed.
         amount = _amount(normalized, issues)
+        if _is_resolved_payroll_deduction(normalized):
+            amount = Decimal("0")
     elif source_entity == PAYROLL_ENTITY:
         occurred_at = _payroll_period(normalized, issues)
         # Header totals contain a broader composition than the report column.
@@ -113,6 +116,9 @@ def normalize_one_c_finance_record(
                 "doctor_external_id": _reference_value(
                     normalized, "Сотрудник_Key", "Куратор_Key"
                 ),
+                "direction_external_id": _reference_value(
+                    normalized, "Номенклатура_Key"
+                ),
                 "recognition_type": "payment" if source_entity == REVENUE_ENTITY else "accrual",
                 "occurred_at": occurred_at,
                 "amount": amount,
@@ -132,6 +138,7 @@ def normalize_one_c_finance_record(
         base.update(
             {
                 "branch_code": branch_code,
+                "employee_external_id": _reference_value(normalized, "Сотрудник_Key"),
                 "occurred_on": occurred_at.date() if occurred_at else None,
                 "amount": amount,
             }
@@ -149,6 +156,7 @@ def normalize_one_c_finance_record(
             )
         category = _text_value(
             normalized,
+            "_ResolvedCategoryName",
             "СтатьяЗатрат",
             "КатегорияЗатрат",
             "ВидЗатрат",
@@ -183,8 +191,15 @@ def normalize_one_c_finance_record(
             "direction": direction,
             "amount": abs(amount) if amount is not None else None,
             "category_name": _text_value(
-                normalized, "СтатьяДвиженияДенежныхСредств", "Категория", "ВидОперации"
+                normalized,
+                "_ResolvedCategoryName",
+                "СтатьяДвиженияДенежныхСредств",
+                "Категория",
+                "ВидОперации",
             ),
+            "account_ref": _reference_value(
+                normalized, "БанковскийСчетКасса", "Касса_Key"
+            ) or _text_value(normalized, "ТипДенежныхСредств"),
         }
     )
     return OneCFinanceMapping("cash_flow_fact", base, issues)
@@ -359,6 +374,20 @@ def _is_payroll_accrual(
         )
     )
     return False
+
+
+def _is_resolved_payroll_deduction(source: dict[str, object]) -> bool:
+    """Return true only when the referenced 1C payroll type is unambiguous."""
+
+    value = _text_value(
+        source,
+        "_ResolvedPayrollKind",
+        "НачислениеУдержание",
+        "ТипНачисленияУдержания",
+        "ПлюсМинус",
+    )
+    text = _normalize_key(value or "").replace("ё", "е")
+    return any(marker in text for marker in ("удержан", "вычет", "минус"))
 
 
 def _decimal_value(

@@ -18,7 +18,7 @@ from app.modules.integrations.schemas import (
     OneCPushRequest,
 )
 from app.modules.integrations.repository import IntegrationRepository
-from app.modules.integrations.service import IntegrationService
+from app.modules.integrations.service import EXCLUDED_BRANCH_CODE, IntegrationService
 
 
 class FakeOneCRepository:
@@ -223,7 +223,7 @@ def test_unknown_structural_unit_never_falls_back_to_default_branch() -> None:
 
     assert IntegrationService._one_c_record_branch_code(
         payload, {"known-unit": "batys-mura"}, "default"
-    ) is None
+    ) == EXCLUDED_BRANCH_CODE
 
 
 def test_record_without_structural_unit_can_use_single_branch_fallback() -> None:
@@ -301,6 +301,32 @@ async def test_push_stores_allowed_records_and_deduplicates() -> None:
     ]
     assert repository.context == tenant_id
     assert repository.connection.status == "connected"
+
+
+@pytest.mark.asyncio
+async def test_existing_connector_token_uses_current_server_allowlist() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    repository.connection.settings["allowed_entities"] = [
+        "AccumulationRegister_Выручка_RecordType"
+    ]
+    service = IntegrationService(repository, FakeOneCWriter())
+
+    result = await service.ingest_one_c_push(
+        token,
+        OneCPushRequest(
+            entity="Catalog_Специализации",
+            records=[{
+                "Ref_Key": "specialty-1",
+                "Description": "Ортодонт",
+                "DeletionMark": False,
+            }],
+        ),
+    )
+
+    assert result.status == "completed"
+    assert result.records_stored == 1
 
 
 @pytest.mark.asyncio

@@ -11,18 +11,22 @@ from app.modules.integrations.schemas import MappingIssue
 
 PATIENT_ENTITY = "Catalog_Контрагенты"
 EMPLOYEE_ENTITY = "Catalog_Сотрудники"
+EMPLOYEE_SPECIALTY_ENTITY = "Catalog_Сотрудники_СпецилазацииСотрудника"
 SERVICE_ENTITY = "Catalog_Номенклатура"
 LEAD_ENTITY = "Catalog_Заявки"
 APPOINTMENT_ENTITY = "Document_Событие"
+APPOINTMENT_SERVICE_ENTITY = "Document_Событие_Услуги"
 TREATMENT_PLAN_ENTITY = "Document_ПланЛечения"
 MARKETING_SPEND_ENTITY = "InformationRegister_РекламныеРасходы"
 
 MAPPABLE_OPERATIONAL_ENTITIES = (
     PATIENT_ENTITY,
     EMPLOYEE_ENTITY,
+    EMPLOYEE_SPECIALTY_ENTITY,
     SERVICE_ENTITY,
     LEAD_ENTITY,
     APPOINTMENT_ENTITY,
+    APPOINTMENT_SERVICE_ENTITY,
     TREATMENT_PLAN_ENTITY,
     MARKETING_SPEND_ENTITY,
 )
@@ -44,7 +48,16 @@ def normalize_one_c_operational_record(
     external_id = _text(payload.get("Ref_Key")) or source_record_id
 
     if source_entity == PATIENT_ENTITY:
-        full_name = _text(payload.get("Description"))
+        full_name = _first_text(payload, "Description", "НаименованиеПолное") or " ".join(
+            filter(
+                None,
+                (
+                    _text(payload.get("Фамилия")),
+                    _text(payload.get("Имя")),
+                    _text(payload.get("Отчество")),
+                ),
+            )
+        ).strip()
         if not full_name:
             issues.append(_missing("Description", "Patient name is missing"))
         phone_hash = _text(payload.get("PhoneHash"))
@@ -57,7 +70,7 @@ def normalize_one_c_operational_record(
             "lead_source": _first_text(payload, "КаналПривлеченияЗначение", "ИсточникИнформации_Key", "КаналПривлечения_Key"),
         }, issues)
 
-    if source_entity == EMPLOYEE_ENTITY:
+    if source_entity in {EMPLOYEE_ENTITY, EMPLOYEE_SPECIALTY_ENTITY}:
         full_name = _text(payload.get("Description")) or " ".join(filter(None, (
             _text(payload.get("Фамилия")), _text(payload.get("Имя")), _text(payload.get("Отчество"))
         )))
@@ -66,7 +79,10 @@ def normalize_one_c_operational_record(
         return OneCOperationalMapping("doctor", {
             "external_id": external_id,
             "full_name": full_name,
-            "specialty": _first_text(payload, "Роль", "НаименованиеСокращенное"),
+            # `_ResolvedSpecialty` is supplied from the employee's actual 1C
+            # specialty table. Role/short name are deliberately not used as a
+            # substitute because values such as "Врач" are not specialties.
+            "specialty": _text(payload.get("_ResolvedSpecialty")),
         }, issues)
 
     if source_entity == SERVICE_ENTITY:
@@ -92,11 +108,14 @@ def normalize_one_c_operational_record(
             "created_at": created_at,
         }, issues)
 
-    if source_entity == APPOINTMENT_ENTITY:
+    if source_entity in {APPOINTMENT_ENTITY, APPOINTMENT_SERVICE_ENTITY}:
         starts_at = _datetime(payload.get("Date"), "Date", issues)
         patient_id = _guid(payload.get("Контрагент_Key"))
         if not patient_id:
-            issues.append(_missing("Контрагент_Key", "Appointment has no patient"))
+            # 1C stores schedule blocks and reserves in the same document set.
+            # They are not patient appointments and must not pollute quality
+            # checks or the appointment funnel.
+            return None
         if not branch_code:
             issues.append(_missing("branch_code", "A single/default Revora branch is required for appointments"))
         return OneCOperationalMapping("appointment", {
@@ -104,6 +123,7 @@ def normalize_one_c_operational_record(
             "branch_code": branch_code,
             "patient_external_id": patient_id,
             "doctor_external_id": _guid(payload.get("Врач_Key")),
+            "direction_external_id": _guid(payload.get("_DirectionExternalId")),
             "starts_at": starts_at,
             "status": _appointment_status(
                 payload.get("Статус"),

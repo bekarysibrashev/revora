@@ -177,6 +177,11 @@ class CanonicalWriter:
         doctor_id = await self._optional_external_id(
             Doctor, tenant_id, doctor_external_id
         )
+        direction_id = await self._optional_external_id(
+            ServiceDirection,
+            tenant_id,
+            self._optional_string(data, "direction_external_id"),
+        )
         occurred_at = self._datetime(data, "occurred_at")
         branch_id = await self._revenue_branch_id(
             tenant_id=tenant_id,
@@ -190,18 +195,32 @@ class CanonicalWriter:
             "branch_id": branch_id,
             "patient_id": patient_id,
             "doctor_id": doctor_id,
+            "direction_id": direction_id,
             "external_id": self._string(data, "external_id"),
             "recognition_type": recognition_type,
             "occurred_at": occurred_at,
             "amount": self._decimal(data, "amount"),
             "currency": self._optional_string(data, "currency") or "KZT",
         }
-        return await self._upsert(
+        revenue_id = await self._upsert(
             RevenueFact,
             values,
             ["tenant_id", "external_id", "recognition_type"],
-            ["branch_id", "patient_id", "doctor_id", "occurred_at", "amount", "currency"],
+            ["branch_id", "patient_id", "doctor_id", "direction_id", "occurred_at", "amount", "currency"],
         )
+        # Attribute actual patient payments only. Accrual and payment rows describe
+        # the same commercial result in different accounting views; attributing
+        # both would double ROAS and attributed revenue.
+        if recognition_type == "payment":
+            await self._attribute_revenue_to_patient_lead(
+                tenant_id=tenant_id,
+                revenue_id=revenue_id,
+                patient_id=patient_id,
+                occurred_at=occurred_at,
+                amount=self._decimal(data, "amount"),
+                currency=self._optional_string(data, "currency") or "KZT",
+            )
+        return revenue_id
 
     async def _write_expense_fact(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
         category_name = self._optional_string(data, "category_name")
@@ -238,6 +257,11 @@ class CanonicalWriter:
         values = {
             "tenant_id": tenant_id,
             "branch_id": await self._optional_branch_id(tenant_id, data),
+            "employee_id": await self._optional_external_id(
+                Doctor,
+                tenant_id,
+                self._optional_string(data, "employee_external_id"),
+            ),
             "external_id": self._string(data, "external_id"),
             "occurred_on": self._date(data, "occurred_on"),
             "amount": self._decimal(data, "amount"),
@@ -247,7 +271,7 @@ class CanonicalWriter:
             PayrollFact,
             values,
             ["tenant_id", "external_id"],
-            ["branch_id", "occurred_on", "amount", "currency"],
+            ["branch_id", "employee_id", "occurred_on", "amount", "currency"],
         )
 
     async def _write_cash_flow_fact(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
@@ -263,6 +287,7 @@ class CanonicalWriter:
             "tenant_id": tenant_id,
             "raw_transaction_id": None,
             "external_id": self._string(data, "external_id"),
+            "account_ref": self._optional_string(data, "account_ref"),
             "branch_id": await self._optional_branch_id(tenant_id, data),
             "category_id": category_id,
             "occurred_at": self._datetime(data, "occurred_at"),
@@ -272,8 +297,61 @@ class CanonicalWriter:
         }
         return await self._upsert(
             CashFlowFact, values, ["tenant_id", "external_id"],
-            ["branch_id", "category_id", "occurred_at", "direction", "amount", "currency"],
+            ["branch_id", "category_id", "account_ref", "occurred_at", "direction", "amount", "currency"],
         )
+
+    async def _attribute_revenue_to_patient_lead(
+        self,
+        *,
+        tenant_id: UUID,
+        revenue_id: UUID,
+        patient_id: UUID | None,
+        occurred_at: datetime,
+        amount: Decimal,
+        currency: str,
+    ) -> None:
+        """Build deterministic first-party attribution from the 1C patient link.
+
+        This is not probabilistic ad attribution: the lead and revenue must
+        reference the same canonical patient, and the lead must predate the
+        revenue. Meta spend remains a separate source.
+        """
+
+        if patient_id is None or amount == 0:
+            return
+        lead = await self.session.scalar(
+            select(Lead)
+            .where(
+                Lead.tenant_id == tenant_id,
+                Lead.patient_id == patient_id,
+                Lead.created_at <= occurred_at,
+            )
+            .order_by(Lead.created_at.desc(), Lead.id.desc())
+            .limit(1)
+        )
+        if lead is None:
+            return
+        values = {
+            "id": uuid4(),
+            "tenant_id": tenant_id,
+            "lead_id": lead.id,
+            "revenue_fact_id": revenue_id,
+            "source": lead.source,
+            "confidence": Decimal("1"),
+            "attributed_amount": amount,
+            "currency": currency,
+        }
+        statement = insert(AttributionFact).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=["tenant_id", "lead_id", "revenue_fact_id"],
+            set_={
+                "source": statement.excluded.source,
+                "confidence": statement.excluded.confidence,
+                "attributed_amount": statement.excluded.attributed_amount,
+                "currency": statement.excluded.currency,
+            },
+        )
+        await self.session.execute(statement)
 
     async def _write_marketing_spend_fact(
         self, tenant_id: UUID, data: dict[str, object]

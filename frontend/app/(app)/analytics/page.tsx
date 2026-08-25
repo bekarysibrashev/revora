@@ -288,7 +288,13 @@ function DatasetRow({ dataset }: { dataset: DatasetHealth }) {
         </span>
       </td>
       <td>{dataset.record_count.toLocaleString("ru-RU")}</td>
-      <td>{dataset.scope === "tenant" ? "Вся клиника" : "Период"}</td>
+      <td>
+        {dataset.scope === "tenant"
+          ? "Вся клиника"
+          : dataset.scope === "external"
+            ? "Отдельное подключение"
+            : "Период"}
+      </td>
       <td>{dataset.latest_at ? formatDate(dataset.latest_at) : "—"}</td>
     </tr>
   );
@@ -300,6 +306,7 @@ function datasetStatus(status: DatasetHealth["status"]) {
     stale: "Устарел",
     empty: "Нет данных",
     unknown: "Дата неизвестна",
+    not_connected: "Не подключён",
   }[status];
 }
 
