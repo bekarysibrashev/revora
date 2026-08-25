@@ -1,7 +1,7 @@
 """Aggregate sales and appointment facts."""
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.finance.models import RevenueFact
 from app.modules.sales.models import Appointment, Lead
+from app.shared.timezone import clinic_day_end_exclusive, clinic_day_start
 
 
 @dataclass(frozen=True)
@@ -142,8 +143,8 @@ class SalesRepository:
 
     @staticmethod
     def _start(value: date) -> datetime:
-        return datetime.combine(value, time.min, tzinfo=timezone.utc)
+        return clinic_day_start(value)
 
     @staticmethod
     def _end(value: date) -> datetime:
-        return datetime.combine(value + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        return clinic_day_end_exclusive(value)

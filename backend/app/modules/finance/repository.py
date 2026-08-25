@@ -1,7 +1,7 @@
 """Aggregate financial facts without applying presentation policy."""
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -16,6 +16,7 @@ from app.modules.finance.models import (
     PayrollFact,
     RevenueFact,
 )
+from app.shared.timezone import clinic_day_end_exclusive, clinic_day_start
 
 ZERO = Decimal("0")
 
@@ -173,8 +174,8 @@ class FinanceRepository:
 
     @staticmethod
     def _start(value: date) -> datetime:
-        return datetime.combine(value, time.min, tzinfo=timezone.utc)
+        return clinic_day_start(value)
 
     @staticmethod
     def _end_exclusive(value: date) -> datetime:
-        return datetime.combine(value + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        return clinic_day_end_exclusive(value)
