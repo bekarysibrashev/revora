@@ -176,7 +176,7 @@ function OneCIntegration(){
       </div>}
       {!!status?.source_summaries?.length&&<div className="setup-steps">
         <strong>Контрольные суммы исходных строк 1С</strong>
-        <p>Это суммы до расчётов Revora. По ним видно, что именно вернула OData и какие виды операций присутствуют в 1С.</p>
+        <p>Это суммы до расчётов Revora только по сопоставленным филиалам SAN. DentCO и неизвестные филиалы сюда не входят.</p>
         <div className="table-wrap"><table><thead><tr><th>Данные 1С</th><th>Разрез</th><th>Значение 1С</th><th>Строк</th><th>Сумма в источнике</th></tr></thead><tbody>{status.source_summaries.map((summary,index)=><tr key={`${summary.source_entity}-${summary.dimension}-${summary.value}-${index}`}><td>{oneCEntityLabels[summary.source_entity]||summary.source_entity}</td><td>{summary.dimension}</td><td>{summary.value}</td><td>{summary.records}</td><td><strong>{Number(summary.amount).toLocaleString("ru-RU",{maximumFractionDigits:2})} KZT</strong></td></tr>)}</tbody></table></div>
       </div>}
       {status&&<div className="setup-steps">

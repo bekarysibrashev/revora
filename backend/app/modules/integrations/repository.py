@@ -5,7 +5,7 @@ import re
 import unicodedata
 from uuid import UUID, uuid4
 
-from sqlalchemy import Numeric, case, cast, delete, func, literal, or_, select, text, update
+from sqlalchemy import Numeric, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -238,20 +238,54 @@ class IntegrationRepository:
         *,
         period_from: datetime,
     ) -> list[tuple[str, str, str, int, object]]:
-        """Return non-PII control totals directly from current raw 1C rows."""
+        """Return non-PII control totals for mapped SAN branches from raw 1C rows."""
 
         definitions = (
-            (REVENUE_ENTITY, "Вид операции", "ВидОперации", "Сумма"),
-            (SALES_ENTITY, "Начисленная выручка", None, "Стоимость"),
-            (PAYROLL_REGISTER_ENTITY, "Движение регистра", "RecordType", "Сумма"),
+            (REVENUE_ENTITY, "Месяц / вид операции", "Сумма"),
+            (SALES_ENTITY, "Месяц", "Стоимость"),
+            (PAYROLL_ENTITY, "Месяц начисления / документы", "СуммаДокумента"),
+            (PAYROLL_REGISTER_ENTITY, "Месяц начисления / движение", "Сумма"),
         )
+        mapped_structure_keys = tuple(
+            (await self.one_c_branch_code_map(tenant_id, connection_id)).keys()
+        )
+        if not mapped_structure_keys:
+            return []
         summaries: list[tuple[str, str, str, int, object]] = []
-        for entity, dimension, dimension_field, amount_field in definitions:
-            value_expression = (
-                func.coalesce(RawRecord.payload[dimension_field].astext, "(не указано)")
-                if dimension_field
-                else literal("Итого")
-            )
+        for entity, dimension, amount_field in definitions:
+            if entity == REVENUE_ENTITY:
+                value_expression = func.concat(
+                    func.substr(RawRecord.payload["Period"].astext, 1, 7),
+                    " · ",
+                    func.coalesce(RawRecord.payload["ВидОперации"].astext, "(не указано)"),
+                )
+            elif entity == SALES_ENTITY:
+                value_expression = func.substr(RawRecord.payload["Period"].astext, 1, 7)
+            elif entity == PAYROLL_ENTITY:
+                value_expression = func.concat(
+                    func.substr(
+                        func.coalesce(
+                            RawRecord.payload["ДатаОкончанияПериода"].astext,
+                            RawRecord.payload["Date"].astext,
+                        ),
+                        1,
+                        7,
+                    ),
+                    " · документы",
+                )
+            else:
+                value_expression = func.concat(
+                    func.substr(
+                        func.coalesce(
+                            RawRecord.payload["МесяцНачисления"].astext,
+                            RawRecord.payload["Period"].astext,
+                        ),
+                        1,
+                        7,
+                    ),
+                    " · ",
+                    func.coalesce(RawRecord.payload["RecordType"].astext, "(не указано)"),
+                )
             amount_expression = cast(
                 func.nullif(RawRecord.payload[amount_field].astext, ""), Numeric(20, 2)
             )
@@ -266,6 +300,9 @@ class IntegrationRepository:
                     RawRecord.connection_id == connection_id,
                     RawRecord.source_entity == entity,
                     RawRecord.status != "superseded",
+                    func.lower(RawRecord.payload["СтруктурнаяЕдиница_Key"].astext).in_(
+                        mapped_structure_keys
+                    ),
                     self._one_c_history_condition(period_from),
                 )
                 .group_by(value_expression)

@@ -75,7 +75,13 @@ def test_july_patient_payment_operations_match_verified_one_c_report() -> None:
 
 
 def test_patient_payment_enum_wording_variants_are_included() -> None:
-    for operation in ("ОплатаПациентом", "ВозвратОплатыПациента"):
+    for operation in (
+        "ОплатаПациентом",
+        "ВозвратОплатыПациента",
+        "ОплатаОтКлиента",
+        "ВозвратОплатыКлиенту",
+        "ВозвратСЛицевогоСчета",
+    ):
         result = normalize_one_c_finance_record(
             source_entity=REVENUE_ENTITY,
             source_record_id=operation,
@@ -122,7 +128,7 @@ def test_expense_register_becomes_expense() -> None:
     assert result.data["amount"] == Decimal("50000")
 
 
-def test_expense_without_branch_is_kept_for_clinic_total() -> None:
+def test_expense_without_branch_is_quarantined() -> None:
     result = normalize_one_c_finance_record(
         source_entity=EXPENSE_ENTITY,
         source_record_id="expense-without-branch",
@@ -130,8 +136,8 @@ def test_expense_without_branch_is_kept_for_clinic_total() -> None:
         payload={"Period": "2026-07-15T00:00:00", "Сумма": 50000},
     )
 
-    assert result is not None and result.is_valid
-    assert result.data["branch_code"] is None
+    assert result is not None and not result.is_valid
+    assert {issue.code for issue in result.issues} == {"ONE_C_BRANCH_MAPPING_REQUIRED"}
 
 
 def test_expense_behavior_is_inferred_only_for_known_categories() -> None:
@@ -152,7 +158,7 @@ def test_expense_behavior_is_inferred_only_for_known_categories() -> None:
     assert rent is not None and rent.data["cost_behavior"] == "fixed"
 
 
-def test_old_payroll_document_is_zeroed_after_switch_to_register() -> None:
+def test_payroll_document_uses_verified_report_amount() -> None:
     result = normalize_one_c_finance_record(
         source_entity=PAYROLL_ENTITY,
         source_record_id="payroll-july",
@@ -168,10 +174,10 @@ def test_old_payroll_document_is_zeroed_after_switch_to_register() -> None:
     assert result is not None and result.is_valid
     assert result.target_entity == "payroll_fact"
     assert result.data["occurred_on"].isoformat() == "2026-07-31"
-    assert result.data["amount"] == Decimal("0")
+    assert result.data["amount"] == Decimal("24549806.17")
 
 
-def test_payroll_register_uses_accrual_month_and_receipt_movement() -> None:
+def test_payroll_register_is_zeroed_after_switch_to_documents() -> None:
     result = normalize_one_c_finance_record(
         source_entity=PAYROLL_REGISTER_ENTITY,
         source_record_id="payroll-register-july",
@@ -188,7 +194,7 @@ def test_payroll_register_uses_accrual_month_and_receipt_movement() -> None:
     assert result is not None and result.is_valid
     assert result.target_entity == "payroll_fact"
     assert result.data["occurred_on"].isoformat() == "2026-07-31"
-    assert result.data["amount"] == Decimal("24549806.17")
+    assert result.data["amount"] == Decimal("0")
 
 
 def test_payroll_register_payment_movement_is_zeroed() -> None:
@@ -208,7 +214,7 @@ def test_payroll_register_payment_movement_is_zeroed() -> None:
     assert result.data["amount"] == Decimal("0")
 
 
-def test_payroll_without_branch_is_kept_for_clinic_total() -> None:
+def test_payroll_without_branch_is_quarantined() -> None:
     result = normalize_one_c_finance_record(
         source_entity=PAYROLL_REGISTER_ENTITY,
         source_record_id="payroll-without-branch",
@@ -221,11 +227,11 @@ def test_payroll_without_branch_is_kept_for_clinic_total() -> None:
         },
     )
 
-    assert result is not None and result.is_valid
-    assert result.data["branch_code"] is None
+    assert result is not None and not result.is_valid
+    assert {issue.code for issue in result.issues} == {"ONE_C_BRANCH_MAPPING_REQUIRED"}
 
 
-def test_revenue_without_structural_unit_can_be_inferred_from_appointment() -> None:
+def test_revenue_without_structural_unit_is_quarantined() -> None:
     result = normalize_one_c_finance_record(
         source_entity=REVENUE_ENTITY,
         source_record_id="payment-without-branch",
@@ -238,7 +244,7 @@ def test_revenue_without_structural_unit_can_be_inferred_from_appointment() -> N
         },
     )
 
-    assert result is not None and result.is_valid
+    assert result is not None and not result.is_valid
     assert result.data["branch_code"] is None
     assert result.data["patient_external_id"] == "patient-1"
 
@@ -271,7 +277,7 @@ def test_money_register_infers_cash_direction() -> None:
     assert outgoing.data["amount"] == Decimal("12000")
 
 
-def test_money_without_branch_is_kept_for_clinic_total() -> None:
+def test_money_without_branch_is_quarantined() -> None:
     result = normalize_one_c_finance_record(
         source_entity=MONEY_ENTITY,
         source_record_id="money-without-branch",
@@ -283,8 +289,8 @@ def test_money_without_branch_is_kept_for_clinic_total() -> None:
         },
     )
 
-    assert result is not None and result.is_valid
-    assert result.data["branch_code"] is None
+    assert result is not None and not result.is_valid
+    assert {issue.code for issue in result.issues} == {"ONE_C_BRANCH_MAPPING_REQUIRED"}
 
 
 def test_ambiguous_amount_is_quarantined_instead_of_guessed() -> None:

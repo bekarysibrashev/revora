@@ -63,16 +63,15 @@ def normalize_one_c_finance_record(
     issues: list[MappingIssue] = []
     if source_entity == PAYROLL_ENTITY:
         occurred_at = _payroll_period(normalized, issues)
-        # Payroll documents are retained as zero-valued facts so a reprocess
-        # removes values written by the old document-based mapper. The verified
-        # 1C payroll report is movement-based and is sourced from the personnel
-        # settlement register below.
-        amount = Decimal("0")
+        # The verified 1C report's "Начислено" column is built from posted
+        # payroll documents. Settlement-register receipts also contain other
+        # movements and overstate the report total.
+        amount = _amount(normalized, issues)
     elif source_entity == PAYROLL_REGISTER_ENTITY:
         occurred_at = _payroll_register_period(normalized, issues)
-        amount = _amount(normalized, issues)
-        if not _is_payroll_accrual(normalized, issues):
-            amount = Decimal("0")
+        # Retain a zero fact so reprocessing removes values written by the old
+        # register-based rule without counting the same payroll twice.
+        amount = Decimal("0")
     else:
         occurred_at = _period(normalized, issues)
         amount = _amount(normalized, issues)
@@ -90,6 +89,14 @@ def normalize_one_c_finance_record(
     }
 
     if source_entity in {REVENUE_ENTITY, SALES_ENTITY}:
+        if not branch_code:
+            issues.append(
+                MappingIssue(
+                    code="ONE_C_BRANCH_MAPPING_REQUIRED",
+                    message="A Revora branch mapping is required for 1C revenue",
+                    field_name="branch_code",
+                )
+            )
         if source_entity == REVENUE_ENTITY and not _is_actual_patient_payment(normalized):
             # Keep an excluded row as a zero-valued fact. Reprocessing can then
             # safely correct canonical rows created by an older broader mapper.
@@ -109,6 +116,14 @@ def normalize_one_c_finance_record(
         return OneCFinanceMapping("revenue_fact", base, issues)
 
     if source_entity in {PAYROLL_ENTITY, PAYROLL_REGISTER_ENTITY}:
+        if not branch_code:
+            issues.append(
+                MappingIssue(
+                    code="ONE_C_BRANCH_MAPPING_REQUIRED",
+                    message="A Revora branch mapping is required for 1C payroll",
+                    field_name="branch_code",
+                )
+            )
         base.update(
             {
                 "branch_code": branch_code,
@@ -119,6 +134,14 @@ def normalize_one_c_finance_record(
         return OneCFinanceMapping("payroll_fact", base, issues)
 
     if source_entity == EXPENSE_ENTITY:
+        if not branch_code:
+            issues.append(
+                MappingIssue(
+                    code="ONE_C_BRANCH_MAPPING_REQUIRED",
+                    message="A Revora branch mapping is required for 1C expenses",
+                    field_name="branch_code",
+                )
+            )
         category = _text_value(
             normalized,
             "СтатьяЗатрат",
@@ -139,6 +162,14 @@ def normalize_one_c_finance_record(
         )
         return OneCFinanceMapping("expense_fact", base, issues)
 
+    if not branch_code:
+        issues.append(
+            MappingIssue(
+                code="ONE_C_BRANCH_MAPPING_REQUIRED",
+                message="A Revora branch mapping is required for 1C cash flow",
+                field_name="branch_code",
+            )
+        )
     direction = _cash_direction(normalized, amount, issues)
     base.update(
         {
@@ -208,6 +239,7 @@ def _amount(
 ) -> Decimal | None:
     preferred = (
         "Сумма",
+        "СуммаДокумента",
         "СуммаПродажи",
         "СуммаЗатрат",
         "СуммаДенежныхСредств",
@@ -372,8 +404,11 @@ def _is_actual_patient_payment(source: dict[str, object]) -> bool:
         marker in normalized
         for marker in (
             "оплатаотпациента",
+            "оплатаотклиента",
             "взносналицевойсчет",
             "возвратоплатыпациенту",
+            "возвратоплатыклиенту",
+            "возвратслицевогосчета",
         )
     )
     # 1C configurations expose the same enum with slightly different labels
