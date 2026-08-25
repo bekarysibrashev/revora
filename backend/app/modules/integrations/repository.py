@@ -188,6 +188,49 @@ class IntegrationRepository:
         )
         return {str(status): int(count) for status, count in rows.all()}
 
+    async def one_c_quarantine_reasons(
+        self,
+        tenant_id: UUID,
+        connection_id: UUID,
+        *,
+        source_entities: tuple[str, ...],
+        period_from: datetime,
+        limit: int = 20,
+    ) -> list[tuple[str, str, str | None, str, int]]:
+        rows = await self.session.execute(
+            select(
+                RawRecord.source_entity,
+                NormalizationError.error_code,
+                NormalizationError.field_name,
+                NormalizationError.message,
+                func.count(func.distinct(RawRecord.id)).label("records"),
+            )
+            .join(
+                NormalizationError,
+                NormalizationError.raw_record_id == RawRecord.id,
+            )
+            .where(
+                RawRecord.tenant_id == tenant_id,
+                RawRecord.connection_id == connection_id,
+                RawRecord.source_entity.in_(source_entities),
+                RawRecord.status == "quarantined",
+                NormalizationError.status == "open",
+                self._one_c_history_condition(period_from),
+            )
+            .group_by(
+                RawRecord.source_entity,
+                NormalizationError.error_code,
+                NormalizationError.field_name,
+                NormalizationError.message,
+            )
+            .order_by(func.count(func.distinct(RawRecord.id)).desc())
+            .limit(limit)
+        )
+        return [
+            (str(entity), str(code), field, str(message), int(count))
+            for entity, code, field, message, count in rows.all()
+        ]
+
     async def single_active_branch_code(self, tenant_id: UUID) -> str | None:
         codes = list(
             (

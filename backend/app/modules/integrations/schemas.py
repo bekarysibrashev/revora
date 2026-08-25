@@ -215,6 +215,14 @@ class OneCBranchMapping(BaseModel):
     branch_code: str
 
 
+class OneCQuarantineReason(BaseModel):
+    source_entity: str
+    error_code: str
+    field_name: str | None = None
+    message: str
+    records: int
+
+
 class ConnectionSyncStatusResponse(BaseModel):
     connection_id: UUID
     status: str
@@ -226,3 +234,4 @@ class ConnectionSyncStatusResponse(BaseModel):
     quarantined_records: int = 0
     entities: list[EntitySyncCount] = Field(default_factory=list)
     branch_mappings: list[OneCBranchMapping] = Field(default_factory=list)
+    quarantine_reasons: list[OneCQuarantineReason] = Field(default_factory=list)

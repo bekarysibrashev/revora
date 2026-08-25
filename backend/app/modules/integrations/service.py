@@ -55,6 +55,7 @@ from app.modules.integrations.schemas import (
     OneCMetadataRequest,
     OneCMetadataResponse,
     OneCBranchMapping,
+    OneCQuarantineReason,
     OneCPushRequest,
     OneCPushResponse,
 )
@@ -153,6 +154,12 @@ class IntegrationService:
         branch_mappings = await self.repository.one_c_branch_mapping_details(
             user.tenant_id, connection.id
         )
+        quarantine_reasons = await self.repository.one_c_quarantine_reasons(
+            user.tenant_id,
+            connection.id,
+            source_entities=MAPPABLE_ONE_C_ENTITIES,
+            period_from=period_from,
+        )
         last_synced_at = None
         if settings.get("last_synced_at"):
             try:
@@ -176,6 +183,16 @@ class IntegrationService:
                     branch_code=branch_code,
                 )
                 for key, name, branch_code in branch_mappings
+            ],
+            quarantine_reasons=[
+                OneCQuarantineReason(
+                    source_entity=entity,
+                    error_code=code,
+                    field_name=field,
+                    message=message,
+                    records=count,
+                )
+                for entity, code, field, message, count in quarantine_reasons
             ],
         )
 

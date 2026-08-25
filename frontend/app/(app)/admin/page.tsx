@@ -9,7 +9,7 @@ type User = { id:string; email:string; full_name:string; role:string; branch_ids
 type Connection = { id:string; name:string; provider:string; status:string; settings?:Record<string,unknown> };
 type Profile = { id:string; source_entity:string; target_entity:string; version:number; is_active:boolean; rules:Record<string,unknown> };
 type OneCToken = { connection_id:string; token:string; allowed_entities:string[] };
-type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; pending_records:number; normalized_records:number; quarantined_records:number; entities:{entity:string;records:number}[]; branch_mappings:{structural_unit_key:string;structural_unit_name:string;branch_code:string}[] };
+type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; pending_records:number; normalized_records:number; quarantined_records:number; entities:{entity:string;records:number}[]; branch_mappings:{structural_unit_key:string;structural_unit_name:string;branch_code:string}[]; quarantine_reasons:{source_entity:string;error_code:string;field_name:string|null;message:string;records:number}[] };
 type OneCNormalize = { connection_id:string; reset:number; processed:number; normalized:number; quarantined:number; remaining:number };
 type OneCMetadataProperty = { name:string; type:string; nullable:boolean|null };
 type OneCMetadataEntity = { name:string; entity_type:string; properties:OneCMetadataProperty[]; navigation_properties:{name:string;relationship:string|null;target_type:string|null}[] };
@@ -169,6 +169,10 @@ function OneCIntegration(){
         <span>В аналитике за 90 дней: <strong>{status.normalized_records||0}</strong></span>
         <span>Ожидают обработки: <strong>{status.pending_records||0}</strong></span>
         <span>Нужна проверка: <strong>{status.quarantined_records||0}</strong></span>
+      </div>}
+      {!!status?.quarantine_reasons?.length&&<div className="setup-steps">
+        <p><strong>Почему строки не попали в аналитику:</strong></p>
+        <div className="table-wrap"><table><thead><tr><th>Данные 1С</th><th>Причина</th><th>Строк</th></tr></thead><tbody>{status.quarantine_reasons.map((reason,index)=><tr key={`${reason.source_entity}-${reason.error_code}-${reason.field_name||index}`}><td>{oneCEntityLabels[reason.source_entity]||reason.source_entity}</td><td>{reason.message}{reason.field_name?` (поле: ${reason.field_name})`:""}</td><td><strong>{reason.records}</strong></td></tr>)}</tbody></table></div>
       </div>}
       {status&&<div className="setup-steps">
         <p><strong>Разделение 1С по филиалам:</strong></p>
