@@ -38,6 +38,7 @@ class FakeOneCRepository:
         self.quarantined = []
         self.metadata = None
         self.reset_count = 0
+        self.removed_canonical = []
 
     async def set_tenant_context(self, tenant_id):
         self.context = tenant_id
@@ -73,6 +74,9 @@ class FakeOneCRepository:
 
     async def mark_raw_normalized(self, raw_record):
         raw_record.status = "normalized"
+
+    async def remove_one_c_canonical_record(self, **kwargs):
+        self.removed_canonical.append(kwargs)
 
     async def quarantine(self, **kwargs):
         kwargs["raw_record"].status = "quarantined"
@@ -138,6 +142,40 @@ class FakeOneCWriter:
     async def write(self, **kwargs):
         self.writes.append(kwargs)
         return uuid4()
+
+
+def test_reprocess_keeps_only_latest_raw_version_per_one_c_identity() -> None:
+    older = SimpleNamespace(
+        id=uuid4(),
+        source_entity="AccumulationRegister_Выручка_RecordType",
+        source_record_id="document|2026-07-01|1",
+        record_hash="old",
+        received_at=datetime(2026, 8, 1, tzinfo=UTC),
+        created_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    newer = SimpleNamespace(
+        id=uuid4(),
+        source_entity=older.source_entity,
+        source_record_id=older.source_record_id,
+        record_hash="new",
+        received_at=datetime(2026, 8, 2, tzinfo=UTC),
+        created_at=datetime(2026, 8, 2, tzinfo=UTC),
+    )
+    independent = SimpleNamespace(
+        id=uuid4(),
+        source_entity=older.source_entity,
+        source_record_id="document|2026-07-01|2",
+        record_hash="other",
+        received_at=datetime(2026, 8, 1, tzinfo=UTC),
+        created_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+
+    latest, superseded = IntegrationRepository._latest_one_c_record_versions(
+        [older, newer, independent]
+    )
+
+    assert set(latest) == {newer.id, independent.id}
+    assert superseded == [older.id]
 
 
 def test_connector_token_round_trip_and_digest() -> None:
@@ -238,6 +276,13 @@ async def test_push_stores_allowed_records_and_deduplicates() -> None:
     assert first.records_normalized == 1
     assert second.records_normalized == 0
     assert len(writer.writes) == 1
+    assert repository.removed_canonical == [
+        {
+            "tenant_id": tenant_id,
+            "source_entity": entity,
+            "source_record_id": "doc-1|2026-07-31T12:00:00|1",
+        }
+    ]
     assert repository.context == tenant_id
     assert repository.connection.status == "connected"
 

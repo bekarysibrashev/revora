@@ -406,16 +406,22 @@ class IntegrationService:
         raw_record,
         branch_code: str | None,
     ) -> str:
+        source_identity = raw_record.source_record_id or str(raw_record.id)
+        await self.repository.remove_one_c_canonical_record(
+            tenant_id=tenant_id,
+            source_entity=raw_record.source_entity,
+            source_record_id=source_identity,
+        )
         mapping = normalize_one_c_operational_record(
             source_entity=raw_record.source_entity,
-            source_record_id=raw_record.source_record_id or str(raw_record.id),
+            source_record_id=source_identity,
             payload=dict(raw_record.payload),
             branch_code=branch_code,
         )
         if mapping is None:
             mapping = normalize_one_c_finance_record(
                 source_entity=raw_record.source_entity,
-                source_record_id=raw_record.source_record_id or str(raw_record.id),
+                source_record_id=source_identity,
                 payload=dict(raw_record.payload),
                 branch_code=branch_code,
             )

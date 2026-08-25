@@ -5,7 +5,7 @@ import re
 import unicodedata
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, func, or_, select, text, update
+from sqlalchemy import case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,16 @@ from app.modules.integrations.models import (
     RawRecord,
     RecordLineage,
     SyncRun,
+)
+from app.modules.finance.models import CashFlowFact, ExpenseFact, PayrollFact, RevenueFact
+from app.modules.integrations.one_c_finance import (
+    EXPENSE_ENTITY,
+    MONEY_ENTITY,
+    PAYROLL_ENTITY,
+    PAYROLL_REGISTER_ENTITY,
+    REVENUE_ENTITY,
+    SALES_ENTITY,
+    one_c_finance_external_id,
 )
 from app.modules.integrations.schemas import MappingDefinition, MappingIssue
 from app.modules.tenancy.models import Branch
@@ -383,19 +393,108 @@ class IntegrationRepository:
         source_entities: tuple[str, ...],
         period_from: datetime,
     ) -> int:
-        result = await self.session.execute(
-            update(RawRecord)
-            .where(
-                RawRecord.tenant_id == tenant_id,
-                RawRecord.connection_id == connection_id,
-                RawRecord.source_entity.in_(source_entities),
-                RawRecord.status.in_(("normalized", "quarantined")),
-                self._one_c_history_condition(period_from),
-            )
-            .values(status="pending")
+        records = list(
+            (
+                await self.session.scalars(
+                    select(RawRecord).where(
+                        RawRecord.tenant_id == tenant_id,
+                        RawRecord.connection_id == connection_id,
+                        RawRecord.source_entity.in_(source_entities),
+                        self._one_c_history_condition(period_from),
+                    )
+                )
+            ).all()
         )
+        latest_ids, superseded_ids = self._latest_one_c_record_versions(records)
+        all_ids = [record.id for record in records]
+
+        for chunk in self._chunks(latest_ids):
+            await self.session.execute(
+                update(RawRecord)
+                .where(RawRecord.id.in_(chunk))
+                .values(status="pending")
+                .execution_options(synchronize_session=False)
+            )
+        for chunk in self._chunks(superseded_ids):
+            await self.session.execute(
+                update(RawRecord)
+                .where(RawRecord.id.in_(chunk))
+                .values(status="superseded")
+                .execution_options(synchronize_session=False)
+            )
+        for chunk in self._chunks(all_ids):
+            await self.session.execute(
+                update(NormalizationError)
+                .where(
+                    NormalizationError.raw_record_id.in_(chunk),
+                    NormalizationError.status == "open",
+                )
+                .values(status="resolved", resolved_at=datetime.now(UTC))
+                .execution_options(synchronize_session=False)
+            )
         await self.session.flush()
-        return int(result.rowcount or 0)
+        return len(latest_ids)
+
+    async def remove_one_c_canonical_record(
+        self,
+        *,
+        tenant_id: UUID,
+        source_entity: str,
+        source_record_id: str,
+    ) -> None:
+        """Remove the prior canonical value immediately before rebuilding it.
+
+        The delete and replacement write run in one request transaction. If a
+        newer source version is quarantined, a stale older amount cannot remain
+        visible in analytics.
+        """
+
+        model_by_entity = {
+            REVENUE_ENTITY: RevenueFact,
+            SALES_ENTITY: RevenueFact,
+            MONEY_ENTITY: CashFlowFact,
+            EXPENSE_ENTITY: ExpenseFact,
+            PAYROLL_ENTITY: PayrollFact,
+            PAYROLL_REGISTER_ENTITY: PayrollFact,
+        }
+        model = model_by_entity.get(source_entity)
+        if model is None:
+            return
+        external_id = one_c_finance_external_id(source_entity, source_record_id)
+        await self.session.execute(
+            delete(model).where(
+                model.tenant_id == tenant_id,
+                model.external_id == external_id,
+            )
+        )
+
+    @staticmethod
+    def _latest_one_c_record_versions(
+        records: list[RawRecord],
+    ) -> tuple[list[UUID], list[UUID]]:
+        latest: dict[tuple[str, str], RawRecord] = {}
+        for record in records:
+            identity = record.source_record_id or record.record_hash or str(record.id)
+            key = (record.source_entity, identity)
+            current = latest.get(key)
+            record_order = (record.received_at or record.created_at, str(record.id))
+            current_order = (
+                (current.received_at or current.created_at, str(current.id))
+                if current is not None
+                else None
+            )
+            if current_order is None or record_order > current_order:
+                latest[key] = record
+        latest_ids = {record.id for record in latest.values()}
+        return (
+            list(latest_ids),
+            [record.id for record in records if record.id not in latest_ids],
+        )
+
+    @staticmethod
+    def _chunks(values: list[UUID], size: int = 1000):
+        for index in range(0, len(values), size):
+            yield values[index : index + size]
 
     @staticmethod
     def _one_c_history_condition(period_from: datetime):

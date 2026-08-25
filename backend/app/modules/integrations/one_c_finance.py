@@ -83,9 +83,7 @@ def normalize_one_c_finance_record(
     ):
         amount = Decimal("0")
 
-    external_id = "1c:" + sha256(
-        f"{source_entity}|{source_record_id}".encode("utf-8")
-    ).hexdigest()
+    external_id = one_c_finance_external_id(source_entity, source_record_id)
     base: dict[str, object] = {
         "external_id": external_id,
         "currency": "KZT",
@@ -393,8 +391,8 @@ def _reference_value(source: dict[str, object], *aliases: str) -> str | None:
 
 def _is_actual_patient_payment(source: dict[str, object]) -> bool:
     operation = _text_value(source, "ВидОперации")
-    normalized = _normalize_key(operation or "")
-    return any(
+    normalized = _normalize_key(operation or "").replace("ё", "е")
+    exact_match = any(
         marker in normalized
         for marker in (
             "оплатаотпациента",
@@ -402,6 +400,24 @@ def _is_actual_patient_payment(source: dict[str, object]) -> bool:
             "возвратоплатыпациенту",
         )
     )
+    # 1C configurations expose the same enum with slightly different labels
+    # (for example, "ОплатаПациентом" instead of
+    # "ОплатаОтПациента"). Keep the rule semantic and
+    # explicitly exclude insurance payments verified as a separate report row.
+    semantic_match = (
+        "пациент" in normalized
+        and any(marker in normalized for marker in ("оплат", "взнос", "возврат"))
+        and "страх" not in normalized
+    )
+    return exact_match or semantic_match
+
+
+def one_c_finance_external_id(source_entity: str, source_record_id: str) -> str:
+    """Return the canonical identity shared by normalization and rebuilds."""
+
+    return "1c:" + sha256(
+        f"{source_entity}|{source_record_id}".encode("utf-8")
+    ).hexdigest()
 
 
 def _expense_cost_behavior(category: str | None) -> str | None:

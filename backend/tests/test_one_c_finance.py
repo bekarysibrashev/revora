@@ -74,6 +74,23 @@ def test_july_patient_payment_operations_match_verified_one_c_report() -> None:
     )
 
 
+def test_patient_payment_enum_wording_variants_are_included() -> None:
+    for operation in ("ОплатаПациентом", "ВозвратОплатыПациента"):
+        result = normalize_one_c_finance_record(
+            source_entity=REVENUE_ENTITY,
+            source_record_id=operation,
+            branch_code="main",
+            payload={
+                "Period": "2026-07-31T12:00:00",
+                "Сумма": "100",
+                "ВидОперации": operation,
+            },
+        )
+
+        assert result is not None and result.is_valid
+        assert result.data["amount"] == Decimal("100")
+
+
 def test_sales_register_becomes_accrual_without_double_cashflow() -> None:
     result = normalize_one_c_finance_record(
         source_entity=SALES_ENTITY,
