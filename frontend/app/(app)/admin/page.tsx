@@ -92,6 +92,14 @@ const oneCEntityLabels:Record<string,string>={
   "Document_НачислениеЗарплаты_РасчетЗарплаты": "Расчёт зарплаты по сотрудникам",
 };
 
+const ONE_C_NORMALIZE_BATCH_SIZE=100;
+const ONE_C_NORMALIZE_TIMEOUT_MS=45_000;
+const ONE_C_NORMALIZE_RETRIES=5;
+
+function wait(milliseconds:number){
+  return new Promise(resolve=>setTimeout(resolve,milliseconds));
+}
+
 function OneCIntegration(){
   const qc=useQueryClient();
   const connections=useQuery({queryKey:["connections"],queryFn:()=>api<{items:Connection[]}>('/integrations/connections')});
@@ -147,11 +155,40 @@ function OneCIntegration(){
     try{
       let first=true;
       for(;;){
-        const batch=await api<OneCNormalize>(`/integrations/connections/${connectionId}/normalize-1c`,{method:"POST",body:JSON.stringify({history_days:90,batch_size:500,reset_existing:resetExisting&&first})});
-        first=false;
+        let batch:OneCNormalize|null=null;
+        let lastError:unknown=null;
+        for(let attempt=1;attempt<=ONE_C_NORMALIZE_RETRIES;attempt+=1){
+          const controller=new AbortController();
+          const timeout=window.setTimeout(()=>controller.abort(),ONE_C_NORMALIZE_TIMEOUT_MS);
+          const shouldReset=resetExisting&&first;
+          // A timed-out request may still finish on the server. Never send the
+          // reset flag twice or already completed batches could be reset again.
+          first=false;
+          try{
+            batch=await api<OneCNormalize>(`/integrations/connections/${connectionId}/normalize-1c`,{
+              method:"POST",
+              body:JSON.stringify({history_days:90,batch_size:ONE_C_NORMALIZE_BATCH_SIZE,reset_existing:shouldReset}),
+              signal:controller.signal,
+            });
+            lastError=null;
+            break;
+          }catch(error){
+            lastError=error;
+            if(attempt<ONE_C_NORMALIZE_RETRIES)await wait(attempt*1_500);
+          }finally{
+            window.clearTimeout(timeout);
+          }
+        }
+        if(!batch){
+          throw lastError instanceof Error?lastError:new Error("Сервер временно не отвечает. Обработка остановлена безопасно и может быть продолжена.");
+        }
         totals={processed:totals.processed+batch.processed,normalized:totals.normalized+batch.normalized,quarantined:totals.quarantined+batch.quarantined,remaining:batch.remaining};
         setNormalizeProgress(totals);
-        if(batch.remaining===0||batch.processed===0)break;
+        if(batch.remaining===0)break;
+        if(batch.processed===0)throw new Error(`Осталось ${batch.remaining} строк, но сервер не смог выбрать следующий пакет.`);
+        // Keep the browser responsive and avoid hammering Render with one
+        // continuous stream of database transactions.
+        await wait(100);
       }
       await qc.invalidateQueries({queryKey:["one-c-sync",connectionId]});
     }catch(e){setNormalizeError(e instanceof Error?e.message:"Не удалось обработать данные 1С")}
