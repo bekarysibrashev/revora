@@ -1,6 +1,7 @@
 """Contracts for source-to-canonical mapping definitions."""
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -223,6 +224,14 @@ class OneCQuarantineReason(BaseModel):
     records: int
 
 
+class OneCSourceSummary(BaseModel):
+    source_entity: str
+    dimension: str
+    value: str
+    records: int
+    amount: Decimal
+
+
 class ConnectionSyncStatusResponse(BaseModel):
     connection_id: UUID
     status: str
@@ -235,3 +244,4 @@ class ConnectionSyncStatusResponse(BaseModel):
     entities: list[EntitySyncCount] = Field(default_factory=list)
     branch_mappings: list[OneCBranchMapping] = Field(default_factory=list)
     quarantine_reasons: list[OneCQuarantineReason] = Field(default_factory=list)
+    source_summaries: list[OneCSourceSummary] = Field(default_factory=list)

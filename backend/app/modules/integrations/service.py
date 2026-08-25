@@ -56,6 +56,7 @@ from app.modules.integrations.schemas import (
     OneCMetadataResponse,
     OneCBranchMapping,
     OneCQuarantineReason,
+    OneCSourceSummary,
     OneCPushRequest,
     OneCPushResponse,
 )
@@ -160,6 +161,11 @@ class IntegrationService:
             source_entities=MAPPABLE_ONE_C_ENTITIES,
             period_from=period_from,
         )
+        source_summaries = await self.repository.one_c_source_summaries(
+            user.tenant_id,
+            connection.id,
+            period_from=period_from,
+        )
         last_synced_at = None
         if settings.get("last_synced_at"):
             try:
@@ -193,6 +199,16 @@ class IntegrationService:
                     records=count,
                 )
                 for entity, code, field, message, count in quarantine_reasons
+            ],
+            source_summaries=[
+                OneCSourceSummary(
+                    source_entity=entity,
+                    dimension=dimension,
+                    value=value,
+                    records=count,
+                    amount=amount,
+                )
+                for entity, dimension, value, count, amount in source_summaries
             ],
         )
 

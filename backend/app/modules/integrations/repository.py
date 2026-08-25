@@ -5,7 +5,7 @@ import re
 import unicodedata
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, delete, func, or_, select, text, update
+from sqlalchemy import Numeric, case, cast, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -230,6 +230,52 @@ class IntegrationRepository:
             (str(entity), str(code), field, str(message), int(count))
             for entity, code, field, message, count in rows.all()
         ]
+
+    async def one_c_source_summaries(
+        self,
+        tenant_id: UUID,
+        connection_id: UUID,
+        *,
+        period_from: datetime,
+    ) -> list[tuple[str, str, str, int, object]]:
+        """Return non-PII control totals directly from current raw 1C rows."""
+
+        definitions = (
+            (REVENUE_ENTITY, "Вид операции", "ВидОперации", "Сумма"),
+            (SALES_ENTITY, "Начисленная выручка", None, "Стоимость"),
+            (PAYROLL_REGISTER_ENTITY, "Движение регистра", "RecordType", "Сумма"),
+        )
+        summaries: list[tuple[str, str, str, int, object]] = []
+        for entity, dimension, dimension_field, amount_field in definitions:
+            value_expression = (
+                func.coalesce(RawRecord.payload[dimension_field].astext, "(не указано)")
+                if dimension_field
+                else literal("Итого")
+            )
+            amount_expression = cast(
+                func.nullif(RawRecord.payload[amount_field].astext, ""), Numeric(20, 2)
+            )
+            rows = await self.session.execute(
+                select(
+                    value_expression,
+                    func.count(RawRecord.id),
+                    func.coalesce(func.sum(amount_expression), 0),
+                )
+                .where(
+                    RawRecord.tenant_id == tenant_id,
+                    RawRecord.connection_id == connection_id,
+                    RawRecord.source_entity == entity,
+                    RawRecord.status != "superseded",
+                    self._one_c_history_condition(period_from),
+                )
+                .group_by(value_expression)
+                .order_by(value_expression)
+            )
+            summaries.extend(
+                (entity, dimension, str(value), int(count), amount)
+                for value, count, amount in rows.all()
+            )
+        return summaries
 
     async def single_active_branch_code(self, tenant_id: UUID) -> str | None:
         codes = list(

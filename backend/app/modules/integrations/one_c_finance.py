@@ -109,14 +109,6 @@ def normalize_one_c_finance_record(
         return OneCFinanceMapping("revenue_fact", base, issues)
 
     if source_entity in {PAYROLL_ENTITY, PAYROLL_REGISTER_ENTITY}:
-        if not branch_code:
-            issues.append(
-                MappingIssue(
-                    code="ONE_C_BRANCH_MAPPING_REQUIRED",
-                    message="A single/default Revora branch is required for 1C payroll",
-                    field_name="branch_code",
-                )
-            )
         base.update(
             {
                 "branch_code": branch_code,
@@ -127,14 +119,6 @@ def normalize_one_c_finance_record(
         return OneCFinanceMapping("payroll_fact", base, issues)
 
     if source_entity == EXPENSE_ENTITY:
-        if not branch_code:
-            issues.append(
-                MappingIssue(
-                    code="ONE_C_BRANCH_MAPPING_REQUIRED",
-                    message="A Revora branch mapping is required for 1C expenses",
-                    field_name="branch_code",
-                )
-            )
         category = _text_value(
             normalized,
             "СтатьяЗатрат",
@@ -155,14 +139,6 @@ def normalize_one_c_finance_record(
         )
         return OneCFinanceMapping("expense_fact", base, issues)
 
-    if not branch_code:
-        issues.append(
-            MappingIssue(
-                code="ONE_C_BRANCH_MAPPING_REQUIRED",
-                message="A Revora branch mapping is required for 1C cash flow",
-                field_name="branch_code",
-            )
-        )
     direction = _cash_direction(normalized, amount, issues)
     base.update(
         {

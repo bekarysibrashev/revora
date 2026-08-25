@@ -122,6 +122,18 @@ def test_expense_register_becomes_expense() -> None:
     assert result.data["amount"] == Decimal("50000")
 
 
+def test_expense_without_branch_is_kept_for_clinic_total() -> None:
+    result = normalize_one_c_finance_record(
+        source_entity=EXPENSE_ENTITY,
+        source_record_id="expense-without-branch",
+        branch_code=None,
+        payload={"Period": "2026-07-15T00:00:00", "Сумма": 50000},
+    )
+
+    assert result is not None and result.is_valid
+    assert result.data["branch_code"] is None
+
+
 def test_expense_behavior_is_inferred_only_for_known_categories() -> None:
     laboratory = normalize_one_c_finance_record(
         source_entity=EXPENSE_ENTITY,
@@ -196,6 +208,23 @@ def test_payroll_register_payment_movement_is_zeroed() -> None:
     assert result.data["amount"] == Decimal("0")
 
 
+def test_payroll_without_branch_is_kept_for_clinic_total() -> None:
+    result = normalize_one_c_finance_record(
+        source_entity=PAYROLL_REGISTER_ENTITY,
+        source_record_id="payroll-without-branch",
+        branch_code=None,
+        payload={
+            "Period": "2026-08-05T10:00:00",
+            "МесяцНачисления": "2026-07-31T23:59:59",
+            "RecordType": "Receipt",
+            "Сумма": "100000",
+        },
+    )
+
+    assert result is not None and result.is_valid
+    assert result.data["branch_code"] is None
+
+
 def test_revenue_without_structural_unit_can_be_inferred_from_appointment() -> None:
     result = normalize_one_c_finance_record(
         source_entity=REVENUE_ENTITY,
@@ -240,6 +269,22 @@ def test_money_register_infers_cash_direction() -> None:
     assert outgoing is not None and outgoing.is_valid
     assert outgoing.data["direction"] == "out"
     assert outgoing.data["amount"] == Decimal("12000")
+
+
+def test_money_without_branch_is_kept_for_clinic_total() -> None:
+    result = normalize_one_c_finance_record(
+        source_entity=MONEY_ENTITY,
+        source_record_id="money-without-branch",
+        branch_code=None,
+        payload={
+            "Period": "2026-07-16T00:00:00",
+            "Сумма": 75000,
+            "ВидОперации": "Поступление оплаты",
+        },
+    )
+
+    assert result is not None and result.is_valid
+    assert result.data["branch_code"] is None
 
 
 def test_ambiguous_amount_is_quarantined_instead_of_guessed() -> None:
