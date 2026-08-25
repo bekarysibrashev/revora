@@ -31,6 +31,7 @@ SAFE_ONE_C_ENTITIES = (
     "Document_Событие",
     "Document_ПланЛечения",
     "Document_НачислениеЗарплаты",
+    "Document_НачислениеЗарплаты_РасчетЗарплаты",
     "InformationRegister_РекламныеРасходы",
 )
 
@@ -51,6 +52,7 @@ SAFE_ONE_C_FIELDS: dict[str, frozenset[str]] = {
     "Document_Событие": frozenset(("Ref_Key", "Number", "Date", "DeletionMark", "Posted", "Врач_Key", "ДатаОкончания", "ДатаСоздания", "ИсточникЗаписи_Key", "Контрагент_Key", "ПричинаОтмены_Key", "Сделка_Key", "СсылкаНаПрием_Key", "Статус", "СтатусПациента", "СтруктурнаяЕдиница_Key", "ТипСобытия")),
     "Document_ПланЛечения": frozenset(("Ref_Key", "Number", "Date", "DeletionMark", "Posted", "Контрагент_Key", "Куратор_Key", "Сотрудник_Key", "Статус", "СтруктурнаяЕдиница_Key", "СуммаДокумента", "СуммаОплачено")),
     "Document_НачислениеЗарплаты": frozenset(("Ref_Key", "Number", "Date", "DeletionMark", "Posted", "ДатаНачалаПериода", "ДатаОкончанияПериода", "Сотрудник_Key", "СтруктурнаяЕдиница_Key", "СуммаДокумента", "СтатьяРасходов_Key")),
+    "Document_НачислениеЗарплаты_РасчетЗарплаты": frozenset(("Ref_Key", "LineNumber", "Сотрудник_Key", "Код", "НачислениеУдержание_Key", "ПериодС", "ПериодПо", "Сумма")),
     "InformationRegister_РекламныеРасходы": frozenset(("utmCampaign", "utmContent", "utmMedium", "utmSource", "utmTerm", "Дата", "Сумма")),
 }
 
@@ -90,6 +92,9 @@ def source_record_id(record: dict[str, object]) -> str:
 
     ref_key = record.get("Ref_Key")
     if ref_key:
+        line_number = record.get("LineNumber")
+        if line_number is not None:
+            return f"{ref_key}|{line_number}"
         return str(ref_key)
 
     identity = [

@@ -26,6 +26,7 @@ from app.modules.integrations.one_c_finance import (
     MAPPABLE_ONE_C_ENTITIES as MAPPABLE_ONE_C_FINANCE_ENTITIES,
     MONEY_ENTITY,
     PAYROLL_ENTITY,
+    PAYROLL_LINE_ENTITY,
     PAYROLL_REGISTER_ENTITY,
     REVENUE_ENTITY,
     SALES_ENTITY,
@@ -70,6 +71,7 @@ REPROCESSABLE_ONE_C_ENTITIES = (
     EXPENSE_ENTITY,
     SALES_ENTITY,
     PAYROLL_ENTITY,
+    PAYROLL_LINE_ENTITY,
     PAYROLL_REGISTER_ENTITY,
     LEAD_ENTITY,
     APPOINTMENT_ENTITY,
@@ -272,12 +274,17 @@ class IntegrationService:
             else:
                 duplicates += 1
             if raw_record.status == "pending":
+                mapping_payload = await self._one_c_mapping_payload(
+                    tenant_id=parts.tenant_id,
+                    raw_record=raw_record,
+                )
                 outcome = await self._normalize_one_c_raw_record(
                     tenant_id=parts.tenant_id,
                     raw_record=raw_record,
                     branch_code=self._one_c_record_branch_code(
-                        record, branch_code_map, branch_code
+                        mapping_payload, branch_code_map, branch_code
                     ),
+                    mapping_payload=mapping_payload,
                 )
                 normalized += int(outcome == "normalized")
                 quarantined += int(outcome == "quarantined")
@@ -408,12 +415,17 @@ class IntegrationService:
         normalized = 0
         quarantined = 0
         for raw_record in records:
+            mapping_payload = await self._one_c_mapping_payload(
+                tenant_id=user.tenant_id,
+                raw_record=raw_record,
+            )
             outcome = await self._normalize_one_c_raw_record(
                 tenant_id=user.tenant_id,
                 raw_record=raw_record,
                 branch_code=self._one_c_record_branch_code(
-                    dict(raw_record.payload), branch_code_map, branch_code
+                    mapping_payload, branch_code_map, branch_code
                 ),
+                mapping_payload=mapping_payload,
             )
             normalized += int(outcome == "normalized")
             quarantined += int(outcome == "quarantined")
@@ -438,6 +450,7 @@ class IntegrationService:
         tenant_id: UUID,
         raw_record,
         branch_code: str | None,
+        mapping_payload: dict[str, object] | None = None,
     ) -> str:
         source_identity = raw_record.source_record_id or str(raw_record.id)
         await self.repository.remove_one_c_canonical_record(
@@ -445,17 +458,18 @@ class IntegrationService:
             source_entity=raw_record.source_entity,
             source_record_id=source_identity,
         )
+        payload = mapping_payload or dict(raw_record.payload)
         mapping = normalize_one_c_operational_record(
             source_entity=raw_record.source_entity,
             source_record_id=source_identity,
-            payload=dict(raw_record.payload),
+            payload=payload,
             branch_code=branch_code,
         )
         if mapping is None:
             mapping = normalize_one_c_finance_record(
                 source_entity=raw_record.source_entity,
                 source_record_id=source_identity,
-                payload=dict(raw_record.payload),
+                payload=payload,
                 branch_code=branch_code,
             )
         if mapping is None:
@@ -484,6 +498,25 @@ class IntegrationService:
             return "quarantined"
         await self.repository.mark_raw_normalized(raw_record)
         return "normalized"
+
+    async def _one_c_mapping_payload(
+        self,
+        *,
+        tenant_id: UUID,
+        raw_record,
+    ) -> dict[str, object]:
+        payload = dict(raw_record.payload)
+        if raw_record.source_entity != PAYROLL_LINE_ENTITY:
+            return payload
+        ref_key = str(payload.get("Ref_Key") or "").strip()
+        if not ref_key:
+            return payload
+        parent = await self.repository.one_c_payroll_document_payload(
+            tenant_id,
+            raw_record.connection_id,
+            ref_key,
+        )
+        return {**(parent or {}), **payload}
 
     @staticmethod
     def _one_c_record_branch_code(

@@ -21,6 +21,7 @@ MONEY_ENTITY = "AccumulationRegister_ДенежныеСредства_RecordType
 EXPENSE_ENTITY = "AccumulationRegister_Затраты_RecordType"
 SALES_ENTITY = "AccumulationRegister_Продажи_RecordType"
 PAYROLL_ENTITY = "Document_НачислениеЗарплаты"
+PAYROLL_LINE_ENTITY = "Document_НачислениеЗарплаты_РасчетЗарплаты"
 PAYROLL_REGISTER_ENTITY = "AccumulationRegister_РасчетыСПерсоналом_RecordType"
 MAPPABLE_ONE_C_ENTITIES = (
     REVENUE_ENTITY,
@@ -28,6 +29,7 @@ MAPPABLE_ONE_C_ENTITIES = (
     EXPENSE_ENTITY,
     SALES_ENTITY,
     PAYROLL_ENTITY,
+    PAYROLL_LINE_ENTITY,
     PAYROLL_REGISTER_ENTITY,
 )
 
@@ -61,12 +63,15 @@ def normalize_one_c_finance_record(
 
     normalized = {_normalize_key(key): value for key, value in payload.items()}
     issues: list[MappingIssue] = []
-    if source_entity == PAYROLL_ENTITY:
+    if source_entity == PAYROLL_LINE_ENTITY:
         occurred_at = _payroll_period(normalized, issues)
-        # The verified 1C report's "Начислено" column is built from posted
-        # payroll documents. Settlement-register receipts also contain other
-        # movements and overstate the report total.
+        # The verified report's "Начислено" column is the sum of employee
+        # calculation lines, including negative corrections.
         amount = _amount(normalized, issues)
+    elif source_entity == PAYROLL_ENTITY:
+        occurred_at = _payroll_period(normalized, issues)
+        # Header totals contain a broader composition than the report column.
+        amount = Decimal("0")
     elif source_entity == PAYROLL_REGISTER_ENTITY:
         occurred_at = _payroll_register_period(normalized, issues)
         # Retain a zero fact so reprocessing removes values written by the old
@@ -77,7 +82,7 @@ def normalize_one_c_finance_record(
         amount = _amount(normalized, issues)
     if payload.get("Active") is False:
         amount = Decimal("0")
-    if source_entity == PAYROLL_ENTITY and (
+    if source_entity in {PAYROLL_ENTITY, PAYROLL_LINE_ENTITY} and (
         payload.get("DeletionMark") is True or payload.get("Posted") is False
     ):
         amount = Decimal("0")
@@ -115,7 +120,7 @@ def normalize_one_c_finance_record(
         )
         return OneCFinanceMapping("revenue_fact", base, issues)
 
-    if source_entity in {PAYROLL_ENTITY, PAYROLL_REGISTER_ENTITY}:
+    if source_entity in {PAYROLL_ENTITY, PAYROLL_LINE_ENTITY, PAYROLL_REGISTER_ENTITY}:
         if not branch_code:
             issues.append(
                 MappingIssue(

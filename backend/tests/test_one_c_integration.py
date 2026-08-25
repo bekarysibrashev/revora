@@ -58,6 +58,7 @@ class FakeOneCRepository:
         if raw is None:
             raw = SimpleNamespace(
                 id=uuid4(),
+                connection_id=kwargs["connection_id"],
                 status="pending",
                 source_entity=kwargs["source_entity"],
                 source_record_id=kwargs["source_record_id"],
@@ -71,6 +72,16 @@ class FakeOneCRepository:
 
     async def one_c_branch_code_map(self, tenant_id, connection_id):
         return {}
+
+    async def one_c_payroll_document_payload(self, tenant_id, connection_id, ref_key):
+        for raw in self.raw_records.values():
+            if (
+                raw.connection_id == connection_id
+                and raw.source_entity == "Document_НачислениеЗарплаты"
+                and raw.source_record_id == ref_key
+            ):
+                return dict(raw.payload)
+        return None
 
     async def mark_raw_normalized(self, raw_record):
         raw_record.status = "normalized"
@@ -196,6 +207,7 @@ def test_allowlist_includes_only_field_protected_operational_sources() -> None:
     assert "Document_ПоступлениеДенежныхСредств" not in SAFE_ONE_C_ENTITIES
     assert "AccumulationRegister_Выручка_RecordType" in SAFE_ONE_C_ENTITIES
     assert "Catalog_СтруктурныеЕдиницы" in SAFE_ONE_C_ENTITIES
+    assert "Document_НачислениеЗарплаты_РасчетЗарплаты" in SAFE_ONE_C_ENTITIES
 
 
 def test_structural_unit_mapping_overrides_default_branch() -> None:
@@ -250,6 +262,10 @@ def test_source_record_id_is_stable_for_register_rows() -> None:
     assert source_record_id(record) == "doc-1|2026-07-31T12:00:00|3"
 
 
+def test_source_record_id_keeps_each_document_table_line() -> None:
+    assert source_record_id({"Ref_Key": "payroll-1", "LineNumber": 7}) == "payroll-1|7"
+
+
 @pytest.mark.asyncio
 async def test_push_stores_allowed_records_and_deduplicates() -> None:
     tenant_id, connection_id = uuid4(), uuid4()
@@ -285,6 +301,48 @@ async def test_push_stores_allowed_records_and_deduplicates() -> None:
     ]
     assert repository.context == tenant_id
     assert repository.connection.status == "connected"
+
+
+@pytest.mark.asyncio
+async def test_payroll_calculation_line_inherits_parent_period_and_branch_context() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    writer = FakeOneCWriter()
+    service = IntegrationService(repository, writer)
+
+    await service.ingest_one_c_push(
+        token,
+        OneCPushRequest(
+            entity="Document_НачислениеЗарплаты",
+            records=[{
+                "Ref_Key": "payroll-1",
+                "Date": "2026-08-05T10:00:00",
+                "Posted": True,
+                "ДатаОкончанияПериода": "2026-07-31T23:59:59",
+                "СуммаДокумента": 700000,
+            }],
+        ),
+    )
+    result = await service.ingest_one_c_push(
+        token,
+        OneCPushRequest(
+            entity="Document_НачислениеЗарплаты_РасчетЗарплаты",
+            records=[{
+                "Ref_Key": "payroll-1",
+                "LineNumber": 1,
+                "Сотрудник_Key": "employee-1",
+                "ПериодС": "2026-07-01T00:00:00",
+                "ПериодПо": "2026-07-31T23:59:59",
+                "Сумма": 481048.99,
+            }],
+        ),
+    )
+
+    assert result.records_normalized == 1
+    assert writer.writes[-1]["target_entity"] == "payroll_fact"
+    assert str(writer.writes[-1]["data"]["amount"]) == "481048.99"
+    assert writer.writes[-1]["data"]["occurred_on"].isoformat() == "2026-07-31"
 
 
 @pytest.mark.asyncio

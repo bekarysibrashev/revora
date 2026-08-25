@@ -4,6 +4,7 @@ from app.modules.integrations.one_c_finance import (
     EXPENSE_ENTITY,
     MONEY_ENTITY,
     PAYROLL_ENTITY,
+    PAYROLL_LINE_ENTITY,
     PAYROLL_REGISTER_ENTITY,
     REVENUE_ENTITY,
     SALES_ENTITY,
@@ -158,7 +159,7 @@ def test_expense_behavior_is_inferred_only_for_known_categories() -> None:
     assert rent is not None and rent.data["cost_behavior"] == "fixed"
 
 
-def test_payroll_document_uses_verified_report_amount() -> None:
+def test_payroll_document_header_is_zeroed() -> None:
     result = normalize_one_c_finance_record(
         source_entity=PAYROLL_ENTITY,
         source_record_id="payroll-july",
@@ -174,7 +175,25 @@ def test_payroll_document_uses_verified_report_amount() -> None:
     assert result is not None and result.is_valid
     assert result.target_entity == "payroll_fact"
     assert result.data["occurred_on"].isoformat() == "2026-07-31"
-    assert result.data["amount"] == Decimal("24549806.17")
+    assert result.data["amount"] == Decimal("0")
+
+
+def test_payroll_calculation_line_uses_employee_amount() -> None:
+    result = normalize_one_c_finance_record(
+        source_entity=PAYROLL_LINE_ENTITY,
+        source_record_id="payroll-july|1",
+        branch_code="main",
+        payload={
+            "Ref_Key": "payroll-july",
+            "LineNumber": 1,
+            "ДатаОкончанияПериода": "2026-07-31T23:59:59",
+            "Сумма": "481048.99",
+        },
+    )
+
+    assert result is not None and result.is_valid
+    assert result.data["occurred_on"].isoformat() == "2026-07-31"
+    assert result.data["amount"] == Decimal("481048.99")
 
 
 def test_payroll_register_is_zeroed_after_switch_to_documents() -> None:

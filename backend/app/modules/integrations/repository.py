@@ -23,6 +23,7 @@ from app.modules.integrations.one_c_finance import (
     EXPENSE_ENTITY,
     MONEY_ENTITY,
     PAYROLL_ENTITY,
+    PAYROLL_LINE_ENTITY,
     PAYROLL_REGISTER_ENTITY,
     REVENUE_ENTITY,
     SALES_ENTITY,
@@ -231,6 +232,26 @@ class IntegrationRepository:
             for entity, code, field, message, count in rows.all()
         ]
 
+    async def one_c_payroll_document_payload(
+        self,
+        tenant_id: UUID,
+        connection_id: UUID,
+        ref_key: str,
+    ) -> dict[str, object] | None:
+        parent = await self.session.scalar(
+            select(RawRecord)
+            .where(
+                RawRecord.tenant_id == tenant_id,
+                RawRecord.connection_id == connection_id,
+                RawRecord.source_entity == PAYROLL_ENTITY,
+                RawRecord.source_record_id == ref_key,
+                RawRecord.status != "superseded",
+            )
+            .order_by(RawRecord.received_at.desc(), RawRecord.id.desc())
+            .limit(1)
+        )
+        return dict(parent.payload) if parent is not None else None
+
     async def one_c_source_summaries(
         self,
         tenant_id: UUID,
@@ -242,7 +263,9 @@ class IntegrationRepository:
 
         definitions = (
             (REVENUE_ENTITY, "Месяц / вид операции", "Сумма"),
-            (SALES_ENTITY, "Месяц", "Стоимость"),
+            (SALES_ENTITY, "Месяц / поле Стоимость", "Стоимость"),
+            (SALES_ENTITY, "Месяц / поле До скидки", "СтоимостьБезСкидки"),
+            (SALES_ENTITY, "Месяц / поле НДС", "СуммаНДС"),
             (PAYROLL_ENTITY, "Месяц начисления / документы", "СуммаДокумента"),
             (PAYROLL_REGISTER_ENTITY, "Месяц начисления / движение", "Сумма"),
         )
@@ -471,6 +494,7 @@ class IntegrationRepository:
                 "AccumulationRegister_Выручка_RecordType": 4,
                 "AccumulationRegister_РасчетыСПерсоналом_RecordType": 4,
                 "Document_НачислениеЗарплаты": 5,
+                "Document_НачислениеЗарплаты_РасчетЗарплаты": 6,
             },
             value=RawRecord.source_entity,
             else_=10,
@@ -581,6 +605,7 @@ class IntegrationRepository:
             MONEY_ENTITY: CashFlowFact,
             EXPENSE_ENTITY: ExpenseFact,
             PAYROLL_ENTITY: PayrollFact,
+            PAYROLL_LINE_ENTITY: PayrollFact,
             PAYROLL_REGISTER_ENTITY: PayrollFact,
         }
         model = model_by_entity.get(source_entity)

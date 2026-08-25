@@ -88,7 +88,8 @@ const oneCEntityLabels:Record<string,string>={
   "AccumulationRegister_РабочееВремяСотрудников_RecordType":"Рабочее время",
   "AccumulationRegister_РасчетыСПерсоналом_RecordType":"Расчёты с персоналом",
   "Catalog_СтруктурныеЕдиницы":"Филиалы 1С",
-  "Document_НачислениеЗарплаты":"Начисление зарплаты"
+  "Document_НачислениеЗарплаты": "Начисление зарплаты",
+  "Document_НачислениеЗарплаты_РасчетЗарплаты": "Расчёт зарплаты по сотрудникам",
 };
 
 function OneCIntegration(){
