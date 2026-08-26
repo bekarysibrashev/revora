@@ -108,3 +108,4 @@
 @media(max-width:1200px){.ceo-kpi-grid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:800px){.date-filter-wrap{align-items:stretch;flex-direction:column}.ceo-hero{grid-template-columns:1fr}.ceo-kpi-grid{grid-template-columns:1fr 1fr}.call-filters.compact{grid-template-columns:1fr}.coming-roadmap{grid-template-columns:1fr}.marketing-chart .recharts-yAxis{display:none}}
 @media(max-width:520px){.ceo-kpi-grid{grid-template-columns:1fr}.ceo-hero-stats{grid-template-columns:1fr}.date-presets{width:100%}.date-presets button{flex:1}.ds-coming-soon{padding:30px 18px}}
+.official-reports-table{margin-top:18px}

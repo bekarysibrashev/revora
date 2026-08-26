@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AnalyticsMeta(BaseModel):
@@ -12,6 +12,8 @@ class AnalyticsMeta(BaseModel):
     date_to: date
     branch_id: UUID | None
     data_as_of: datetime | None
+    official_metric_codes: list[str] = Field(default_factory=list)
+    is_reconciled: bool = False
 
 
 class PnlResponse(BaseModel):
@@ -36,6 +38,7 @@ class CashFlowResponse(BaseModel):
     outflow: Decimal
     net_cash_flow: Decimal
     closing_balance: Decimal | None
+    cashflow_is_complete: bool = False
     meta: AnalyticsMeta
 
 
@@ -46,4 +49,5 @@ class FinanceSummaryResponse(BaseModel):
     net_profit: Decimal
     net_cash_flow: Decimal
     closing_balance: Decimal | None
+    cashflow_is_complete: bool = False
     meta: AnalyticsMeta

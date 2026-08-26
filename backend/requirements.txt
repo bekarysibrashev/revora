@@ -27,4 +27,5 @@ flower==2.0.1
 # Files and exports
 minio==7.2.20
 openpyxl==3.1.5
+xlrd==2.0.2
 reportlab==5.0.0

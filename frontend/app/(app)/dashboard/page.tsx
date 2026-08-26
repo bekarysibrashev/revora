@@ -6,8 +6,8 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { api } from "@/shared/api-client";
 import { AsOf, DataState, DateFilters, PageHeader, money, percent, queryString } from "@/shared/ui";
 
-type Dashboard = { finance:{revenue_accrual:string;revenue_payment:string;total_expenses:string;net_profit:string;net_cash_flow:string;closing_balance:string|null;meta:{data_as_of:string|null}};sales:{leads_total:number;leads_won:number;lead_conversion_rate:string;appointments_total:number;appointments_completed:number;appointments_cancelled:number;appointments_no_show:number;patients_total:number;patients_primary:number;patients_repeat:number;appointment_completion_rate:string;paid_revenue:string;meta:{data_as_of:string|null}};top_doctors:{doctor_id:string;full_name:string;specialty:string|null;appointments_completed:number;completion_rate:string;revenue_accrual:string}[];marketing:{total_spend:string;total_attributed_revenue:string;roas:string|null};new_contacts:{total:number;from_kcell:number;from_whatsapp:number;existing_patients_contacted:number;data_as_of:string|null} };
-type Pnl = { revenue_accrual:string;revenue_payment:string;total_expenses:string;payroll_accrual:string;gross_profit:string;ebitda:string;net_profit:string;expense_classification_rate:string;profit_is_complete:boolean;profit_label:string;meta:{data_as_of:string|null} };
+type Dashboard = { finance:{revenue_accrual:string;revenue_payment:string;total_expenses:string;net_profit:string;net_cash_flow:string;closing_balance:string|null;cashflow_is_complete:boolean;meta:{data_as_of:string|null;official_metric_codes:string[];is_reconciled:boolean}};sales:{leads_total:number;leads_won:number;lead_conversion_rate:string;appointments_total:number;appointments_completed:number;appointments_cancelled:number;appointments_no_show:number;patients_total:number;patients_primary:number;patients_repeat:number;appointment_completion_rate:string;paid_revenue:string;meta:{data_as_of:string|null}};top_doctors:{doctor_id:string;full_name:string;specialty:string|null;appointments_completed:number;completion_rate:string;revenue_accrual:string;revenue_payment:string}[];marketing:{total_spend:string;total_attributed_revenue:string;roas:string|null};new_contacts:{total:number;from_kcell:number;from_whatsapp:number;existing_patients_contacted:number;data_as_of:string|null} };
+type Pnl = { revenue_accrual:string;revenue_payment:string;total_expenses:string;payroll_accrual:string;gross_profit:string;ebitda:string;net_profit:string;expense_classification_rate:string;profit_is_complete:boolean;profit_label:string;meta:{data_as_of:string|null;official_metric_codes:string[];is_reconciled:boolean} };
 type Meta = { total_spend:string;currency:string|null;leads:number;conversations_started:number;cost_per_lead:string|null;data_as_of:string|null };
 type Insights = {items:{id:string;severity:string;title:string;description:string}[]};
 
@@ -47,30 +47,31 @@ export default function DashboardPage() {
         const margin=currentRevenue?Number(pnl.data.net_profit)/currentRevenue:null;
         const averageCheck=dashboard.data.sales.appointments_completed?currentRevenue/dashboard.data.sales.appointments_completed:null;
         const hasSales=Boolean(dashboard.data.sales.meta.data_as_of);
+        const official=new Set(pnl.data.meta.official_metric_codes||[]);
         const metaLeads=(meta.data?.leads||0)+dashboard.data.new_contacts.total;
         const cpl=metaLeads&&meta.data?Number(meta.data.total_spend)/metaLeads:null;
         const chartData=[
           {name:"Выручка",previous:previousRevenue,current:currentRevenue},
           {name:"Расходы",previous:Number(previousDashboard.data?.finance.total_expenses||0),current:Number(dashboard.data.finance.total_expenses||0)},
-          {name:pnl.data.profit_is_complete?"Прибыль":"Доступный результат",previous:Number(previousDashboard.data?.finance.net_profit||0),current:Number(dashboard.data.finance.net_profit||0)},
+          ...(pnl.data.profit_is_complete?[{name:"Прибыль",previous:Number(previousDashboard.data?.finance.net_profit||0),current:Number(dashboard.data.finance.net_profit||0)}]:[]),
         ];
         return <>
           <section className="ceo-hero">
             <div><p className="eyebrow">Управленческий срез</p><h2>{money(currentRevenue)}</h2><span>выручка за выбранный период</span></div>
-            <div className="ceo-hero-stats"><span>{pnl.data.profit_label}<strong>{money(pnl.data.net_profit)}</strong></span><span>Денежный поток<strong>{money(dashboard.data.finance.net_cash_flow)}</strong></span><span>Рост<strong>{growth===null?"—":percent(growth)}</strong></span></div>
+            <div className="ceo-hero-stats"><span>{pnl.data.profit_label}<strong>{pnl.data.profit_is_complete?money(pnl.data.net_profit):"Не подтверждено"}</strong></span><span>{dashboard.data.finance.cashflow_is_complete?"Денежный поток":"Поток по доступным данным"}<strong>{money(dashboard.data.finance.net_cash_flow)}</strong></span><span>Рост<strong>{growth===null?"—":percent(growth)}</strong></span></div>
           </section>
 
           <SectionTitle title="Финансы" subtitle="Фактические показатели из финансовых регистров 1С"/>
           <section className="ceo-kpi-grid">
-            <Kpi label="Выручка · начисление" value={money(currentRevenue)} source="1С" note={`Оплачено ${money(dashboard.data.finance.revenue_payment)}`}/>
-            <Kpi label="Выручка · оплата" value={money(dashboard.data.finance.revenue_payment)} source="1С"/>
+            <Kpi label="Выручка · начисление" value={money(currentRevenue)} source={official.has("revenue_accrual")?"Отчёт 1С":"OData 1С"} note={`Оплачено ${money(dashboard.data.finance.revenue_payment)}`}/>
+            <Kpi label="Выручка · оплата" value={money(dashboard.data.finance.revenue_payment)} source={official.has("revenue_payment")?"Отчёт 1С":"OData 1С"}/>
             <Kpi label="Предыдущий период" value={money(previousRevenue)} source="1С" note="Период той же длины"/>
             <Kpi label="Темп роста" value={growth===null?"—":percent(growth)} source="Расчёт" tone={growth!==null&&growth>=0?"good":"bad"}/>
-            <Kpi label="Валовая прибыль" value={money(pnl.data.gross_profit)} source="1С"/>
-            <Kpi label="Начислено зарплаты" value={money(pnl.data.payroll_accrual)} source="1С" note="Справочно, без повторного прибавления к расходам"/>
-            <Kpi label="EBITDA по доступным данным" value={money(pnl.data.ebitda)} source="1С"/>
-            <Kpi label={pnl.data.profit_label} value={money(pnl.data.net_profit)} source="1С" tone={Number(pnl.data.net_profit)>=0?"good":"bad"} note={pnl.data.profit_is_complete?undefined:`Классифицировано ${(Number(pnl.data.expense_classification_rate)*100).toFixed(1)}% расходов`}/>
-            <Kpi label="Маржинальность" value={margin===null?"—":percent(margin)} source="Расчёт"/>
+            <Kpi label="Валовая прибыль" source="Расчёт" missing={!pnl.data.profit_is_complete} value={money(pnl.data.gross_profit)}/>
+            <Kpi label="Начислено зарплаты" value={money(pnl.data.payroll_accrual)} source={official.has("payroll_accrual")?"Отчёт 1С":"OData 1С"} note="Справочно, без повторного прибавления к расходам"/>
+            <Kpi label="EBITDA" source="Расчёт" missing={!pnl.data.profit_is_complete} value={money(pnl.data.ebitda)}/>
+            <Kpi label={pnl.data.profit_label} source="Расчёт" missing={!pnl.data.profit_is_complete} value={money(pnl.data.net_profit)} tone={Number(pnl.data.net_profit)>=0?"good":"bad"}/>
+            <Kpi label="Маржинальность" value={margin===null?"—":percent(margin)} source="Расчёт" missing={!pnl.data.profit_is_complete}/>
             <Kpi label="Средний чек завершённого приёма" value={averageCheck===null?"—":money(averageCheck)} source="Расчёт 1С" missing={averageCheck===null}/>
             <Kpi label="Количество пациентов" value={String(dashboard.data.sales.patients_total)} source="1С" missing={!hasSales}/>
           </section>
@@ -107,7 +108,7 @@ export default function DashboardPage() {
             <Kpi label="Неявки" value={String(dashboard.data.sales.appointments_no_show)} source="1С" missing={!hasSales}/>
           </section>
 
-          <section className="panel"><div className="panel-head"><div><h2>Лучшие врачи</h2><p>Появятся автоматически после публикации справочника врачей и записей</p></div></div><div className="table-wrap"><table><thead><tr><th>Врач</th><th>Специальность</th><th>Завершено</th><th>Выполнение</th><th>Выручка</th></tr></thead><tbody>{dashboard.data.top_doctors.map(item=><tr key={item.doctor_id}><td><strong>{item.full_name}</strong></td><td>{item.specialty||"—"}</td><td>{item.appointments_completed}</td><td>{percent(item.completion_rate)}</td><td>{money(item.revenue_accrual)}</td></tr>)}{!dashboard.data.top_doctors.length&&<tr><td colSpan={5} className="empty">Не хватает данных из 1С: врачи, записи и связь выручки с врачом</td></tr>}</tbody></table></div></section>
+          <section className="panel"><div className="panel-head"><div><h2>Лучшие врачи</h2><p>Оплаченная выручка из официального отчёта 1С, нагрузка — из OData</p></div></div><div className="table-wrap"><table><thead><tr><th>Врач</th><th>Специальность</th><th>Завершено</th><th>Выполнение</th><th>Оплачено</th></tr></thead><tbody>{dashboard.data.top_doctors.map(item=><tr key={item.doctor_id}><td><strong>{item.full_name}</strong></td><td>{item.specialty||"—"}</td><td>{item.appointments_completed}</td><td>{percent(item.completion_rate)}</td><td>{money(item.revenue_payment)}</td></tr>)}{!dashboard.data.top_doctors.length&&<tr><td colSpan={5} className="empty">Не хватает данных из 1С: врачи, записи и связь выручки с врачом</td></tr>}</tbody></table></div></section>
           {!!insights.data?.items.length&&<section className="insights"><h2>Что требует внимания</h2>{insights.data.items.slice(0,3).map(item=><article key={item.id} className={`insight ${item.severity}`}><span>!</span><div><strong>{item.title}</strong><p>{item.description}</p></div></article>)}</section>}
           <AsOf value={dashboard.data.finance.meta.data_as_of}/>
         </>;

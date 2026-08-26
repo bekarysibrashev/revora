@@ -84,6 +84,16 @@ def test_finance_routes_are_registered_and_protected() -> None:
     assert response.status_code == 401
 
 
+def test_official_one_c_report_routes_are_registered_and_protected() -> None:
+    app = create_app(Settings(_env_file=None, app_env="test"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/reports/official-1c")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
+
+
 def test_domain_analytics_routes_are_in_openapi() -> None:
     app = create_app(Settings(_env_file=None, app_env="test"))
 
@@ -116,6 +126,7 @@ def test_domain_analytics_routes_are_in_openapi() -> None:
     assert "/api/v1/whatsapp/conversations" in paths
     assert "/api/v1/whatsapp/knowledge/import" in paths
     assert "/api/v1/webhooks/whatsapp" in paths
+    assert "/api/v1/reports/official-1c" in paths
 
 
 def test_cyrillic_manual_upload_metadata_can_be_header_encoded() -> None:

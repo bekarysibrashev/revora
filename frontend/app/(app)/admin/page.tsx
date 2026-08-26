@@ -14,6 +14,8 @@ type OneCNormalize = { connection_id:string; reset:number; processed:number; nor
 type OneCMetadataProperty = { name:string; type:string; nullable:boolean|null };
 type OneCMetadataEntity = { name:string; entity_type:string; properties:OneCMetadataProperty[]; navigation_properties:{name:string;relationship:string|null;target_type:string|null}[] };
 type OneCMetadata = { schema_version:string; entities:OneCMetadataEntity[] };
+type OfficialReport = { id:string;report_type:string;report_label:string;period_from:string;period_to:string;source_filename:string;metrics_count:number;summary:Record<string,string>;imported_at:string;duplicate:boolean };
+const officialReportLabels:Record<string,string>={cash_receipts:"Фактически поступившие деньги",service_revenue:"Выручка по оказанным услугам",payroll:"Начисление зарплаты",doctor_revenue:"Выручка по врачам",purchases:"Поступления и закупки",patients:"Пациенты, посетившие клинику",appointments:"Статистика предварительной записи"};
 const example = JSON.stringify({
   external_id:{source_fields:["ID","Код пациента"],required:true,transform:"string"},
   full_name:{source_fields:["ФИО","Пациент"],required:true,transform:"string"},
@@ -58,6 +60,7 @@ function DataImport() {
     }
   }
   return <div className="admin-stack">
+    <OfficialReports/>
     <OneCIntegration/>
     <section className="panel"><Step n="1" title="Источник" text="Создайте подключение для таблиц этой клиники."/>
       {connections.data?.items.length?<label>Подключение<select value={connection} onChange={e=>{setConnection(e.target.value);setProfile("")}}><option value="">Выберите источник</option>{connections.data.items.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>:null}
@@ -76,6 +79,23 @@ function DataImport() {
       {result&&<div className="import-result"><strong>Импорт завершён</strong><span>Прочитано: {result.records_read}</span><span>Загружено: {result.records_normalized}</span><span>Ошибок: {result.records_quarantined}</span><span>Дубликатов: {result.records_duplicate}</span></div>}{error&&<div className="error-box">{error}</div>}
     </section>
   </div>;
+}
+
+function previousMonth(){const now=new Date();const first=new Date(now.getFullYear(),now.getMonth()-1,1);const last=new Date(now.getFullYear(),now.getMonth(),0);const local=(value:Date)=>`${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,"0")}-${String(value.getDate()).padStart(2,"0")}`;return [local(first),local(last)] as const}
+function OfficialReports(){
+  const qc=useQueryClient(),defaults=previousMonth();
+  const[from,setFrom]=useState(defaults[0]),[to,setTo]=useState(defaults[1]),[files,setFiles]=useState<File[]>([]),[uploading,setUploading]=useState(false),[results,setResults]=useState<OfficialReport[]>([]),[error,setError]=useState("");
+  const reports=useQuery({queryKey:["official-1c-reports"],queryFn:()=>api<{items:OfficialReport[];total:number;required_report_types:string[]}>("/reports/official-1c")});
+  const required=reports.data?.required_report_types||Object.keys(officialReportLabels);const selected=reports.data?.items.filter(x=>x.period_from===from&&x.period_to===to)||[];const present=new Set(selected.map(x=>x.report_type));const missing=required.filter(x=>!present.has(x));
+  async function upload(){if(!files.length)return;setUploading(true);setError("");setResults([]);const done:OfficialReport[]=[];try{for(const file of files){const p=new URLSearchParams({filename:file.name,period_from:from,period_to:to});done.push(await api<OfficialReport>(`/reports/official-1c?${p}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file}));setResults([...done])}setFiles([])}catch(e){setError(`${e instanceof Error?e.message:"Не удалось загрузить отчёты"}. Успешно применено до ошибки: ${done.length}.`)}finally{await qc.invalidateQueries({queryKey:["official-1c-reports"]});await Promise.all([qc.invalidateQueries({queryKey:["dashboard"]}),qc.invalidateQueries({queryKey:["pnl"]}),qc.invalidateQueries({queryKey:["cash"]}),qc.invalidateQueries({queryKey:["sales"]}),qc.invalidateQueries({queryKey:["doctors"]})]);setUploading(false)}}
+  return <section className="panel"><Step n="✓" title="Контрольные отчёты 1С" text="Официальные итоги отчётов имеют приоритет над восстановленными расчётами OData. Детальные строки пациентов не сохраняются."/>
+    <div className="form-grid"><label>Период с<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>Период по<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label></div>
+    <div className={missing.length?"error-box":"success-box"}><strong>Эталонные отчёты за выбранный период: {selected.length}/{required.length}</strong>{missing.length?<><br/>Не загружены: {missing.map(x=>officialReportLabels[x]||x).join(" · ")}</>:<><br/>Все согласованные контрольные отчёты загружены.</>}</div>
+    <label className="file-drop"><input type="file" accept=".xls,.xlsx" multiple onChange={e=>setFiles(Array.from(e.target.files||[]))} disabled={uploading}/><strong>{files.length?`Выбрано файлов: ${files.length}`:"Выберите официальные отчёты 1С"}</strong><span>Можно выбрать все 7 файлов одновременно · XLS/XLSX до 50 МБ каждый</span></label>
+    <button className="primary small" onClick={upload} disabled={!files.length||!from||!to||uploading}>{uploading?"Сверяем контрольные суммы…":"Загрузить и применить отчёты"}</button>
+    {results.length>0&&<div className="success-box"><strong>Применено отчётов: {results.length}</strong><br/>{results.map(x=>x.report_label).join(" · ")}</div>}{error&&<div className="error-box">{error}</div>}
+    {!!reports.data?.items.length&&<div className="table-wrap official-reports-table"><table><thead><tr><th>Отчёт 1С</th><th>Период</th><th>Файл</th><th>Контрольных показателей</th><th>Загружен</th></tr></thead><tbody>{reports.data.items.map(x=><tr key={x.id}><td><strong>{x.report_label}</strong></td><td>{x.period_from} — {x.period_to}</td><td>{x.source_filename}</td><td>{x.metrics_count}</td><td>{new Date(x.imported_at).toLocaleString("ru-RU")}</td></tr>)}</tbody></table></div>}
+  </section>
 }
 
 const oneCEntityLabels:Record<string,string>={

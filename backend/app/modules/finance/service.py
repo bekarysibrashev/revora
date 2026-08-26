@@ -59,6 +59,8 @@ class FinanceService:
                 date_to=date_to,
                 branch_id=branch_id,
                 data_as_of=totals.data_as_of,
+                official_metric_codes=sorted(totals.official_metrics),
+                is_reconciled=bool(totals.official_metrics),
             ),
         )
 
@@ -74,11 +76,14 @@ class FinanceService:
             outflow=totals.outflow,
             net_cash_flow=totals.inflow - totals.outflow,
             closing_balance=totals.closing_balance,
+            cashflow_is_complete=totals.cashflow_is_complete,
             meta=AnalyticsMeta(
                 date_from=date_from,
                 date_to=date_to,
                 branch_id=branch_id,
                 data_as_of=totals.data_as_of,
+                official_metric_codes=sorted(totals.official_metrics),
+                is_reconciled=bool(totals.official_metrics),
             ),
         )
 
@@ -95,11 +100,16 @@ class FinanceService:
             net_profit=pnl.net_profit,
             net_cash_flow=cashflow.net_cash_flow,
             closing_balance=cashflow.closing_balance,
+            cashflow_is_complete=cashflow.cashflow_is_complete,
             meta=AnalyticsMeta(
                 date_from=date_from,
                 date_to=date_to,
                 branch_id=branch_id,
                 data_as_of=max(timestamps) if timestamps else None,
+                official_metric_codes=sorted(
+                    set(pnl.meta.official_metric_codes) | set(cashflow.meta.official_metric_codes)
+                ),
+                is_reconciled=pnl.meta.is_reconciled or cashflow.meta.is_reconciled,
             ),
         )
 
