@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db_session
 from app.modules.dashboard.service import DashboardService
+from app.modules.contacts.repository import ContactRepository
+from app.modules.contacts.service import ContactService
 from app.modules.ai.insights.insight_repository import InsightRepository
 from app.modules.ai.insights.service import InsightService
 from app.modules.doctors.repository import DoctorsRepository
@@ -25,6 +27,7 @@ def get_dashboard_service(session: SessionDependency) -> DashboardService:
         sales=SalesService(SalesRepository(session)),
         doctors=DoctorsService(DoctorsRepository(session)),
         marketing=MarketingService(MarketingRepository(session)),
+        contacts=ContactService(ContactRepository(session)),
     )
 
 

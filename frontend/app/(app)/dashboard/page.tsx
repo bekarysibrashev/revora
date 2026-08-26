@@ -6,10 +6,9 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { api } from "@/shared/api-client";
 import { AsOf, DataState, DateFilters, PageHeader, money, percent, queryString } from "@/shared/ui";
 
-type Dashboard = { finance:{revenue_accrual:string;revenue_payment:string;total_expenses:string;net_profit:string;net_cash_flow:string;closing_balance:string|null;meta:{data_as_of:string|null}};sales:{leads_total:number;leads_won:number;lead_conversion_rate:string;appointments_total:number;appointments_completed:number;appointments_cancelled:number;appointments_no_show:number;patients_total:number;patients_primary:number;patients_repeat:number;appointment_completion_rate:string;paid_revenue:string;meta:{data_as_of:string|null}};top_doctors:{doctor_id:string;full_name:string;specialty:string|null;appointments_completed:number;completion_rate:string;revenue_accrual:string}[];marketing:{total_spend:string;total_attributed_revenue:string;roas:string|null} };
+type Dashboard = { finance:{revenue_accrual:string;revenue_payment:string;total_expenses:string;net_profit:string;net_cash_flow:string;closing_balance:string|null;meta:{data_as_of:string|null}};sales:{leads_total:number;leads_won:number;lead_conversion_rate:string;appointments_total:number;appointments_completed:number;appointments_cancelled:number;appointments_no_show:number;patients_total:number;patients_primary:number;patients_repeat:number;appointment_completion_rate:string;paid_revenue:string;meta:{data_as_of:string|null}};top_doctors:{doctor_id:string;full_name:string;specialty:string|null;appointments_completed:number;completion_rate:string;revenue_accrual:string}[];marketing:{total_spend:string;total_attributed_revenue:string;roas:string|null};new_contacts:{total:number;from_kcell:number;from_whatsapp:number;existing_patients_contacted:number;data_as_of:string|null} };
 type Pnl = { revenue_accrual:string;revenue_payment:string;total_expenses:string;payroll_accrual:string;gross_profit:string;ebitda:string;net_profit:string;expense_classification_rate:string;profit_is_complete:boolean;profit_label:string;meta:{data_as_of:string|null} };
 type Meta = { total_spend:string;currency:string|null;leads:number;conversations_started:number;cost_per_lead:string|null;data_as_of:string|null };
-type Contacts = { summary:{unique_contacts:number;first_only:number;repeat_contacts:number;total_calls:number;qualified_calls:number} };
 type Insights = {items:{id:string;severity:string;title:string;description:string}[]};
 
 function previousQuery(current:string) {
@@ -36,7 +35,6 @@ export default function DashboardPage() {
   const previousDashboard=useQuery({queryKey:["dashboard-previous",previous],queryFn:()=>api<Dashboard>(`/dashboard/ceo?${previous}`)});
   const pnl=useQuery({queryKey:["dashboard-pnl",query],queryFn:()=>api<Pnl>(`/finance/pnl?${query}`)});
   const meta=useQuery({queryKey:["dashboard-meta",query],queryFn:()=>api<Meta>(`/marketing/meta/overview?${query}`),retry:false});
-  const contacts=useQuery({queryKey:["dashboard-call-contacts",query],queryFn:()=>api<Contacts>(`/call-quality/contacts?${query}&page=1&page_size=1`),retry:false});
   const insights=useQuery({queryKey:["insights",search.get("branch_id")],queryFn:()=>api<Insights>(`/dashboard/insights${search.get("branch_id")?`?branch_id=${search.get("branch_id")}`:""}`)});
 
   return <>
@@ -49,7 +47,7 @@ export default function DashboardPage() {
         const margin=currentRevenue?Number(pnl.data.net_profit)/currentRevenue:null;
         const averageCheck=dashboard.data.sales.appointments_completed?currentRevenue/dashboard.data.sales.appointments_completed:null;
         const hasSales=Boolean(dashboard.data.sales.meta.data_as_of);
-        const metaLeads=(meta.data?.leads||0)+(contacts.data?.summary.unique_contacts||0);
+        const metaLeads=(meta.data?.leads||0)+dashboard.data.new_contacts.total;
         const cpl=metaLeads&&meta.data?Number(meta.data.total_spend)/metaLeads:null;
         const chartData=[
           {name:"Выручка",previous:previousRevenue,current:currentRevenue},
@@ -84,14 +82,15 @@ export default function DashboardPage() {
             <Kpi label="Пациенты" value={String(dashboard.data.sales.patients_total)} source="1С" missing={!hasSales}/>
             <Kpi label="Первичные пациенты" value={String(dashboard.data.sales.patients_primary)} source="1С" missing={!hasSales}/>
             <Kpi label="Повторные пациенты" value={String(dashboard.data.sales.patients_repeat)} source="1С" missing={!hasSales}/>
+            <Kpi label="Новые номера" value={String(dashboard.data.new_contacts.total)} source="Kcell + WhatsApp + сверка 1С" note={`${dashboard.data.new_contacts.from_kcell} звонки · ${dashboard.data.new_contacts.from_whatsapp} WhatsApp`}/>
             <Kpi label="Обращение → лечение" source="1С" missing/>
             <Kpi label="Консультация → план" source="1С" missing/>
             <Kpi label="План → оплата" source="1С" missing/>
           </section>
 
-          <SectionTitle title="Маркетинг" subtitle="Заявки Meta и уникальные номера из Kcell"/>
+          <SectionTitle title="Маркетинг" subtitle="Заявки Meta и новые номера из Kcell и WhatsApp"/>
           <section className="ceo-kpi-grid">
-            <Kpi label="Лиды и звонящие" value={String(metaLeads)} source="Meta + Kcell" note={`${meta.data?.leads||0} Meta · ${contacts.data?.summary.unique_contacts||0} телефония`}/>
+            <Kpi label="Лиды и новые номера" value={String(metaLeads)} source="Meta + Kcell + WhatsApp" note={`${meta.data?.leads||0} Meta · ${dashboard.data.new_contacts.total} впервые обратились`}/>
             <Kpi label="CPL" value={cpl===null?"—":new Intl.NumberFormat("ru-RU",{style:"currency",currency:meta.data?.currency||"USD",maximumFractionDigits:2}).format(cpl)} source="Расчёт"/>
             <Kpi label="CAC" source="1С + Meta" missing/>
             <Kpi label="ROAS" value={dashboard.data.marketing.roas?`${Number(dashboard.data.marketing.roas).toFixed(2)}×`:undefined} source="Атрибуция" missing={!dashboard.data.marketing.roas}/>

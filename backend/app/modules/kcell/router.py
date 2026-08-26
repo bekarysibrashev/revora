@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
 from app.core.errors import AppError
-from app.core.security import phone_hash
+from app.core.security import mask_phone, phone_hash
+from app.modules.contacts.repository import ContactRepository
+from app.modules.contacts.service import ContactRegistry
 from app.modules.ai.call_quality.defaults import ensure_default_rule_set
 from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityRuleSet
 from app.modules.kcell.models import KcellWebhookReceipt
@@ -27,11 +29,6 @@ def _parse_start(value: str) -> datetime:
         return datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
     except ValueError as exc:
         raise AppError("INVALID_KCELL_PAYLOAD", "Invalid Kcell call start time", 400) from exc
-
-
-def _mask_phone(value: str) -> str:
-    digits = "".join(character for character in value if character.isdigit())
-    return f"***{digits[-4:]}" if len(digits) >= 4 else "***"
 
 
 @router.post("")
@@ -80,7 +77,16 @@ async def receive_kcell_callback(
     await session.execute(text("SELECT set_config('app.tenant_id', :tenant_id, true)"), {"tenant_id": str(tenant.id)})
     call = await session.scalar(select(Call).where(Call.tenant_id == tenant.id, Call.external_id == str(values["callid"])))
     if call is None:
-        call = Call(tenant_id=tenant.id, external_id=str(values["callid"]), phone_hash=phone_hash(str(values["phone"])), phone_masked=_mask_phone(str(values["phone"])), direction=str(values["type"]), started_at=_parse_start(str(values["start"])), duration_seconds=int(values["duration"]), outcome=str(values["status"]), external_user=str(values["user"]), recording_url=str(values.get("link") or "") or None)
+        started_at = _parse_start(str(values["start"]))
+        direction = str(values["type"])
+        if direction.casefold() in {"in", "incoming", "inbound", "входящий"}:
+            await ContactRegistry(ContactRepository(session)).register_inbound(
+                tenant_id=tenant.id,
+                phone=str(values["phone"]),
+                source="kcell",
+                occurred_at=started_at,
+            )
+        call = Call(tenant_id=tenant.id, external_id=str(values["callid"]), phone_hash=phone_hash(str(values["phone"])), phone_masked=mask_phone(str(values["phone"])), direction=direction, started_at=started_at, duration_seconds=int(values["duration"]), outcome=str(values["status"]), external_user=str(values["user"]), recording_url=str(values.get("link") or "") or None)
         session.add(call)
         await session.flush()
         rules = await ensure_default_rule_set(session, tenant.id)
@@ -103,7 +109,7 @@ async def receive_kcell_callback(
     else:
         call.duration_seconds = int(values["duration"])
         call.outcome = str(values["status"])
-        call.phone_masked = _mask_phone(str(values["phone"]))
+        call.phone_masked = mask_phone(str(values["phone"]))
         call.recording_url = str(values.get("link") or "") or call.recording_url
         analysis = await session.scalar(
             select(CallQualityAnalysis).where(

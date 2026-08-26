@@ -73,5 +73,51 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def phone_hash(phone_e164: str) -> str:
-    return hashlib.sha256(phone_e164.encode("utf-8")).hexdigest()
+def normalize_phone_e164(value: str) -> str:
+    """Return one stable E.164-like representation for cross-source matching.
+
+    1C, Kcell and WhatsApp format Kazakhstan numbers differently.  The shared
+    representation mirrors the local 1C connector: 10 local digits get country
+    code 7 and an 11 digit number beginning with 8 is converted to 7.
+    """
+
+    digits = "".join(character for character in str(value) if character.isdigit())
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    elif len(digits) == 10:
+        digits = "7" + digits
+    if not 10 <= len(digits) <= 15:
+        raise ValueError("phone must contain between 10 and 15 digits")
+    return f"+{digits}"
+
+
+def phone_hash(value: str) -> str:
+    return hashlib.sha256(normalize_phone_e164(value).encode("utf-8")).hexdigest()
+
+
+def phone_hash_candidates(value: str) -> set[str]:
+    """Hashes used by current and legacy integrations for a single phone.
+
+    Legacy Kcell/WhatsApp rows hashed the provider string verbatim.  Keeping
+    those candidates lets a newly received contact match history created before
+    canonical phone normalization was introduced.
+    """
+
+    raw = str(value).strip()
+    digits = "".join(character for character in raw if character.isdigit())
+    normalized = normalize_phone_e164(raw)
+    variants = {raw, digits, normalized}
+    normalized_digits = normalized[1:]
+    variants.add(normalized_digits)
+    if normalized_digits.startswith("7") and len(normalized_digits) == 11:
+        variants.add("8" + normalized_digits[1:])
+    return {
+        hashlib.sha256(item.encode("utf-8")).hexdigest()
+        for item in variants
+        if item
+    }
+
+
+def mask_phone(value: str) -> str:
+    digits = "".join(character for character in str(value) if character.isdigit())
+    return f"***{digits[-4:]}" if len(digits) >= 4 else "***"

@@ -3,6 +3,7 @@ from uuid import UUID
 
 from app.core.errors import AppError
 from app.modules.auth.models import User, UserRole
+from app.modules.contacts.service import ContactService
 from app.modules.dashboard.schemas import DashboardCeoResponse
 from app.modules.doctors.service import DoctorsService
 from app.modules.finance.service import FinanceService
@@ -17,11 +18,13 @@ class DashboardService:
         sales: SalesService,
         doctors: DoctorsService,
         marketing: MarketingService,
+        contacts: ContactService,
     ) -> None:
         self.finance = finance
         self.sales = sales
         self.doctors = doctors
         self.marketing = marketing
+        self.contacts = contacts
 
     async def ceo(
         self, user: User, date_from: date, date_to: date, branch_id: UUID | None
@@ -32,6 +35,7 @@ class DashboardService:
         sales = await self.sales.overview(user, date_from, date_to, branch_id)
         doctors = await self.doctors.overview(user, date_from, date_to, branch_id)
         marketing = await self.marketing.overview(user, date_from, date_to, branch_id)
+        new_contacts = (await self.contacts.new_contacts(user, date_from, date_to, limit=1)).summary
         timestamps = [
             item
             for item in (
@@ -47,6 +51,7 @@ class DashboardService:
             sales=sales,
             top_doctors=doctors.items[:5],
             marketing=marketing,
+            new_contacts=new_contacts,
             date_from=date_from,
             date_to=date_to,
             branch_id=branch_id,

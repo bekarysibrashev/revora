@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.modules.doctors.schemas import DoctorPerformance
+from app.modules.contacts.schemas import NewContactSummary
 from app.modules.finance.schemas import FinanceSummaryResponse
 from app.modules.marketing.schemas import MarketingOverviewResponse
 from app.modules.sales.schemas import SalesOverviewResponse
@@ -14,6 +15,7 @@ class DashboardCeoResponse(BaseModel):
     sales: SalesOverviewResponse
     top_doctors: list[DoctorPerformance]
     marketing: MarketingOverviewResponse
+    new_contacts: NewContactSummary
     date_from: date
     date_to: date
     branch_id: UUID | None

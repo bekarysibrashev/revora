@@ -11,6 +11,7 @@ from app.modules.ai.models import (
     AILLMCallAudit,
 )
 from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityRuleSet
+from app.modules.contacts.models import ContactIdentity
 from app.modules.doctors.models import Doctor, DoctorCompensationRule, DoctorRating
 from app.modules.finance.models import (
     AccountBalance, BankStatementUpload, CashFlowFact, ExpenseCategory, ExpenseFact,

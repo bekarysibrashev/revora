@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.modules.contacts.repository import ContactRepository
+from app.modules.contacts.service import ContactRegistry
 from app.modules.auth.models import User, UserRole
 from app.modules.whatsapp.ai import (
     ChatCompletionBot,
@@ -310,6 +312,13 @@ class WhatsAppService:
                 provider="idempotent",
                 cost_kzt=Decimal("0"),
             )
+        if not simulated:
+            await ContactRegistry(ContactRepository(self.session)).register_inbound(
+                tenant_id=tenant_id,
+                phone=contact_id,
+                source="whatsapp",
+                occurred_at=provider_timestamp or datetime.now(UTC),
+            )
         conversation = await self._get_or_create_conversation(
             tenant_id, channel.id, contact_id
         )
@@ -394,6 +403,13 @@ class WhatsAppService:
         )
         if duplicate:
             return
+        if direction == "in":
+            await ContactRegistry(ContactRepository(self.session)).register_inbound(
+                tenant_id=tenant_id,
+                phone=contact_id,
+                source="whatsapp",
+                occurred_at=provider_timestamp or datetime.now(UTC),
+            )
         conversation = await self._get_or_create_conversation(
             tenant_id, channel.id, contact_id
         )
