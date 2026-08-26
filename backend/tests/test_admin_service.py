@@ -14,6 +14,7 @@ class FakeAdminRepository:
     def __init__(self, branches: list[Branch]) -> None:
         self.branches = branches
         self.requested_tenant_id = None
+        self.owner_branch_assignments = []
 
     async def list_branches(self, tenant_id):
         self.requested_tenant_id = tenant_id
@@ -53,6 +54,9 @@ class FakeAdminRepository:
         )
         self.branches.append(branch)
         return branch
+
+    async def assign_branch_to_owners(self, tenant_id, branch_id):
+        self.owner_branch_assignments.append((tenant_id, branch_id))
 
     async def save_branch(self, branch):
         branch.updated_at = datetime.now(UTC)
@@ -109,7 +113,8 @@ async def test_branch_list_rejects_roles_without_admin_access(role: UserRole) ->
 @pytest.mark.asyncio
 async def test_owner_can_create_branch() -> None:
     user = make_user(UserRole.OWNER)
-    service = AdminService(FakeAdminRepository([]))
+    repository = FakeAdminRepository([])
+    service = AdminService(repository)
 
     response = await service.create_branch(
         user,
@@ -119,6 +124,7 @@ async def test_owner_can_create_branch() -> None:
     assert response.name == "SAN Abaya"
     assert response.code == "abaya"
     assert response.is_active is True
+    assert repository.owner_branch_assignments == [(user.tenant_id, response.id)]
 
 
 @pytest.mark.asyncio

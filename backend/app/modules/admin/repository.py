@@ -40,6 +40,25 @@ class AdminRepository:
         await self.session.flush()
         return branch
 
+    async def assign_branch_to_owners(self, tenant_id: UUID, branch_id: UUID) -> None:
+        """Give every tenant owner access to a newly created branch."""
+
+        owner_ids = list(
+            (
+                await self.session.scalars(
+                    select(User.id).where(
+                        User.tenant_id == tenant_id,
+                        User.role == UserRole.OWNER,
+                        User.is_active.is_(True),
+                    )
+                )
+            ).all()
+        )
+        self.session.add_all(
+            UserBranch(user_id=owner_id, branch_id=branch_id) for owner_id in owner_ids
+        )
+        await self.session.flush()
+
     async def save_branch(self, branch: Branch) -> Branch:
         await self.session.flush()
         return branch

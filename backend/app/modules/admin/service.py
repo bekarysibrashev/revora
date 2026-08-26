@@ -43,6 +43,7 @@ class AdminService:
             code=payload.code,
             address=payload.address,
         )
+        await self.repository.assign_branch_to_owners(user.tenant_id, branch.id)
         return BranchResponse.model_validate(branch)
 
     async def update_branch(
