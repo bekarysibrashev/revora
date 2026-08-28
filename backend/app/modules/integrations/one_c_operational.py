@@ -111,11 +111,6 @@ def normalize_one_c_operational_record(
     if source_entity in {APPOINTMENT_ENTITY, APPOINTMENT_SERVICE_ENTITY}:
         starts_at = _datetime(payload.get("Date"), "Date", issues)
         patient_id = _guid(payload.get("Контрагент_Key"))
-        if not patient_id:
-            # 1C stores schedule blocks and reserves in the same document set.
-            # They are not patient appointments and must not pollute quality
-            # checks or the appointment funnel.
-            return None
         if not branch_code:
             issues.append(_missing("branch_code", "A single/default Revora branch is required for appointments"))
         return OneCOperationalMapping("appointment", {
@@ -127,10 +122,13 @@ def normalize_one_c_operational_record(
             "starts_at": starts_at,
             "status": _appointment_status(
                 payload.get("Статус"),
-                payload.get("СсылкаНаПрием_Key"),
+                payload.get("_ResolvedCancellationReason"),
                 bool(payload.get("DeletionMark")),
             ),
             "is_primary": _is_primary_patient_status(payload.get("СтатусПациента")),
+            # The official 1C appointment report counts completed receptions by
+            # the linked reception document, independently of event status.
+            "has_reception": _guid(payload.get("СсылкаНаПрием_Key")) is not None,
         }, issues)
 
     if source_entity == TREATMENT_PLAN_ENTITY:
@@ -206,20 +204,18 @@ def _lead_status(value: object) -> str:
     return "new"
 
 
-def _appointment_status(value: object, reception_key: object, deleted: bool = False) -> str:
+def _appointment_status(value: object, cancellation_reason: object, deleted: bool = False) -> str:
     if deleted:
         return "deleted"
-    text = (_text(value) or "").casefold().replace("ё", "е")
+    text = " ".join(
+        filter(None, (_text(value), _text(cancellation_reason)))
+    ).casefold().replace("ё", "е")
     # This check must precede the generic "состоял" marker. Otherwise the
     # literal 1C status "Прием не состоялся" is incorrectly counted as done.
     if any(marker in text for marker in ("не состоял", "не приш", "неяв", "no_show")):
         return "no_show"
     if any(marker in text for marker in ("отмен", "аннулир")):
         return "cancelled"
-    if _guid(reception_key):
-        return "completed"
-    if any(marker in text for marker in ("окончен", "заверш", "выполн", "состоял", "пришел")):
-        return "completed"
     return "scheduled"
 
 

@@ -126,8 +126,11 @@ class CanonicalWriter:
         )
 
     async def _write_appointment(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
-        patient_id = await self._ensure_patient_id(
-            tenant_id, self._string(data, "patient_external_id")
+        patient_external_id = self._optional_string(data, "patient_external_id")
+        patient_id = (
+            await self._ensure_patient_id(tenant_id, patient_external_id)
+            if patient_external_id
+            else None
         )
         doctor_id = await self._optional_external_id(
             Doctor, tenant_id, self._optional_string(data, "doctor_external_id")
@@ -147,6 +150,7 @@ class CanonicalWriter:
             "starts_at": self._datetime(data, "starts_at"),
             "status": self._string(data, "status"),
             "is_primary": bool(data.get("is_primary", False)),
+            "has_reception": bool(data.get("has_reception", False)),
         }
         return await self._upsert(
             Appointment,
@@ -160,13 +164,16 @@ class CanonicalWriter:
                 "starts_at",
                 "status",
                 "is_primary",
+                "has_reception",
             ],
         )
 
     async def _write_revenue_fact(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
         recognition_type = self._string(data, "recognition_type").lower()
-        if recognition_type not in {"accrual", "payment"}:
-            raise CanonicalWriteError("recognition_type must be 'accrual' or 'payment'")
+        if recognition_type not in {"accrual", "payment", "doctor_payment"}:
+            raise CanonicalWriteError(
+                "recognition_type must be 'accrual', 'payment' or 'doctor_payment'"
+            )
         patient_external_id = self._optional_string(data, "patient_external_id")
         doctor_external_id = self._optional_string(data, "doctor_external_id")
         patient_id = (
@@ -234,6 +241,7 @@ class CanonicalWriter:
             "external_id": self._string(data, "external_id"),
             "occurred_on": self._date(data, "occurred_on"),
             "amount": self._decimal(data, "amount"),
+            "paid_amount": self._decimal(data, "paid_amount") if data.get("paid_amount") is not None else Decimal("0"),
             "currency": self._optional_string(data, "currency") or "KZT",
             "counterparty": self._optional_string(data, "counterparty"),
             "description": self._optional_string(data, "description"),
@@ -247,6 +255,7 @@ class CanonicalWriter:
                 "category_id",
                 "occurred_on",
                 "amount",
+                "paid_amount",
                 "currency",
                 "counterparty",
                 "description",
@@ -265,13 +274,14 @@ class CanonicalWriter:
             "external_id": self._string(data, "external_id"),
             "occurred_on": self._date(data, "occurred_on"),
             "amount": self._decimal(data, "amount"),
+            "paid_amount": self._decimal(data, "paid_amount") if data.get("paid_amount") is not None else Decimal("0"),
             "currency": self._optional_string(data, "currency") or "KZT",
         }
         return await self._upsert(
             PayrollFact,
             values,
             ["tenant_id", "external_id"],
-            ["branch_id", "employee_id", "occurred_on", "amount", "currency"],
+            ["branch_id", "employee_id", "occurred_on", "amount", "paid_amount", "currency"],
         )
 
     async def _write_cash_flow_fact(self, tenant_id: UUID, data: dict[str, object]) -> UUID:

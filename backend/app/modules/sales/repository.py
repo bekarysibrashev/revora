@@ -70,19 +70,19 @@ class SalesRepository:
 
         appointment_statement = select(
             func.count(Appointment.id),
-            func.sum(case((Appointment.status == "completed", 1), else_=0)),
+            func.sum(case((Appointment.has_reception.is_(True), 1), else_=0)),
             func.sum(case((Appointment.status == "cancelled", 1), else_=0)),
             func.sum(case((Appointment.status == "no_show", 1), else_=0)),
             func.count(
                 func.distinct(
-                    case((Appointment.status == "completed", Appointment.patient_id))
+                    case((Appointment.has_reception.is_(True), Appointment.patient_id))
                 )
             ),
             func.count(
                 func.distinct(
                     case(
                         (
-                            (Appointment.status == "completed")
+                            (Appointment.has_reception.is_(True))
                             & (Appointment.is_primary.is_(True)),
                             Appointment.patient_id,
                         )

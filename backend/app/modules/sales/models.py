@@ -63,13 +63,14 @@ class Appointment(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     __table_args__ = (UniqueConstraint("tenant_id", "external_id"),)
     tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     branch_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("branches.id"), index=True)
-    patient_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("patients.id"), index=True)
+    patient_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("patients.id"), index=True)
     doctor_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("doctors.id"), index=True)
     direction_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("service_directions.id"))
     external_id: Mapped[str] = mapped_column(String(150))
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(50), index=True)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    has_reception: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
 
 
 class TreatmentPlan(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):

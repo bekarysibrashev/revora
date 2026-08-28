@@ -70,7 +70,7 @@ def test_lead_mapping_normalizes_lost_status_and_utm_source() -> None:
     assert result.issues == []
 
 
-def test_appointment_with_reception_is_completed() -> None:
+def test_appointment_with_reception_tracks_report_completion_separately() -> None:
     result = normalize_one_c_operational_record(
         source_entity=APPOINTMENT_ENTITY,
         source_record_id="appointment-1",
@@ -87,11 +87,12 @@ def test_appointment_with_reception_is_completed() -> None:
 
     assert result is not None
     assert result.target_entity == "appointment"
-    assert result.data["status"] == "completed"
+    assert result.data["status"] == "scheduled"
+    assert result.data["has_reception"] is True
     assert result.issues == []
 
 
-def test_schedule_block_without_patient_is_not_an_appointment() -> None:
+def test_schedule_block_without_patient_is_kept_for_official_record_count() -> None:
     result = normalize_one_c_operational_record(
         source_entity=APPOINTMENT_ENTITY,
         source_record_id="schedule-block",
@@ -104,7 +105,9 @@ def test_schedule_block_without_patient_is_not_an_appointment() -> None:
         branch_code="main",
     )
 
-    assert result is None
+    assert result is not None
+    assert result.data["patient_external_id"] is None
+    assert result.data["has_reception"] is False
 
 
 def test_appointment_service_updates_parent_direction() -> None:

@@ -41,7 +41,7 @@ class DoctorsRepository:
             select(
                 Appointment.doctor_id.label("doctor_id"),
                 func.count(Appointment.id).label("appointments_total"),
-                func.sum(case((Appointment.status == "completed", 1), else_=0)).label(
+                func.sum(case((Appointment.has_reception.is_(True), 1), else_=0)).label(
                     "appointments_completed"
                 ),
                 func.max(Appointment.updated_at).label("appointments_as_of"),
@@ -66,7 +66,7 @@ class DoctorsRepository:
                     case((RevenueFact.recognition_type == "accrual", RevenueFact.amount), else_=0)
                 ).label("revenue_accrual"),
                 func.sum(
-                    case((RevenueFact.recognition_type == "payment", RevenueFact.amount), else_=0)
+                    case((RevenueFact.recognition_type == "doctor_payment", RevenueFact.amount), else_=0)
                 ).label("revenue_payment"),
                 func.max(RevenueFact.updated_at).label("revenue_as_of"),
             )

@@ -149,22 +149,44 @@ class FinanceRepository:
     async def cashflow_totals(
         self, tenant_id: UUID, date_from: date, date_to: date, branch_id: UUID | None
     ) -> CashFlowTotals:
+        # Gross movements from the 1C money register contain transfers between
+        # the clinic's own cash boxes and bank accounts. For management cash
+        # flow, use the same patient-payment source as the official receipts
+        # report and only known paid purchase/payroll documents as outflow.
         statement = select(
-            func.coalesce(
-                func.sum(case((CashFlowFact.direction == "in", CashFlowFact.amount), else_=0)), 0
-            ),
-            func.coalesce(
-                func.sum(case((CashFlowFact.direction == "out", CashFlowFact.amount), else_=0)), 0
-            ),
-            func.max(CashFlowFact.updated_at),
+            func.coalesce(func.sum(RevenueFact.amount), 0),
+            func.max(RevenueFact.updated_at),
         ).where(
-            CashFlowFact.tenant_id == tenant_id,
-            CashFlowFact.occurred_at >= self._start(date_from),
-            CashFlowFact.occurred_at < self._end_exclusive(date_to),
+            RevenueFact.tenant_id == tenant_id,
+            RevenueFact.recognition_type == "payment",
+            RevenueFact.occurred_at >= self._start(date_from),
+            RevenueFact.occurred_at < self._end_exclusive(date_to),
         )
         if branch_id:
-            statement = statement.where(CashFlowFact.branch_id == branch_id)
+            statement = statement.where(RevenueFact.branch_id == branch_id)
         row = (await self.session.execute(statement)).one()
+
+        expense_paid_statement = select(
+            func.coalesce(func.sum(ExpenseFact.paid_amount), 0),
+            func.max(ExpenseFact.updated_at),
+        ).where(
+            ExpenseFact.tenant_id == tenant_id,
+            ExpenseFact.occurred_on >= date_from,
+            ExpenseFact.occurred_on <= date_to,
+        )
+        payroll_paid_statement = select(
+            func.coalesce(func.sum(PayrollFact.paid_amount), 0),
+            func.max(PayrollFact.updated_at),
+        ).where(
+            PayrollFact.tenant_id == tenant_id,
+            PayrollFact.occurred_on >= date_from,
+            PayrollFact.occurred_on <= date_to,
+        )
+        if branch_id:
+            expense_paid_statement = expense_paid_statement.where(ExpenseFact.branch_id == branch_id)
+            payroll_paid_statement = payroll_paid_statement.where(PayrollFact.branch_id == branch_id)
+        expense_paid = (await self.session.execute(expense_paid_statement)).one()
+        payroll_paid = (await self.session.execute(payroll_paid_statement)).one()
 
         latest_balance = (
             select(
@@ -197,7 +219,11 @@ class FinanceRepository:
         balance = (await self.session.execute(balance_statement)).one()
         closing_balance = Decimal(balance[0]) if balance[0] is not None else None
 
-        timestamps = [value for value in (row[2], balance[1]) if value is not None]
+        timestamps = [
+            value
+            for value in (row[1], expense_paid[1], payroll_paid[1], balance[1])
+            if value is not None
+        ]
         official, official_as_of = await OfficialReportsRepository(self.session).exact_values(
             tenant_id,
             date_from,
@@ -212,7 +238,7 @@ class FinanceRepository:
         outflow = (
             official["purchases_paid"] + official["payroll_paid"]
             if has_known_outflow
-            else Decimal(row[1])
+            else Decimal(expense_paid[0]) + Decimal(payroll_paid[0])
         )
         return CashFlowTotals(
             inflow=inflow,

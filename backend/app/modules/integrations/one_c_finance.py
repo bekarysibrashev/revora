@@ -23,6 +23,17 @@ SALES_ENTITY = "AccumulationRegister_Продажи_RecordType"
 PAYROLL_ENTITY = "Document_НачислениеЗарплаты"
 PAYROLL_LINE_ENTITY = "Document_НачислениеЗарплаты_РасчетЗарплаты"
 PAYROLL_REGISTER_ENTITY = "AccumulationRegister_РасчетыСПерсоналом_RecordType"
+PAYROLL_EXPENSE_LINE_ENTITY = "Document_НачислениеЗарплаты_Затраты"
+RECEPTION_ENTITY = "Document_Прием"
+RECEPTION_SERVICE_ENTITY = "Document_Прием_Лечение"
+RETAIL_SALE_ENTITY = "Document_Реализация"
+RETAIL_SALE_SERVICE_ENTITY = "Document_Реализация_Услуги"
+PURCHASE_ENTITY = "Document_Поступление"
+INCOMING_PAYMENT_ENTITY = "Document_ПоступлениеДенежныхСредств"
+INCOMING_PAYMENT_LINE_ENTITY = "Document_ПоступлениеДенежныхСредств_РасшифровкаПлатежа"
+OUTGOING_PAYMENT_ENTITY = "Document_СписаниеДенежныхСредств"
+OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY = "Document_СписаниеДенежныхСредств_Затраты"
+OUTGOING_PAYMENT_LINE_ENTITY = "Document_СписаниеДенежныхСредств_РасшифровкаПлатежа"
 MAPPABLE_ONE_C_ENTITIES = (
     REVENUE_ENTITY,
     MONEY_ENTITY,
@@ -31,6 +42,17 @@ MAPPABLE_ONE_C_ENTITIES = (
     PAYROLL_ENTITY,
     PAYROLL_LINE_ENTITY,
     PAYROLL_REGISTER_ENTITY,
+    PAYROLL_EXPENSE_LINE_ENTITY,
+    RECEPTION_ENTITY,
+    RECEPTION_SERVICE_ENTITY,
+    RETAIL_SALE_ENTITY,
+    RETAIL_SALE_SERVICE_ENTITY,
+    PURCHASE_ENTITY,
+    INCOMING_PAYMENT_ENTITY,
+    INCOMING_PAYMENT_LINE_ENTITY,
+    OUTGOING_PAYMENT_ENTITY,
+    OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY,
+    OUTGOING_PAYMENT_LINE_ENTITY,
 )
 
 
@@ -63,14 +85,14 @@ def normalize_one_c_finance_record(
 
     normalized = {_normalize_key(key): value for key, value in payload.items()}
     issues: list[MappingIssue] = []
-    if source_entity == PAYROLL_LINE_ENTITY:
+    if source_entity == PAYROLL_EXPENSE_LINE_ENTITY:
         occurred_at = _payroll_period(normalized, issues)
-        # The verified report's "Начислено" column is the sum of employee
-        # accrual calculation lines, including negative corrections. 1C keeps
-        # deductions in the same table, so resolved deduction rows are zeroed.
         amount = _amount(normalized, issues)
-        if _is_resolved_payroll_deduction(normalized):
-            amount = Decimal("0")
+    elif source_entity == PAYROLL_LINE_ENTITY:
+        occurred_at = _payroll_period(normalized, issues)
+        # Superseded source: calculation rows contain bases, corrections and
+        # deductions and therefore do not equal the official accrued payroll.
+        amount = Decimal("0")
     elif source_entity == PAYROLL_ENTITY:
         occurred_at = _payroll_period(normalized, issues)
         # Header totals contain a broader composition than the report column.
@@ -85,7 +107,21 @@ def normalize_one_c_finance_record(
         amount = _amount(normalized, issues)
     if payload.get("Active") is False:
         amount = Decimal("0")
-    if source_entity in {PAYROLL_ENTITY, PAYROLL_LINE_ENTITY} and (
+    if source_entity in {
+        PAYROLL_ENTITY,
+        PAYROLL_LINE_ENTITY,
+        PAYROLL_EXPENSE_LINE_ENTITY,
+        RECEPTION_ENTITY,
+        RECEPTION_SERVICE_ENTITY,
+        RETAIL_SALE_ENTITY,
+        RETAIL_SALE_SERVICE_ENTITY,
+        PURCHASE_ENTITY,
+        INCOMING_PAYMENT_ENTITY,
+        INCOMING_PAYMENT_LINE_ENTITY,
+        OUTGOING_PAYMENT_ENTITY,
+        OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY,
+        OUTGOING_PAYMENT_LINE_ENTITY,
+    } and (
         payload.get("DeletionMark") is True or payload.get("Posted") is False
     ):
         amount = Decimal("0")
@@ -96,7 +132,14 @@ def normalize_one_c_finance_record(
         "currency": "KZT",
     }
 
-    if source_entity in {REVENUE_ENTITY, SALES_ENTITY}:
+    if source_entity in {
+        REVENUE_ENTITY,
+        SALES_ENTITY,
+        RECEPTION_SERVICE_ENTITY,
+        RETAIL_SALE_SERVICE_ENTITY,
+        INCOMING_PAYMENT_LINE_ENTITY,
+        OUTGOING_PAYMENT_LINE_ENTITY,
+    }:
         if not branch_code:
             issues.append(
                 MappingIssue(
@@ -109,6 +152,21 @@ def normalize_one_c_finance_record(
             # Keep an excluded row as a zero-valued fact. Reprocessing can then
             # safely correct canonical rows created by an older broader mapper.
             amount = Decimal("0")
+        if source_entity == SALES_ENTITY:
+            # The Sales accumulation register is a posting layer, not the
+            # report source. Service document lines below are authoritative.
+            amount = Decimal("0")
+        is_doctor_payment = source_entity in {
+            INCOMING_PAYMENT_LINE_ENTITY,
+            OUTGOING_PAYMENT_LINE_ENTITY,
+        }
+        if is_doctor_payment and not _is_doctor_payment_operation(normalized):
+            # Payment breakdown tables are reused by 1C for salary, supplier
+            # and internal-transfer documents. Only patient/deposit/refund/
+            # insurance operations belong to the paid-by-doctor report.
+            amount = Decimal("0")
+        if source_entity == OUTGOING_PAYMENT_LINE_ENTITY and amount is not None:
+            amount = -abs(amount)
         base.update(
             {
                 "branch_code": branch_code,
@@ -119,14 +177,36 @@ def normalize_one_c_finance_record(
                 "direction_external_id": _reference_value(
                     normalized, "Номенклатура_Key"
                 ),
-                "recognition_type": "payment" if source_entity == REVENUE_ENTITY else "accrual",
+                "recognition_type": (
+                    "doctor_payment"
+                    if is_doctor_payment
+                    else "payment"
+                    if source_entity == REVENUE_ENTITY
+                    else "accrual"
+                ),
                 "occurred_at": occurred_at,
                 "amount": amount,
             }
         )
         return OneCFinanceMapping("revenue_fact", base, issues)
 
-    if source_entity in {PAYROLL_ENTITY, PAYROLL_LINE_ENTITY, PAYROLL_REGISTER_ENTITY}:
+    if source_entity in {
+        PAYROLL_ENTITY,
+        PAYROLL_LINE_ENTITY,
+        PAYROLL_REGISTER_ENTITY,
+        PAYROLL_EXPENSE_LINE_ENTITY,
+        INCOMING_PAYMENT_ENTITY,
+        OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY,
+    }:
+        is_payroll_payment = source_entity in {
+            INCOMING_PAYMENT_ENTITY,
+            OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY,
+        } and _is_payroll_payment_document(normalized)
+        if source_entity in {
+            INCOMING_PAYMENT_ENTITY,
+            OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY,
+        } and not is_payroll_payment:
+            return None
         if not branch_code:
             issues.append(
                 MappingIssue(
@@ -139,13 +219,24 @@ def normalize_one_c_finance_record(
             {
                 "branch_code": branch_code,
                 "employee_external_id": _reference_value(normalized, "Сотрудник_Key"),
-                "occurred_on": occurred_at.date() if occurred_at else None,
-                "amount": amount,
+                "occurred_on": (
+                    _payroll_payment_period(normalized, issues).date()
+                    if is_payroll_payment
+                    else occurred_at.date() if occurred_at else None
+                ),
+                "amount": amount if source_entity == PAYROLL_EXPENSE_LINE_ENTITY else Decimal("0"),
+                "paid_amount": (
+                    abs(amount or Decimal("0"))
+                    if source_entity == OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY
+                    else -abs(amount or Decimal("0"))
+                    if source_entity == INCOMING_PAYMENT_ENTITY
+                    else Decimal("0")
+                ),
             }
         )
         return OneCFinanceMapping("payroll_fact", base, issues)
 
-    if source_entity == EXPENSE_ENTITY:
+    if source_entity in {EXPENSE_ENTITY, PURCHASE_ENTITY}:
         if not branch_code:
             issues.append(
                 MappingIssue(
@@ -154,6 +245,8 @@ def normalize_one_c_finance_record(
                     field_name="branch_code",
                 )
             )
+        if source_entity == EXPENSE_ENTITY:
+            amount = Decimal("0")
         category = _text_value(
             normalized,
             "_ResolvedCategoryName",
@@ -168,12 +261,24 @@ def normalize_one_c_finance_record(
                 "branch_code": branch_code,
                 "occurred_on": occurred_at.date() if occurred_at else None,
                 "amount": amount,
+                "paid_amount": (
+                    _decimal_from_alias(normalized, "СуммаОплачено", issues)
+                    if source_entity == PURCHASE_ENTITY
+                    else Decimal("0")
+                ),
                 "category_name": category or "1С: Затраты",
                 "cost_behavior": _expense_cost_behavior(category),
                 "description": operation or "Затраты из 1С",
             }
         )
         return OneCFinanceMapping("expense_fact", base, issues)
+
+    if source_entity in {RECEPTION_ENTITY, RETAIL_SALE_ENTITY}:
+        # Header rows are dependencies for their service table parts.
+        return None
+
+    if source_entity != MONEY_ENTITY:
+        return None
 
     if not branch_code:
         issues.append(
@@ -184,6 +289,11 @@ def normalize_one_c_finance_record(
             )
         )
     direction = _cash_direction(normalized, amount, issues)
+    # The money register includes transfers between the clinic's own accounts.
+    # Preserve zero facts only to remove values written by older formulas. The
+    # direction must be resolved before zeroing the amount because older 1C
+    # rows encode an outflow only through a negative amount.
+    amount = Decimal("0")
     base.update(
         {
             "branch_code": branch_code,
@@ -220,7 +330,7 @@ def _find(source: dict[str, object], *aliases: str) -> tuple[str | None, object 
 def _period(
     source: dict[str, object], issues: list[MappingIssue]
 ) -> datetime | None:
-    _, raw = _find(source, "Period", "Период", "Дата", "ДатаОперации")
+    _, raw = _find(source, "Period", "Date", "Период", "Дата", "ДатаОперации")
     if raw is None:
         issues.append(
             MappingIssue(
@@ -354,6 +464,45 @@ def _payroll_register_period(
         return None
 
 
+def _payroll_payment_period(
+    source: dict[str, object], issues: list[MappingIssue]
+) -> datetime:
+    _, raw = _find(source, "ВыплатаЗПМесяц", "ВозвратВыплатыЗПМесяц")
+    if raw is None:
+        # Some 1C documents do not fill the dedicated month even though the
+        # operation is a salary payment. Fall back to the document date.
+        value = _period(source, issues)
+        return value or datetime.now(timezone(timedelta(hours=5)))
+    try:
+        value = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw).strip())
+        return value if value.tzinfo else value.replace(tzinfo=timezone(timedelta(hours=5)))
+    except (TypeError, ValueError) as exc:
+        issues.append(
+            MappingIssue(
+                code="ONE_C_PERIOD_INVALID",
+                message=f"Cannot convert 1C payroll payment month: {exc}",
+                field_name="ВыплатаЗПМесяц",
+                raw_value=raw,
+            )
+        )
+        return datetime.now(timezone(timedelta(hours=5)))
+
+
+def _is_payroll_payment_document(source: dict[str, object]) -> bool:
+    operation = _normalize_key(_text_value(source, "ВидОперации") or "").replace("ё", "е")
+    return "зарплат" in operation or "выплатазп" in operation
+
+
+def _decimal_from_alias(
+    source: dict[str, object], alias: str, issues: list[MappingIssue]
+) -> Decimal:
+    key, raw = _find(source, alias)
+    if raw is None:
+        return Decimal("0")
+    value = _decimal_value(raw, key, issues)
+    return value if value is not None else Decimal("0")
+
+
 def _is_payroll_accrual(
     source: dict[str, object], issues: list[MappingIssue]
 ) -> bool:
@@ -455,6 +604,37 @@ def _is_actual_patient_payment(source: dict[str, object]) -> bool:
         and "страх" not in normalized
     )
     return exact_match or semantic_match
+
+
+def _is_doctor_payment_operation(source: dict[str, object]) -> bool:
+    """Return whether a payment breakdown row belongs to doctor revenue.
+
+    Unlike the clinic cash-receipts KPI, the official doctor report includes
+    insurance payments. Salary and supplier payment lines must stay excluded.
+    """
+
+    operation = _text_value(source, "ВидОперации")
+    normalized = _normalize_key(operation or "").replace("ё", "е")
+    exact_match = any(
+        marker in normalized
+        for marker in (
+            "оплатаотпациента",
+            "оплатапациентом",
+            "оплатаотклиента",
+            "взносналицевойсчет",
+            "возвратоплатыпациенту",
+            "возвратоплатыпациента",
+            "возвратоплатыклиенту",
+            "возвратслицевогосчета",
+            "оплатаотстраховойкомпании",
+        )
+    )
+    semantic_patient_match = (
+        any(marker in normalized for marker in ("пациент", "клиент"))
+        and any(marker in normalized for marker in ("оплат", "взнос", "возврат"))
+    )
+    insurance_match = "страх" in normalized and "оплат" in normalized
+    return exact_match or semantic_patient_match or insurance_match
 
 
 def one_c_finance_external_id(source_entity: str, source_record_id: str) -> str:

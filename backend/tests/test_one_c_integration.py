@@ -204,7 +204,8 @@ def test_connector_token_round_trip_and_digest() -> None:
 def test_allowlist_includes_only_field_protected_operational_sources() -> None:
     assert "Catalog_Заявки" in SAFE_ONE_C_ENTITIES
     assert "Catalog_Контрагенты" in SAFE_ONE_C_ENTITIES
-    assert "Document_ПоступлениеДенежныхСредств" not in SAFE_ONE_C_ENTITIES
+    assert "Document_ПоступлениеДенежныхСредств" in SAFE_ONE_C_ENTITIES
+    assert "Document_СписаниеДенежныхСредств_Затраты" in SAFE_ONE_C_ENTITIES
     assert "AccumulationRegister_Выручка_RecordType" in SAFE_ONE_C_ENTITIES
     assert "Catalog_СтруктурныеЕдиницы" in SAFE_ONE_C_ENTITIES
     assert "Document_НачислениеЗарплаты_РасчетЗарплаты" in SAFE_ONE_C_ENTITIES
@@ -330,7 +331,7 @@ async def test_existing_connector_token_uses_current_server_allowlist() -> None:
 
 
 @pytest.mark.asyncio
-async def test_payroll_calculation_line_inherits_parent_period_and_branch_context() -> None:
+async def test_payroll_expense_line_inherits_parent_period_and_branch_context() -> None:
     tenant_id, connection_id = uuid4(), uuid4()
     token, digest = issue_connector_token(tenant_id, connection_id)
     repository = FakeOneCRepository(tenant_id, connection_id, digest)
@@ -353,13 +354,12 @@ async def test_payroll_calculation_line_inherits_parent_period_and_branch_contex
     result = await service.ingest_one_c_push(
         token,
         OneCPushRequest(
-            entity="Document_НачислениеЗарплаты_РасчетЗарплаты",
+            entity="Document_НачислениеЗарплаты_Затраты",
             records=[{
                 "Ref_Key": "payroll-1",
                 "LineNumber": 1,
                 "Сотрудник_Key": "employee-1",
-                "ПериодС": "2026-07-01T00:00:00",
-                "ПериодПо": "2026-07-31T23:59:59",
+                "Дата": "2026-07-31T23:59:59",
                 "Сумма": 481048.99,
             }],
         ),
@@ -383,7 +383,7 @@ async def test_push_rejects_an_entity_outside_allowlist() -> None:
         await service.ingest_one_c_push(
             token,
             OneCPushRequest(
-                entity="Document_ПоступлениеДенежныхСредств",
+                entity="Document_НеРазрешен",
                 records=[{"Ref_Key": "not-approved"}],
             ),
         )

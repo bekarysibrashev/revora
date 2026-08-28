@@ -26,10 +26,21 @@ from app.modules.integrations.one_c_finance import (
     MAPPABLE_ONE_C_ENTITIES as MAPPABLE_ONE_C_FINANCE_ENTITIES,
     MONEY_ENTITY,
     PAYROLL_ENTITY,
+    PAYROLL_EXPENSE_LINE_ENTITY,
     PAYROLL_LINE_ENTITY,
     PAYROLL_REGISTER_ENTITY,
+    PURCHASE_ENTITY,
+    RECEPTION_ENTITY,
+    RECEPTION_SERVICE_ENTITY,
     REVENUE_ENTITY,
+    RETAIL_SALE_ENTITY,
+    RETAIL_SALE_SERVICE_ENTITY,
     SALES_ENTITY,
+    INCOMING_PAYMENT_ENTITY,
+    INCOMING_PAYMENT_LINE_ENTITY,
+    OUTGOING_PAYMENT_ENTITY,
+    OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY,
+    OUTGOING_PAYMENT_LINE_ENTITY,
     normalize_one_c_finance_record,
 )
 from app.modules.integrations.one_c_operational import (
@@ -76,8 +87,19 @@ REPROCESSABLE_ONE_C_ENTITIES = (
     EXPENSE_ENTITY,
     SALES_ENTITY,
     PAYROLL_ENTITY,
+    PAYROLL_EXPENSE_LINE_ENTITY,
     PAYROLL_LINE_ENTITY,
     PAYROLL_REGISTER_ENTITY,
+    PURCHASE_ENTITY,
+    RECEPTION_ENTITY,
+    RECEPTION_SERVICE_ENTITY,
+    RETAIL_SALE_ENTITY,
+    RETAIL_SALE_SERVICE_ENTITY,
+    INCOMING_PAYMENT_ENTITY,
+    INCOMING_PAYMENT_LINE_ENTITY,
+    OUTGOING_PAYMENT_ENTITY,
+    OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY,
+    OUTGOING_PAYMENT_LINE_ENTITY,
     *MAPPABLE_OPERATIONAL_ENTITIES,
 )
 
@@ -86,6 +108,7 @@ CASH_CATEGORY_ENTITY = "Catalog_СтатьиДвиженияДенежныхСр
 EXPENSE_CATEGORY_ENTITY = "Catalog_СтатьиДоходовИРасходов"
 PAYROLL_KIND_ENTITY = "Catalog_НачисленияИУдержанияСотрудников"
 STRUCTURAL_UNIT_ENTITY = "Catalog_СтруктурныеЕдиницы"
+CANCELLATION_REASON_ENTITY = "Catalog_ПричиныОтменыЗаписи"
 EXCLUDED_BRANCH_CODE = "__excluded_one_c_unit__"
 
 
@@ -530,7 +553,7 @@ class IntegrationService:
         connection_id = getattr(raw_record, "connection_id", None)
         ref_key = str(payload.get("Ref_Key") or "").strip()
 
-        if entity == PAYROLL_LINE_ENTITY and ref_key and connection_id:
+        if entity in {PAYROLL_LINE_ENTITY, PAYROLL_EXPENSE_LINE_ENTITY} and ref_key and connection_id:
             parent = await self.repository.one_c_payroll_document_payload(
                 tenant_id, connection_id, ref_key
             )
@@ -592,6 +615,27 @@ class IntegrationService:
             )
             if selected:
                 payload["_DirectionExternalId"] = selected.get("Номенклатура_Key")
+            cancellation_key = str(payload.get("ПричинаОтмены_Key") or "").strip()
+            if cancellation_key:
+                reason = await self.repository.one_c_latest_payload_by_ref(
+                    tenant_id, connection_id, CANCELLATION_REASON_ENTITY, cancellation_key
+                )
+                if reason:
+                    payload["_ResolvedCancellationReason"] = reason.get("Description")
+
+        parent_by_line_entity = {
+            RECEPTION_SERVICE_ENTITY: RECEPTION_ENTITY,
+            RETAIL_SALE_SERVICE_ENTITY: RETAIL_SALE_ENTITY,
+            INCOMING_PAYMENT_LINE_ENTITY: INCOMING_PAYMENT_ENTITY,
+            OUTGOING_PAYMENT_LINE_ENTITY: OUTGOING_PAYMENT_ENTITY,
+            OUTGOING_PAYMENT_EXPENSE_LINE_ENTITY: OUTGOING_PAYMENT_ENTITY,
+        }
+        parent_entity = parent_by_line_entity.get(entity)
+        if parent_entity and ref_key and connection_id:
+            parent = await self.repository.one_c_latest_payload_by_ref(
+                tenant_id, connection_id, parent_entity, ref_key
+            )
+            payload = {**(parent or {}), **payload}
 
         if entity == LEAD_ENTITY and connection_id and not payload.get("СтруктурнаяЕдиница_Key"):
             patient_key = str(payload.get("ОсновнойКлиент_Key") or "").strip()

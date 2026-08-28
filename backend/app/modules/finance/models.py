@@ -45,6 +45,7 @@ class ExpenseFact(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     external_id: Mapped[str] = mapped_column(String(150))
     occurred_on: Mapped[date] = mapped_column(Date, index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    paid_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     currency: Mapped[str] = mapped_column(String(3), default="KZT")
     counterparty: Mapped[str | None] = mapped_column(String(250))
     description: Mapped[str | None] = mapped_column(Text)
@@ -59,6 +60,7 @@ class PayrollFact(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     external_id: Mapped[str] = mapped_column(String(150))
     occurred_on: Mapped[date] = mapped_column(Date, index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    paid_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, server_default="0")
     currency: Mapped[str] = mapped_column(String(3), default="KZT")
 
 
