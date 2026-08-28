@@ -115,7 +115,10 @@ async def _qr_gateway_request(
             message="QR-шлюз ещё не развернут",
         )
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        # Render's free web services can sleep. Waking the QR gateway can take
+        # 50+ seconds, so the proxy must outwait the cold-start instead of
+        # turning a successful wake-up into a misleading "nothing happened".
+        async with httpx.AsyncClient(timeout=90) as client:
             response = await client.request(
                 method,
                 f"{url}{path}",

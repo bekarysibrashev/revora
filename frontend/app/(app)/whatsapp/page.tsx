@@ -154,6 +154,9 @@ export default function WhatsAppPage() {
   });
   const connectQr = useMutation({
     mutationFn: () => api<QrStatus>("/whatsapp/qr/connect", { method: "POST" }),
+    onMutate: () => {
+      setConnectMessage("Запускаем QR-шлюз. Бесплатный Render может просыпаться до минуты…");
+    },
     onSuccess: async (result) => {
       setConnectMessage(result.message || "QR-шлюз запущен");
       await qc.invalidateQueries({ queryKey: ["wa-qr-status"] });
