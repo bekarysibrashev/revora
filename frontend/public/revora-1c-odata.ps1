@@ -472,6 +472,22 @@ function Remove-OneCBinaryFields {
     return @($Records)
 }
 
+function Remove-OneCNavigationFields {
+    param([object[]]$Records)
+
+    # 1C may append navigation link URLs to JSON rows even though these
+    # technical fields are not scalar properties from $metadata. They are
+    # useful for OData clients but must not be uploaded as business data.
+    foreach ($record in @($Records)) {
+        foreach ($property in @($record.PSObject.Properties)) {
+            if ([string]$property.Name -match '(?i)@navigationLinkUrl$') {
+                $record.PSObject.Properties.Remove($property.Name)
+            }
+        }
+    }
+    return @($Records)
+}
+
 function Get-RevoraUploadBatches {
     param(
         [Parameter(Mandatory = $true)][object[]]$Records,
@@ -889,6 +905,7 @@ function Invoke-ConnectorSync {
                     $page = $_
                     $records = @(Protect-OneCRecords -Records @($page.Records) -PhoneFields @($definition.protect_phone))
                     $records = @(Remove-OneCBinaryFields -Records $records -BinaryFields @($definition.binary_fields))
+                    $records = @(Remove-OneCNavigationFields -Records $records)
                     # Wide dynamically discovered objects can be much larger
                     # than the original fixed field subset. Split by both row
                     # count and encoded size to stay below API/proxy limits.
