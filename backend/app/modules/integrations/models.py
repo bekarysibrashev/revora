@@ -111,7 +111,7 @@ class RawRecord(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     sync_run_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("sync_runs.id", ondelete="SET NULL"), index=True
     )
-    source_entity: Mapped[str] = mapped_column(String(100), index=True)
+    source_entity: Mapped[str] = mapped_column(String(200), index=True)
     source_record_id: Mapped[str | None] = mapped_column(String(200), index=True)
     source_schema_version: Mapped[str | None] = mapped_column(String(100))
     record_hash: Mapped[str] = mapped_column(String(64))

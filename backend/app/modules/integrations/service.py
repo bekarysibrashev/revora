@@ -253,20 +253,47 @@ class IntegrationService:
     ) -> OneCPushResponse:
         parts, connection = await self._connector_connection(connector_token)
 
-        # The server-side allowlist is authoritative and versioned with the
-        # deployed code. Existing clinic tokens must immediately gain newly
-        # approved fields/entities without being rotated or recreated.
-        allowed_entities = set(SAFE_ONE_C_ENTITIES)
-        if payload.entity not in allowed_entities:
+        # The latest OData metadata uploaded by the localhost connector is the
+        # authoritative dynamic allowlist. This lets a clinic publish new 1C
+        # objects/fields without downloading a newly hard-coded connector,
+        # while still rejecting names not declared by that exact 1C database.
+        metadata = await self.repository.get_one_c_metadata(parts.tenant_id, connection.id)
+        metadata_fields: dict[str, set[str]] = {}
+        if metadata is not None:
+            for item in metadata.entities:
+                name = str(item.get("name") or "")
+                if not name:
+                    continue
+                metadata_fields[name] = {
+                    str(prop.get("name"))
+                    for prop in item.get("properties", [])
+                    if prop.get("name")
+                }
+
+        if metadata_fields:
+            approved_fields = metadata_fields.get(payload.entity)
+        else:
+            # Backward-compatible bootstrap: old connectors can still send the
+            # original safe subset until their first metadata upload.
+            approved_fields = set(SAFE_ONE_C_FIELDS.get(payload.entity, ())) or None
+        if approved_fields is None:
             raise AppError(
                 "ONE_C_ENTITY_NOT_ALLOWED",
-                "This 1C entity is not approved for synchronization",
+                "This 1C entity is not present in the uploaded OData metadata",
                 403,
                 {"entity": payload.entity},
             )
-        approved_fields = SAFE_ONE_C_FIELDS.get(payload.entity)
-        if approved_fields is None:
-            raise AppError("ONE_C_ENTITY_NOT_ALLOWED", "This 1C entity has no field allowlist", 403)
+
+        approved_fields = set(approved_fields)
+        if "PhoneHash" in SAFE_ONE_C_FIELDS.get(payload.entity, frozenset()):
+            # The connector replaces raw phone-like fields with a one-way hash
+            # locally for patient/lead objects that Revora already recognizes.
+            approved_fields = {
+                field
+                for field in approved_fields
+                if "телефон" not in field.casefold() and "phone" not in field.casefold()
+            }
+            approved_fields.add("PhoneHash")
         for record in payload.records:
             unexpected_fields = sorted(set(record) - approved_fields)
             if unexpected_fields:
@@ -367,7 +394,7 @@ class IntegrationService:
         )
         connection.settings = {
             **(connection.settings or {}),
-            "allowed_entities": list(SAFE_ONE_C_ENTITIES),
+            "allowed_entities": [item.name for item in payload.entities],
             "metadata_fingerprint": fingerprint,
             "metadata_discovered_at": discovered_at.isoformat(),
             "metadata_entity_count": len(entities),

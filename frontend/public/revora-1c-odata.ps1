@@ -266,9 +266,10 @@ function Load-ConnectorConfig {
     }
     $loaded = Import-Clixml -LiteralPath $ConfigPath
     Assert-ConnectorUrls -ApiUrl $loaded.RevoraApiUrl -ODataUrl $loaded.OneCBaseUrl
-    # The executable allowlist is versioned with the signed/deployed script;
-    # an old local config cannot keep broader or stale entity permissions.
-    $loaded.Entities = $ApprovedEntities
+    # Entities and scalar fields are discovered from the live 1C $metadata at
+    # the start of every run. The saved list is retained only for compatibility
+    # with old config files and is never authoritative.
+    $loaded.Entities = @()
     return $loaded
 }
 
@@ -325,6 +326,7 @@ function Get-ODataPages {
         [Parameter(Mandatory = $true)][string]$BaseUrl,
         [Nullable[datetime]]$ChangedSince,
         [string]$SelectFields,
+        [string[]]$AvailableFields,
         [string]$DateField,
         [string]$StaticFilter,
         [Parameter(Mandatory = $true)][int]$ConfiguredPageSize,
@@ -335,18 +337,25 @@ function Get-ODataPages {
     $queryUrl = "$BaseUrl/$encodedEntity`?`$format=json&`$top=$ConfiguredPageSize&allowedOnly=true"
     # Every paged query needs a stable business key. A mutable physical order
     # can skip or repeat register rows while the clinic keeps working in 1C.
-    if ($Entity.StartsWith("Catalog_") -or $Entity.StartsWith("Document_")) {
-        $referenceOrder = if ($SelectFields -match "(^|,)LineNumber(,|$)") {
+    if (($Entity.StartsWith("Catalog_") -or $Entity.StartsWith("Document_")) -and $AvailableFields -contains "Ref_Key") {
+        $referenceOrder = if ($AvailableFields -contains "LineNumber") {
             "Ref_Key,LineNumber"
         }
         else { "Ref_Key" }
         $queryUrl += "&`$orderby=$referenceOrder"
     }
-    elseif ($Entity.StartsWith("AccumulationRegister_")) {
-        $registerOrder = if ($SelectFields -match "(^|,)Recorder_Key(,|$)") {
+    elseif ($Entity.StartsWith("AccumulationRegister_") -and $AvailableFields -contains "Period") {
+        $registerOrder = if ($AvailableFields -contains "Recorder_Key") {
             "Period,Recorder_Key,LineNumber"
         }
-        else { "Period,Recorder_Type,Recorder,LineNumber" }
+        elseif ($AvailableFields -contains "Recorder") {
+            $parts = @("Period")
+            if ($AvailableFields -contains "Recorder_Type") { $parts += "Recorder_Type" }
+            $parts += "Recorder"
+            if ($AvailableFields -contains "LineNumber") { $parts += "LineNumber" }
+            $parts -join ","
+        }
+        else { "Period" }
         $queryUrl += "&`$orderby=$registerOrder"
     }
     elseif ($DateField) {
@@ -432,16 +441,63 @@ function ConvertTo-ProtectedPhoneHash {
 }
 
 function Protect-OneCRecords {
-    param([object[]]$Records, [string]$PhoneField)
+    param([object[]]$Records, [string[]]$PhoneFields)
 
-    if (-not $PhoneField) { return @($Records) }
+    if ($null -eq $PhoneFields -or $PhoneFields.Count -eq 0) { return @($Records) }
     foreach ($record in @($Records)) {
-        $property = $record.PSObject.Properties[$PhoneField]
-        $phoneHash = if ($null -ne $property) { ConvertTo-ProtectedPhoneHash -Value $property.Value } else { $null }
-        if ($null -ne $property) { $record.PSObject.Properties.Remove($PhoneField) }
+        $phoneHash = $null
+        foreach ($phoneField in @($PhoneFields)) {
+            $property = $record.PSObject.Properties[$phoneField]
+            if ($null -ne $property) {
+                if (-not $phoneHash) { $phoneHash = ConvertTo-ProtectedPhoneHash -Value $property.Value }
+                $record.PSObject.Properties.Remove($phoneField)
+            }
+        }
         $record | Add-Member -NotePropertyName "PhoneHash" -NotePropertyValue $phoneHash -Force
     }
     return @($Records)
+}
+
+function Remove-OneCBinaryFields {
+    param([object[]]$Records, [string[]]$BinaryFields)
+
+    if ($null -eq $BinaryFields -or $BinaryFields.Count -eq 0) { return @($Records) }
+    foreach ($record in @($Records)) {
+        foreach ($field in @($BinaryFields)) {
+            if ($null -ne $record.PSObject.Properties[$field]) {
+                $record.PSObject.Properties.Remove($field)
+            }
+        }
+    }
+    return @($Records)
+}
+
+function Get-RevoraUploadBatches {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Records,
+        [ValidateRange(1, 500)][int]$MaxRecords = 200,
+        [ValidateRange(100000, 1900000)][int]$MaxBytes = 1500000
+    )
+
+    $current = New-Object System.Collections.ArrayList
+    $currentBytes = 0
+    foreach ($record in @($Records)) {
+        $recordJson = $record | ConvertTo-Json -Depth 30 -Compress
+        $recordBytes = [Text.Encoding]::UTF8.GetByteCount($recordJson) + 1
+        if ($recordBytes -gt $MaxBytes) {
+            throw "A single OData row exceeds the safe Revora upload limit. Binary fields are excluded, so inspect entity metadata for another oversized scalar field."
+        }
+        if ($current.Count -gt 0 -and ($current.Count -ge $MaxRecords -or ($currentBytes + $recordBytes) -gt $MaxBytes)) {
+            Write-Output -NoEnumerate ([pscustomobject]@{ Records = @($current.ToArray()) })
+            $current.Clear()
+            $currentBytes = 0
+        }
+        [void]$current.Add($record)
+        $currentBytes += $recordBytes
+    }
+    if ($current.Count -gt 0) {
+        Write-Output -NoEnumerate ([pscustomobject]@{ Records = @($current.ToArray()) })
+    }
 }
 
 function Send-RevoraBatch {
@@ -456,7 +512,7 @@ function Send-RevoraBatch {
     $json = @{
         entity = $Entity
         records = $Records
-        schema_version = "1c-odata-v4-field-allowlist"
+        schema_version = "1c-odata-v5-dynamic-metadata"
     } | ConvertTo-Json -Depth 30 -Compress
     $body = [Text.Encoding]::UTF8.GetBytes($json)
 
@@ -537,11 +593,70 @@ function Get-OneCMetadataInventory {
     return @($entities | Sort-Object { $_.name })
 }
 
+function Get-MetadataEntityDefinitions {
+    param([Parameter(Mandatory = $true)][object[]]$Entities)
+
+    $definitions = @()
+    $dateCandidates = @("Period", "Date", "Дата", "ДатаОперации", "ДатаСоздания", "ДатаНачала")
+    foreach ($item in @($Entities)) {
+        $name = [string]$item.name
+        $fields = @($item.properties | ForEach-Object { [string]$_.name } | Where-Object { $_ })
+        if (-not $name -or $fields.Count -eq 0) { continue }
+
+        $known = @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $name }) | Select-Object -First 1
+        $dateField = $null
+        if ($null -ne $known -and $known.date_field -and $fields -contains [string]$known.date_field) {
+            $dateField = [string]$known.date_field
+        }
+        else {
+            foreach ($candidate in $dateCandidates) {
+                if ($fields -contains $candidate) { $dateField = $candidate; break }
+            }
+        }
+        $protectPhone = if ($null -ne $known -and $known.protect_phone) {
+            @($fields | Where-Object { $_ -eq [string]$known.protect_phone -or $_ -match "(?i)(телефон|phone)" })
+        }
+        else { @() }
+        $binaryFields = @(
+            $item.properties |
+                Where-Object { [string]$_.type -eq "Edm.Binary" } |
+                ForEach-Object { [string]$_.name }
+        )
+        # Do not inherit the old per-entity row filters. Revora keeps the raw
+        # OData layer complete (including deleted/inactive historical rows) and
+        # applies business exclusions only when calculating a metric.
+        $staticFilter = $null
+        $order = if ($name.StartsWith("Catalog_")) { 10 }
+            elseif ($name.StartsWith("Document_")) { 20 }
+            elseif ($name.StartsWith("InformationRegister_")) { 30 }
+            elseif ($name.StartsWith("AccumulationRegister_")) { 40 }
+            else { 50 }
+        $definitions += [pscustomobject]@{
+            entity = $name
+            # Omitting $select makes 1C return every scalar property declared
+            # in metadata and avoids IIS URL-length failures on wide objects.
+            select = $null
+            fields = @($fields)
+            date_field = $dateField
+            static_filter = $staticFilter
+            protect_phone = @($protectPhone)
+            binary_fields = @($binaryFields)
+            sync_order = $order
+        }
+    }
+    return @($definitions | Sort-Object sync_order, entity)
+}
+
 function Send-RevoraMetadata {
-    param($Config)
+    param($Config, [object[]]$Entities)
 
     $credential = [pscredential]::new($Config.OneCUsername, $Config.OneCPassword)
-    $entities = @(Get-OneCMetadataInventory -BaseUrl $Config.OneCBaseUrl -Credential $credential)
+    $entities = if ($null -ne $Entities -and $Entities.Count -gt 0) {
+        @($Entities)
+    }
+    else {
+        @(Get-OneCMetadataInventory -BaseUrl $Config.OneCBaseUrl -Credential $credential)
+    }
     $token = ConvertFrom-ProtectedString -Value $Config.ConnectorToken
     try {
         $json = @{
@@ -575,18 +690,20 @@ function Test-Connector {
             -Headers @{ Authorization = $authorization } | Out-Null
     }
 
-    $entity = @($Config.Entities)[0]
-    $definition = @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $entity })[0]
-    if ($null -eq $definition) { throw "No field allowlist is defined for $entity." }
+    $inventory = @(Get-OneCMetadataInventory -BaseUrl $Config.OneCBaseUrl -Credential $credential)
+    $definitions = @(Get-MetadataEntityDefinitions -Entities $inventory)
+    if ($definitions.Count -eq 0) { throw "No readable scalar OData entities were discovered." }
+    $definition = $definitions[0]
+    $entity = [string]$definition.entity
     $encodedEntity = [Uri]::EscapeDataString($entity)
-    $probeField = ([string]$definition.select -split ",")[0]
+    $probeField = [string]$definition.fields[0]
     $probeUrl = "$($Config.OneCBaseUrl)/$encodedEntity`?`$format=json&`$top=1&`$select=$([Uri]::EscapeDataString($probeField))&allowedOnly=true"
     $probe = Invoke-OneCGet -Url $probeUrl -Credential $credential
     if ($null -eq $probe.PSObject.Properties["value"] -and $null -eq $probe.PSObject.Properties["d"]) {
         throw "1C returned an unexpected test response."
     }
-    Send-RevoraMetadata -Config $Config | Out-Null
-    Write-ConnectorLog -Message "Connection test passed: OData metadata and first allowlisted entity are readable."
+    Send-RevoraMetadata -Config $Config -Entities $inventory | Out-Null
+    Write-ConnectorLog -Message "Connection test passed: OData metadata and all published scalar entities are discoverable."
 }
 
 function Install-ConnectorTask {
@@ -658,6 +775,13 @@ function Invoke-ConnectorSync {
         }
 
         $startedUtc = [datetime]::UtcNow
+        $credential = [pscredential]::new($Config.OneCUsername, $Config.OneCPassword)
+        $inventory = @(Get-OneCMetadataInventory -BaseUrl $Config.OneCBaseUrl -Credential $credential)
+        $entityDefinitions = @(Get-MetadataEntityDefinitions -Entities $inventory)
+        if ($entityDefinitions.Count -eq 0) { throw "No readable scalar OData entities were discovered." }
+        $runtimeEntities = @($entityDefinitions | ForEach-Object { $_.entity })
+        Send-RevoraMetadata -Config $Config -Entities $inventory | Out-Null
+        Write-ConnectorLog -Message "Dynamic OData inventory enabled: entities=$($runtimeEntities.Count)."
         $lastSuccessful = Read-LastSuccessfulSync
         $changedSince = $null
         $historyDaysProperty = $Config.PSObject.Properties["HistoryDays"]
@@ -680,7 +804,6 @@ function Invoke-ConnectorSync {
             Write-ConnectorLog -Message "Incremental sync started with a $IncrementalOverlapDays-day overlap."
         }
 
-        $credential = [pscredential]::new($Config.OneCUsername, $Config.OneCPassword)
         $token = ConvertFrom-ProtectedString -Value $Config.ConnectorToken
         $configuredPageSize = if ($Config.PageSize) { [int]$Config.PageSize } else { $PageSize }
         $totalSent = 0
@@ -691,11 +814,11 @@ function Invoke-ConnectorSync {
             if ($ResumeOffset -gt 0 -and -not $ResumeEntity) {
                 throw "-ResumeOffset requires -ResumeEntity."
             }
-            if ($ResumeEntity -and $ResumeEntity -notin @($Config.Entities)) {
+            if ($ResumeEntity -and $ResumeEntity -notin $runtimeEntities) {
                 throw "Resume entity '$ResumeEntity' is not enabled in the connector configuration."
             }
             $waitingForResumeEntity = [bool]$ResumeEntity
-            foreach ($entity in @($Config.Entities)) {
+            foreach ($entity in $runtimeEntities) {
                 if ($waitingForResumeEntity -and $entity -ne $ResumeEntity) { continue }
                 $entitySent = 0
                 $entityInitialSkip = if ($waitingForResumeEntity) { $ResumeOffset } else { 0 }
@@ -713,26 +836,28 @@ function Invoke-ConnectorSync {
                 }
                 else { $changedSince }
                 $waitingForResumeEntity = $false
-                $definition = @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $entity })[0]
-                if ($null -eq $definition) { throw "No field allowlist is defined for $entity." }
+                $definition = @($entityDefinitions | Where-Object { $_.entity -eq $entity })[0]
+                if ($null -eq $definition) { throw "No metadata definition is available for $entity." }
                 # Use the pipeline so every OData page is uploaded immediately.
                 # A regular foreach expression materializes all pages first and
                 # can leave the console silent for a long time during upload.
                 Get-ODataPages -Entity $entity -Credential $credential `
                     -BaseUrl $Config.OneCBaseUrl -ChangedSince $entityChangedSince `
                     -SelectFields $definition.select -DateField $definition.date_field `
+                    -AvailableFields @($definition.fields) `
                     -StaticFilter $definition.static_filter -ConfiguredPageSize $configuredPageSize `
                     -InitialSkip $entityInitialSkip |
                 ForEach-Object {
                     $page = $_
-                    $records = @(Protect-OneCRecords -Records @($page.Records) -PhoneField $definition.protect_phone)
-                    # Patient normalization is intentionally more expensive than
-                    # raw register ingestion. Smaller upload chunks stay below
-                    # proxy/request timeouts while retaining OData page size.
-                    $uploadBatchSize = if ($entity -eq $CounterpartyEntity) { 50 } else { $records.Count }
-                    for ($batchStart = 0; $batchStart -lt $records.Count; $batchStart += $uploadBatchSize) {
-                        $batchEnd = [Math]::Min($batchStart + $uploadBatchSize - 1, $records.Count - 1)
-                        $batch = @($records[$batchStart..$batchEnd])
+                    $records = @(Protect-OneCRecords -Records @($page.Records) -PhoneFields @($definition.protect_phone))
+                    $records = @(Remove-OneCBinaryFields -Records $records -BinaryFields @($definition.binary_fields))
+                    # Wide dynamically discovered objects can be much larger
+                    # than the original fixed field subset. Split by both row
+                    # count and encoded size to stay below API/proxy limits.
+                    $uploadBatchSize = if ($entity -eq $CounterpartyEntity) { 50 } else { 200 }
+                    Get-RevoraUploadBatches -Records $records -MaxRecords $uploadBatchSize |
+                    ForEach-Object {
+                        $batch = @($_.Records)
                         $result = Send-RevoraBatch -Entity $entity -Records $batch -ApiUrl $Config.RevoraApiUrl -Token $token
                         $entitySent += $batch.Count
                         $totalSent += $batch.Count

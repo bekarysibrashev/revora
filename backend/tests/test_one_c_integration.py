@@ -444,7 +444,75 @@ async def test_connector_can_upload_schema_without_patient_rows() -> None:
     assert len(result.fingerprint) == 64
     assert repository.metadata.entities[0]["name"] == "Catalog_Patients"
     assert "records" not in repository.metadata.entities[0]
-    assert repository.connection.settings["allowed_entities"] == list(SAFE_ONE_C_ENTITIES)
+    assert repository.connection.settings["allowed_entities"] == ["Catalog_Patients"]
+
+
+@pytest.mark.asyncio
+async def test_metadata_declared_entity_and_fields_are_accepted_dynamically() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    service = IntegrationService(repository, FakeOneCWriter())
+    await service.ingest_one_c_metadata(
+        token,
+        OneCMetadataRequest(
+            entities=[
+                {
+                    "name": "InformationRegister_НовыйОтчет",
+                    "entity_type": "StandardODATA.InformationRegister_НовыйОтчет",
+                    "properties": [
+                        {"name": "Period", "type": "Edm.DateTime", "nullable": False},
+                        {"name": "НовыйПоказатель", "type": "Edm.Decimal", "nullable": True},
+                    ],
+                }
+            ]
+        ),
+    )
+
+    result = await service.ingest_one_c_push(
+        token,
+        OneCPushRequest(
+            entity="InformationRegister_НовыйОтчет",
+            records=[{"Period": "2026-07-31T00:00:00", "НовыйПоказатель": 42}],
+        ),
+    )
+
+    assert result.records_stored == 1
+    assert result.records_normalized == 0
+    assert next(iter(repository.raw_records.values())).status == "normalized"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_entity_rejects_field_missing_from_metadata() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    service = IntegrationService(repository, FakeOneCWriter())
+    await service.ingest_one_c_metadata(
+        token,
+        OneCMetadataRequest(
+            entities=[
+                {
+                    "name": "Catalog_Новый",
+                    "entity_type": "StandardODATA.Catalog_Новый",
+                    "properties": [
+                        {"name": "Ref_Key", "type": "Edm.Guid", "nullable": False}
+                    ],
+                }
+            ]
+        ),
+    )
+
+    with pytest.raises(AppError) as error:
+        await service.ingest_one_c_push(
+            token,
+            OneCPushRequest(
+                entity="Catalog_Новый",
+                records=[{"Ref_Key": "row-1", "НесуществующееПоле": 1}],
+            ),
+        )
+
+    assert error.value.code == "ONE_C_FIELDS_NOT_ALLOWED"
 
 
 @pytest.mark.asyncio
