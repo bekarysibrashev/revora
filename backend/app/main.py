@@ -37,6 +37,7 @@ from app.modules.reports.router import router as reports_router
 from app.modules.tenancy.router import router as tenancy_router
 from app.modules.whatsapp.router import router as whatsapp_router
 from app.modules.whatsapp.router import webhook_router as whatsapp_webhook_router
+from app.modules.whatsapp.router import qr_webhook_router as whatsapp_qr_webhook_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -146,6 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(ml_router, prefix=settings.api_v1_prefix)
     application.include_router(whatsapp_router, prefix=settings.api_v1_prefix)
     application.include_router(whatsapp_webhook_router, prefix=settings.api_v1_prefix)
+    application.include_router(whatsapp_qr_webhook_router, prefix=settings.api_v1_prefix)
 
     return application
 

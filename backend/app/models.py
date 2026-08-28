@@ -44,6 +44,7 @@ from app.modules.whatsapp.models import (
     WhatsAppConversation,
     WhatsAppKnowledgeItem,
     WhatsAppMessage,
+    WhatsAppQrSession,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

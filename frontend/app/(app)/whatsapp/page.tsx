@@ -33,8 +33,10 @@ type Simulation = {
   conversation_id: string; state: string; reply: string | null; handoff: boolean;
   handoff_reason: string | null; provider: string; cost_kzt: string;
 };
-type SignupAssets = { waba_id: string; phone_number_id?: string; business_id?: string };
-type FacebookLoginResponse = { authResponse?: { code?: string } };
+type QrStatus = {
+  configured: boolean; state: string; connected: boolean;
+  qr_data_url: string | null; phone: string | null; message: string | null;
+};
 type KnowledgeDraft = {
   id?: string; category: string; title: string; content_ru: string;
   content_kk: string; risk_level: "safe" | "review" | "human_only";
@@ -42,48 +44,6 @@ type KnowledgeDraft = {
 const emptyKnowledge: KnowledgeDraft = {
   category: "FAQ", title: "", content_ru: "", content_kk: "", risk_level: "review",
 };
-
-declare global {
-  interface Window {
-    FB?: {
-      init(options: Record<string, unknown>): void;
-      login(
-        callback: (response: FacebookLoginResponse) => void,
-        options: Record<string, unknown>,
-      ): void;
-    };
-  }
-}
-
-let facebookSdkPromise: Promise<void> | null = null;
-
-function loadFacebookSdk(appId: string) {
-  if (window.FB) {
-    window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version: "v25.0" });
-    return Promise.resolve();
-  }
-  facebookSdkPromise ||= new Promise<void>((resolve, reject) => {
-    const existing = document.getElementById("facebook-jssdk");
-    const finish = () => {
-      if (!window.FB) return reject(new Error("Meta SDK не загрузился"));
-      window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version: "v25.0" });
-      resolve();
-    };
-    if (existing) {
-      existing.addEventListener("load", finish, { once: true });
-      return;
-    }
-    const script = document.createElement("script");
-    script.id = "facebook-jssdk";
-    script.src = "https://connect.facebook.net/en_US/sdk.js";
-    script.async = true;
-    script.defer = true;
-    script.onload = finish;
-    script.onerror = () => reject(new Error("Не удалось загрузить Meta SDK"));
-    document.body.appendChild(script);
-  });
-  return facebookSdkPromise;
-}
 
 const stateLabels: Record<string, string> = {
   bot_active: "ИИ активен",
@@ -107,6 +67,12 @@ export default function WhatsAppPage() {
   const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeDraft>(emptyKnowledge);
   const [knowledgeEditorOpen, setKnowledgeEditorOpen] = useState(false);
   const status = useQuery({ queryKey: ["wa-status"], queryFn: () => api<Status>("/whatsapp/status") });
+  const qrStatus = useQuery({
+    queryKey: ["wa-qr-status"],
+    queryFn: () => api<QrStatus>("/whatsapp/qr/status"),
+    enabled: user?.role === "owner",
+    refetchInterval: 3000,
+  });
   const conversations = useQuery({
     queryKey: ["wa-conversations"],
     queryFn: () => api<{ items: Conversation[] }>("/whatsapp/conversations"),
@@ -186,113 +152,16 @@ export default function WhatsAppPage() {
       ]);
     },
   });
-  const completeSignup = useMutation({
-    mutationFn: (payload: SignupAssets & { code: string }) =>
-      api<{ display_name: string; business_number_masked: string | null }>(
-        "/whatsapp/embedded-signup/complete",
-        { method: "POST", body: JSON.stringify(payload) },
-      ),
-    onSuccess: async (channel) => {
-      setConnectMessage(
-        `Подключено: ${channel.display_name} ${channel.business_number_masked || ""}`,
-      );
-      await refresh();
+  const connectQr = useMutation({
+    mutationFn: () => api<QrStatus>("/whatsapp/qr/connect", { method: "POST" }),
+    onSuccess: async (result) => {
+      setConnectMessage(result.message || "QR-шлюз запущен");
+      await qc.invalidateQueries({ queryKey: ["wa-qr-status"] });
     },
     onError: (error) => {
-      setConnectMessage(error instanceof Error ? error.message : "Подключение не завершено");
+      setConnectMessage(error instanceof Error ? error.message : "QR-шлюз недоступен");
     },
   });
-
-  async function startCoexistence() {
-    const appId = status.data?.meta_app_id;
-    const configId = status.data?.embedded_signup_config_id;
-    if (!appId || !configId || !status.data?.embedded_signup_ready) {
-      setConnectMessage("Сначала добавьте недостающие настройки Meta в Render Secrets.");
-      return;
-    }
-    setConnectMessage("Открываем безопасное окно Meta…");
-    await loadFacebookSdk(appId);
-    let code = "";
-    let assets: SignupAssets | null = null;
-    let completed = false;
-    const cleanup = () => {
-      window.removeEventListener("message", messageListener);
-      window.clearTimeout(timeout);
-    };
-    const finish = () => {
-      if (completed || !code || !assets) return;
-      completed = true;
-      cleanup();
-      completeSignup.mutate({ code, ...assets });
-    };
-    const messageListener = (event: MessageEvent) => {
-      try {
-        const origin = new URL(event.origin);
-        if (
-          origin.protocol !== "https:" ||
-          (origin.hostname !== "facebook.com" &&
-            !origin.hostname.endsWith(".facebook.com"))
-        ) return;
-        const payload =
-          typeof event.data === "string" ? JSON.parse(event.data) : event.data;
-        if (payload?.type !== "WA_EMBEDDED_SIGNUP") return;
-        if (
-          payload.event === "FINISH" ||
-          payload.event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
-        ) {
-          const data = payload.data || {};
-          if (data.waba_id) {
-            assets = {
-              waba_id: String(data.waba_id),
-              phone_number_id: data.phone_number_id
-                ? String(data.phone_number_id)
-                : undefined,
-              business_id: data.business_id ? String(data.business_id) : undefined,
-            };
-            finish();
-          } else {
-            setConnectMessage("Meta завершила подключение, но не вернула WABA ID.");
-            cleanup();
-          }
-        } else if (payload.event === "CANCEL" || payload.event === "ERROR") {
-          setConnectMessage(
-            payload.event === "CANCEL"
-              ? "Подключение отменено — WhatsApp не изменён."
-              : "Meta сообщила об ошибке подключения.",
-          );
-          cleanup();
-        }
-      } catch {
-        // Ignore unrelated window messages.
-      }
-    };
-    window.addEventListener("message", messageListener);
-    const timeout = window.setTimeout(() => {
-      cleanup();
-      setConnectMessage("Время подключения истекло. Можно безопасно попробовать снова.");
-    }, 10 * 60 * 1000);
-    window.FB?.login(
-      (response) => {
-        code = response.authResponse?.code || "";
-        if (!code) {
-          cleanup();
-          setConnectMessage("Meta не выдала одноразовый код. Подключение отменено.");
-          return;
-        }
-        finish();
-      },
-      {
-        config_id: configId,
-        response_type: "code",
-        override_default_response_type: true,
-        extras: {
-          setup: {},
-          featureType: "whatsapp_business_app_onboarding",
-          sessionInfoVersion: "3",
-        },
-      },
-    );
-  }
 
   async function uploadKnowledge(file: File) {
     setImportResult("");
@@ -332,20 +201,27 @@ export default function WhatsAppPage() {
           <section className="panel">
             {user?.role === "owner" && <div className="wa-connect">
               <div>
-                <strong>Подключение существующего WhatsApp Business</strong>
-                <p>Coexistence сохранит приложение на телефоне. После подключения Revora останется в режиме черновиков.</p>
-                {!status.data.embedded_signup_ready && <small>
-                  Не хватает настроек: {status.data.connection_missing.join(", ")}
-                </small>}
-                {connectMessage && <small>{connectMessage}</small>}
+                <strong>Подключение WhatsApp Business через QR</strong>
+                <p>На основном телефоне откройте WhatsApp Business → Связанные устройства → Привязка устройства.</p>
+                <small>{connectMessage || qrStatus.data?.message || "Нажмите кнопку, чтобы получить QR-код."}</small>
+                {qrStatus.data?.connected && <small>Подключён номер: +{qrStatus.data.phone}</small>}
               </div>
-              <button
-                className="primary"
-                disabled={!status.data.embedded_signup_ready || completeSignup.isPending}
-                onClick={() => void startCoexistence()}
-              >
-                {completeSignup.isPending ? "Подключаем…" : "Подключить через Coexistence"}
-              </button>
+              <div className="inline-actions">
+                {qrStatus.data?.qr_data_url && <img
+                  src={qrStatus.data.qr_data_url}
+                  alt="QR-код для подключения WhatsApp Business"
+                  width={260}
+                  height={260}
+                  style={{ background: "white", borderRadius: 12 }}
+                />}
+                {!qrStatus.data?.connected && <button
+                  className="primary"
+                  disabled={connectQr.isPending || qrStatus.data?.configured === false}
+                  onClick={() => connectQr.mutate()}
+                >
+                  {connectQr.isPending ? "Запускаем…" : qrStatus.data?.qr_data_url ? "Обновить QR" : "Получить QR-код"}
+                </button>}
+              </div>
             </div>}
             <div className="tabs">
               <button className={tab === "test" ? "active" : ""} onClick={() => setTab("test")}>Симулятор</button>

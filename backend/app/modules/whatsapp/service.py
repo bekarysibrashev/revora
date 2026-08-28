@@ -86,7 +86,10 @@ class WhatsAppService:
             select(func.count()).select_from(WhatsAppChannel).where(
                 WhatsAppChannel.tenant_id == tenant,
                 WhatsAppChannel.status == "connected",
-                WhatsAppChannel.access_token_ciphertext.is_not(None),
+                (
+                    WhatsAppChannel.access_token_ciphertext.is_not(None)
+                    | (WhatsAppChannel.connection_mode == "qr")
+                ),
             )
         ) or 0
         setup_values = {
@@ -116,10 +119,10 @@ class WhatsAppService:
                 "WHATSAPP_DATA_KEY",
             )
         )
-        configured = bool(
-            connected_channels
-            or self.settings.whatsapp_access_token.get_secret_value()
-        ) and not connection_missing
+        configured = bool(connected_channels) or (
+            bool(self.settings.whatsapp_access_token.get_secret_value())
+            and not connection_missing
+        )
         return WhatsAppStatusResponse(
             configured=configured,
             test_mode=not configured,
@@ -343,6 +346,27 @@ class WhatsAppService:
             )
         )
         await self.session.flush()
+        if conversation.state == "human_active":
+            latest_human_message = await self.session.scalar(
+                select(WhatsAppMessage)
+                .where(
+                    WhatsAppMessage.conversation_id == conversation.id,
+                    WhatsAppMessage.direction == "out",
+                    WhatsAppMessage.sender_kind.in_(("business_app", "human")),
+                )
+                .order_by(WhatsAppMessage.created_at.desc())
+                .limit(1)
+            )
+            pause_until = (
+                latest_human_message.created_at
+                + timedelta(minutes=self.settings.whatsapp_admin_pause_minutes)
+                if latest_human_message
+                else None
+            )
+            if pause_until and now >= pause_until:
+                conversation.state = "bot_active"
+                conversation.assigned_user_id = None
+                conversation.handoff_reason = None
         if conversation.state in {"human_active", "human_requested"}:
             return SimulatorMessageResponse(
                 conversation_id=conversation.id,
@@ -440,6 +464,10 @@ class WhatsAppService:
                 sent_at=occurred_at if direction == "out" else None,
             )
         )
+        if direction == "out" and status not in {"bot_echo", "history"}:
+            conversation.state = "human_active"
+            conversation.assigned_user_id = None
+            conversation.handoff_reason = "Администратор ответил в WhatsApp Business"
         await self.session.flush()
 
     async def takeover(self, user: User, conversation_id: UUID) -> ConversationDetailResponse:
@@ -692,6 +720,30 @@ class WhatsAppService:
     async def _send(
         self, channel: WhatsAppChannel, recipient: str, body: str
     ) -> None:
+        if channel.connection_mode == "qr":
+            gateway_url = self.settings.whatsapp_qr_gateway_url.rstrip("/")
+            gateway_secret = self.settings.whatsapp_qr_gateway_secret.get_secret_value()
+            if not gateway_url or not gateway_secret:
+                raise AppError(
+                    "WHATSAPP_QR_GATEWAY_NOT_CONFIGURED",
+                    "WhatsApp QR gateway is not configured",
+                    503,
+                )
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    response = await client.post(
+                        f"{gateway_url}/send",
+                        headers={"X-Gateway-Secret": gateway_secret},
+                        json={"to": recipient, "text": body},
+                    )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise AppError(
+                    "WHATSAPP_QR_SEND_FAILED",
+                    "WhatsApp QR gateway did not accept the message",
+                    502,
+                ) from exc
+            return
         token = self.settings.whatsapp_access_token.get_secret_value()
         if channel.access_token_ciphertext:
             try:
@@ -751,6 +803,22 @@ class WhatsAppService:
         return await self._ensure_channel(
             tenant_id, phone_number_id, display_name or phone_number_id, status="connected"
         )
+
+    async def ensure_qr_channel(
+        self, tenant_id: UUID, phone: str, display_name: str
+    ) -> WhatsAppChannel:
+        normalized = "".join(character for character in phone if character.isdigit())
+        channel = await self._ensure_channel(
+            tenant_id,
+            f"qr:{normalized}",
+            display_name or f"WhatsApp +{normalized}",
+            status="connected",
+        )
+        channel.connection_mode = "qr"
+        channel.status = "connected"
+        channel.business_number_masked = f"+{normalized}" if normalized else None
+        channel.is_active = True
+        return channel
 
     async def _get_or_create_conversation(
         self, tenant_id: UUID, channel_id: UUID, contact_id: str

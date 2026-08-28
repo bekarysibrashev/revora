@@ -94,3 +94,15 @@ class WhatsAppAIUsage(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Ba
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     estimated_cost_kzt: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=0)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class WhatsAppQrSession(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    """Encrypted Baileys auth snapshot for an ephemeral QR gateway instance."""
+
+    __tablename__ = "whatsapp_qr_sessions"
+    __table_args__ = (UniqueConstraint("tenant_id"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    archive_ciphertext: Mapped[str] = mapped_column(Text)

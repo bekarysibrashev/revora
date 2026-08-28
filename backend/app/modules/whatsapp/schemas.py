@@ -133,3 +133,32 @@ class WhatsAppChannelResponse(BaseModel):
     business_number_masked: str | None
     status: str
     connection_mode: str
+
+
+class WhatsAppQrStatusResponse(BaseModel):
+    configured: bool
+    state: str
+    connected: bool
+    qr_data_url: str | None = None
+    phone: str | None = None
+    message: str | None = None
+
+
+class WhatsAppQrSessionPayload(BaseModel):
+    archive: str = Field(min_length=1, max_length=15_000_000)
+
+
+class WhatsAppQrMessageEvent(BaseModel):
+    id: str = Field(min_length=1, max_length=300)
+    chat_id: str = Field(min_length=3, max_length=150)
+    direction: str = Field(pattern="^(in|out)$")
+    message_type: str = Field(default="text", max_length=30)
+    body: str | None = Field(default=None, max_length=20_000)
+    timestamp: int | None = None
+    history: bool = False
+
+
+class WhatsAppQrEventPayload(BaseModel):
+    phone: str = Field(min_length=3, max_length=100)
+    display_name: str = Field(default="WhatsApp QR", max_length=150)
+    messages: list[WhatsAppQrMessageEvent] = Field(max_length=250)

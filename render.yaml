@@ -120,6 +120,18 @@ services:
         value: "12"
       - key: WHATSAPP_USD_KZT_RATE
         value: "550"
+      - key: WHATSAPP_QR_GATEWAY_URL
+        fromService:
+          type: web
+          name: revora-whatsapp-gateway
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: WHATSAPP_QR_GATEWAY_SECRET
+        fromService:
+          type: web
+          name: revora-whatsapp-gateway
+          envVarKey: WHATSAPP_QR_GATEWAY_SECRET
+      - key: WHATSAPP_ADMIN_PAUSE_MINUTES
+        value: "60"
 
   - type: web
     name: revora-san-web
@@ -129,6 +141,24 @@ services:
     envVars:
       - key: NEXT_PUBLIC_API_URL
         value: https://revora-san-api.onrender.com/api/v1
+
+  - type: web
+    name: revora-whatsapp-gateway
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: whatsapp-gateway
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: REVORA_API_URL
+        fromService:
+          type: web
+          name: revora-san-api
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: WHATSAPP_QR_GATEWAY_SECRET
+        generateValue: true
 
 databases:
   - name: revora-san-db

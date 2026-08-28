@@ -5,6 +5,7 @@ from typing import Annotated, Any
 from urllib.parse import unquote
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import select, text
@@ -30,12 +31,24 @@ from app.modules.whatsapp.schemas import (
     SimulatorMessageResponse,
     WhatsAppStatusResponse,
     WhatsAppChannelResponse,
+    WhatsAppQrEventPayload,
+    WhatsAppQrSessionPayload,
+    WhatsAppQrStatusResponse,
 )
-from app.modules.whatsapp.security import valid_meta_signature
+from app.modules.whatsapp.models import WhatsAppQrSession
+from app.modules.whatsapp.security import (
+    WhatsAppDataProtectionError,
+    decrypt_contact,
+    encrypt_contact,
+    valid_meta_signature,
+)
 from app.modules.whatsapp.service import WhatsAppService
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 webhook_router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp-webhook"])
+qr_webhook_router = APIRouter(
+    prefix="/webhooks/whatsapp-qr", tags=["whatsapp-qr-webhook"]
+)
 Session = Annotated[AsyncSession, Depends(get_db_session)]
 RuntimeSettings = Annotated[Settings, Depends(get_settings)]
 
@@ -59,11 +72,81 @@ def _message_body(message: dict[str, Any]) -> str | None:
     return f"[{message_type}]"
 
 
+def _require_qr_gateway(request: Request, settings: Settings) -> None:
+    expected = settings.whatsapp_qr_gateway_secret.get_secret_value()
+    supplied = request.headers.get("x-gateway-secret", "")
+    if not expected or not supplied or not hmac.compare_digest(expected, supplied):
+        raise AppError("WHATSAPP_QR_GATEWAY_UNAUTHORIZED", "Invalid gateway secret", 401)
+
+
+async def _qr_tenant(session: AsyncSession, settings: Settings) -> Tenant:
+    tenant = await session.scalar(
+        select(Tenant).where(
+            Tenant.slug == settings.whatsapp_tenant_slug,
+            Tenant.is_active.is_(True),
+        )
+    )
+    if tenant is None:
+        raise AppError("WHATSAPP_TENANT_NOT_FOUND", "WhatsApp tenant is not configured", 503)
+    await session.execute(
+        text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+        {"tenant_id": str(tenant.id)},
+    )
+    return tenant
+
+
 @router.get("/status", response_model=WhatsAppStatusResponse)
 async def status(
     user: CurrentUser, session: Session, settings: RuntimeSettings
 ) -> WhatsAppStatusResponse:
     return await WhatsAppService(session, settings).status(user)
+
+
+async def _qr_gateway_request(
+    settings: Settings, method: str, path: str
+) -> WhatsAppQrStatusResponse:
+    url = settings.whatsapp_qr_gateway_url.rstrip("/")
+    secret = settings.whatsapp_qr_gateway_secret.get_secret_value()
+    if not url or not secret:
+        return WhatsAppQrStatusResponse(
+            configured=False,
+            state="not_configured",
+            connected=False,
+            message="QR-шлюз ещё не развернут",
+        )
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.request(
+                method,
+                f"{url}{path}",
+                headers={"X-Gateway-Secret": secret},
+            )
+        response.raise_for_status()
+        return WhatsAppQrStatusResponse(configured=True, **response.json())
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise AppError(
+            "WHATSAPP_QR_GATEWAY_UNAVAILABLE",
+            "QR-шлюз WhatsApp пока недоступен",
+            503,
+        ) from exc
+
+
+@router.get("/qr/status", response_model=WhatsAppQrStatusResponse)
+async def qr_status(
+    user: CurrentUser, settings: RuntimeSettings
+) -> WhatsAppQrStatusResponse:
+    if user.role.value != "owner":
+        raise AppError("FORBIDDEN", "Only the owner can connect WhatsApp", 403)
+    return await _qr_gateway_request(settings, "GET", "/status")
+
+
+@router.post("/qr/connect", response_model=WhatsAppQrStatusResponse)
+async def qr_connect(
+    user: CurrentUser, settings: RuntimeSettings
+) -> WhatsAppQrStatusResponse:
+    if user.role.value != "owner":
+        raise AppError("FORBIDDEN", "Only the owner can connect WhatsApp", 403)
+    return await _qr_gateway_request(settings, "POST", "/connect")
 
 
 @router.post(
@@ -329,3 +412,96 @@ async def receive_webhook(
                             status=history_status,
                         )
     return {"status": "ok"}
+
+
+@qr_webhook_router.get("/session")
+async def get_qr_session(
+    request: Request, session: Session, settings: RuntimeSettings
+) -> dict[str, str | None]:
+    _require_qr_gateway(request, settings)
+    tenant = await _qr_tenant(session, settings)
+    item = await session.scalar(
+        select(WhatsAppQrSession).where(WhatsAppQrSession.tenant_id == tenant.id)
+    )
+    if item is None:
+        return {"archive": None}
+    try:
+        archive = decrypt_contact(
+            item.archive_ciphertext,
+            settings.whatsapp_data_key.get_secret_value(),
+        )
+    except WhatsAppDataProtectionError as exc:
+        raise AppError("WHATSAPP_QR_SESSION_INVALID", str(exc), 503) from exc
+    return {"archive": archive}
+
+
+@qr_webhook_router.put("/session")
+async def put_qr_session(
+    payload: WhatsAppQrSessionPayload,
+    request: Request,
+    session: Session,
+    settings: RuntimeSettings,
+) -> dict[str, str]:
+    _require_qr_gateway(request, settings)
+    tenant = await _qr_tenant(session, settings)
+    try:
+        ciphertext = encrypt_contact(
+            payload.archive,
+            settings.whatsapp_data_key.get_secret_value(),
+        )
+    except WhatsAppDataProtectionError as exc:
+        raise AppError("WHATSAPP_QR_SESSION_KEY_MISSING", str(exc), 503) from exc
+    item = await session.scalar(
+        select(WhatsAppQrSession).where(WhatsAppQrSession.tenant_id == tenant.id)
+    )
+    if item is None:
+        item = WhatsAppQrSession(tenant_id=tenant.id, archive_ciphertext=ciphertext)
+        session.add(item)
+    else:
+        item.archive_ciphertext = ciphertext
+    await session.flush()
+    return {"status": "saved"}
+
+
+@qr_webhook_router.post("/events")
+async def receive_qr_events(
+    payload: WhatsAppQrEventPayload,
+    request: Request,
+    session: Session,
+    settings: RuntimeSettings,
+) -> dict[str, int]:
+    _require_qr_gateway(request, settings)
+    tenant = await _qr_tenant(session, settings)
+    service = WhatsAppService(session, settings)
+    channel = await service.ensure_qr_channel(
+        tenant.id, payload.phone, payload.display_name
+    )
+    channel.last_webhook_at = datetime.now(UTC)
+    processed = 0
+    for message in payload.messages:
+        occurred_at = _meta_timestamp(message.timestamp)
+        body = message.body or f"[{message.message_type}]"
+        if message.direction == "in" and not message.history:
+            await service.process_incoming(
+                tenant_id=tenant.id,
+                channel=channel,
+                contact_id=message.chat_id,
+                external_message_id=f"qr:{message.id}",
+                body=body,
+                simulated=False,
+                provider_timestamp=occurred_at,
+            )
+        else:
+            await service.store_synced_message(
+                tenant_id=tenant.id,
+                channel=channel,
+                contact_id=message.chat_id,
+                external_message_id=f"qr:{message.id}",
+                direction=message.direction,
+                message_type=message.message_type,
+                body=body,
+                provider_timestamp=occurred_at,
+                status="history" if message.history else "synced",
+            )
+        processed += 1
+    return {"processed": processed}

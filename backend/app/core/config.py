@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     whatsapp_monthly_budget_kzt: int = Field(default=10_000, ge=0, le=1_000_000)
     whatsapp_max_context_messages: int = Field(default=12, ge=2, le=30)
     whatsapp_usd_kzt_rate: Decimal = Field(default=550, gt=0, le=5000)
+    # Unofficial linked-device gateway used by the zero-subscription QR pilot.
+    # The shared secret authenticates only server-to-server traffic.
+    whatsapp_qr_gateway_url: str = ""
+    whatsapp_qr_gateway_secret: SecretStr = SecretStr("")
+    whatsapp_admin_pause_minutes: int = Field(default=60, ge=5, le=1440)
 
     # Отдельный секрет для /platform/* (создание новых клиник) — не JWT, не
     # per-tenant роль. Видит только оператор платформы. Та же логика защиты
