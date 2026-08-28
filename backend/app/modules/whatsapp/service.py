@@ -313,7 +313,9 @@ class WhatsAppService:
                 cost_kzt=Decimal("0"),
             )
         if not simulated:
-            await ContactRegistry(ContactRepository(self.session)).register_inbound(
+            await ContactRegistry(
+                ContactRepository(self.session), self._data_secret()
+            ).register_inbound(
                 tenant_id=tenant_id,
                 phone=contact_id,
                 source="whatsapp",
@@ -404,7 +406,9 @@ class WhatsAppService:
         if duplicate:
             return
         if direction == "in":
-            await ContactRegistry(ContactRepository(self.session)).register_inbound(
+            await ContactRegistry(
+                ContactRepository(self.session), self._data_secret()
+            ).register_inbound(
                 tenant_id=tenant_id,
                 phone=contact_id,
                 source="whatsapp",

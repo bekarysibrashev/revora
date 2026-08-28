@@ -17,6 +17,7 @@ type NavGroup = { label: string; mark: string; items: NavItem[] };
 
 const coreItems: NavItem[] = [
   { href: "/dashboard", label: "Обзор", mark: "О", roles: ["owner", "manager", "administrator"] },
+  { href: "/contacts", label: "Новые обращения", mark: "НО", roles: ["owner", "manager", "administrator"] },
   { href: "/sales", label: "Продажи", mark: "С", roles: ["owner", "manager", "administrator", "sales_manager"] },
   { href: "/doctors", label: "Врачи", mark: "В", roles: ["owner", "manager", "administrator"] },
   { href: "/marketing", label: "Маркетинг", mark: "М", roles: ["owner", "manager"] },

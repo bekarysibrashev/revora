@@ -4,6 +4,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db_session
+from app.core.config import Settings, get_settings
 from app.modules.dashboard.service import DashboardService
 from app.modules.contacts.repository import ContactRepository
 from app.modules.contacts.service import ContactService
@@ -21,13 +22,15 @@ from app.modules.sales.service import SalesService
 SessionDependency = Annotated[AsyncSession, Depends(get_db_session)]
 
 
-def get_dashboard_service(session: SessionDependency) -> DashboardService:
+def get_dashboard_service(
+    session: SessionDependency, settings: Annotated[Settings, Depends(get_settings)]
+) -> DashboardService:
     return DashboardService(
         finance=FinanceService(FinanceRepository(session)),
         sales=SalesService(SalesRepository(session)),
         doctors=DoctorsService(DoctorsRepository(session)),
         marketing=MarketingService(MarketingRepository(session)),
-        contacts=ContactService(ContactRepository(session)),
+        contacts=ContactService(ContactRepository(session), settings),
     )
 
 

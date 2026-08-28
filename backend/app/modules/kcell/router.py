@@ -80,7 +80,9 @@ async def receive_kcell_callback(
         started_at = _parse_start(str(values["start"]))
         direction = str(values["type"])
         if direction.casefold() in {"in", "incoming", "inbound", "входящий"}:
-            await ContactRegistry(ContactRepository(session)).register_inbound(
+            await ContactRegistry(
+                ContactRepository(session), settings.whatsapp_data_key.get_secret_value()
+            ).register_inbound(
                 tenant_id=tenant.id,
                 phone=str(values["phone"]),
                 source="kcell",

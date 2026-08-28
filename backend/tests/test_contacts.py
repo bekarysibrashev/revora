@@ -5,7 +5,9 @@ from uuid import uuid4
 import pytest
 
 from app.core.security import normalize_phone_e164, phone_hash, phone_hash_candidates
-from app.modules.contacts.service import ContactRegistry
+from app.core.config import Settings
+from app.modules.contacts.service import ContactRegistry, ContactService
+from app.modules.whatsapp.security import decrypt_contact
 
 
 def test_kazakhstan_phone_formats_share_one_hash() -> None:
@@ -100,3 +102,54 @@ async def test_registry_recovers_first_contact_from_legacy_history() -> None:
     assert item is not None
     assert item.first_inbound_at == prior
     assert item.first_inbound_source == "whatsapp"
+
+
+@pytest.mark.asyncio
+async def test_registry_encrypts_full_phone_for_authorized_list() -> None:
+    secret = "contact-list-test-secret-long-enough"
+    registry = ContactRegistry(FakeContactRepository(), secret)
+
+    item = await registry.register_inbound(
+        tenant_id=uuid4(),
+        phone="8 701 234 56 78",
+        source="kcell",
+        occurred_at=datetime.now(UTC),
+    )
+
+    assert item is not None
+    assert item.phone_ciphertext != "+77012345678"
+    assert decrypt_contact(item.phone_ciphertext, secret) == "+77012345678"
+
+
+class FakeHistoryRepository(FakeContactRepository):
+    def __init__(self, occurred_at: datetime) -> None:
+        super().__init__()
+        self.occurred_at = occurred_at
+
+    async def historical_kcell_inbounds(self, tenant_id, date_from, date_to):
+        return [({"phone": "8 (701) 234-56-78"}, self.occurred_at)]
+
+    async def historical_whatsapp_inbounds(self, tenant_id, date_from, date_to):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_history_materialization_restores_full_kcell_phone() -> None:
+    secret = "historical-contact-secret-long-enough"
+    repository = FakeHistoryRepository(datetime(2026, 8, 1, 8, tzinfo=UTC))
+    service = ContactService(
+        repository,
+        Settings(whatsapp_data_key=secret),
+    )
+    tenant_id = uuid4()
+
+    await service._materialize_history(
+        tenant_id,
+        datetime(2026, 8, 1, tzinfo=UTC).date(),
+        datetime(2026, 8, 28, tzinfo=UTC).date(),
+    )
+
+    item = repository.items[(tenant_id, phone_hash("+77012345678"))]
+    assert item.phone_masked is None
+    assert decrypt_contact(item.phone_ciphertext, secret) == "+77012345678"
+    assert item.first_inbound_source == "kcell"

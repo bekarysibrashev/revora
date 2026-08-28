@@ -109,3 +109,12 @@
 @media(max-width:800px){.date-filter-wrap{align-items:stretch;flex-direction:column}.ceo-hero{grid-template-columns:1fr}.ceo-kpi-grid{grid-template-columns:1fr 1fr}.call-filters.compact{grid-template-columns:1fr}.coming-roadmap{grid-template-columns:1fr}.marketing-chart .recharts-yAxis{display:none}}
 @media(max-width:520px){.ceo-kpi-grid{grid-template-columns:1fr}.ceo-hero-stats{grid-template-columns:1fr}.date-presets{width:100%}.date-presets button{flex:1}.ds-coming-soon{padding:30px 18px}}
 .official-reports-table{margin-top:18px}
+.contact-metrics{margin-bottom:18px}
+.contact-list-actions{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:18px;padding:14px;border-radius:10px;background:var(--canvas)}
+.contact-list-actions label{display:grid;gap:5px;min-width:190px;color:var(--muted);font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.04em}
+.contact-list-actions select{padding:9px 10px;font-size:11px;text-transform:none}
+.contact-source,.contact-new-status{display:inline-flex;padding:5px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}
+.contact-source.kcell{background:#e7edf7;color:#355f93}
+.contact-source.whatsapp{background:#e4f2e9;color:#216643}
+.contact-new-status{background:#f7eedc;color:#8a5b11}
+@media(max-width:620px){.contact-list-actions{align-items:stretch;flex-direction:column}.contact-list-actions label,.contact-list-actions button{width:100%}}

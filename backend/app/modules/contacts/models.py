@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,7 @@ class ContactIdentity(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Ba
     )
     phone_hash: Mapped[str] = mapped_column(String(64), index=True)
     phone_masked: Mapped[str | None] = mapped_column(String(30))
+    phone_ciphertext: Mapped[str | None] = mapped_column(Text)
     first_inbound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     first_inbound_source: Mapped[str] = mapped_column(String(30), index=True)
     last_inbound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

@@ -1,12 +1,18 @@
 from datetime import date, datetime
+from uuid import UUID
 
 from pydantic import BaseModel
 
 
 class NewContactItem(BaseModel):
-    phone_masked: str | None
+    id: UUID
+    phone_number: str | None
     first_contact_at: datetime
     source: str
+    last_contact_at: datetime
+    inbound_count: int
+    call_count: int
+    message_count: int
 
 
 class NewContactSummary(BaseModel):
@@ -22,3 +28,6 @@ class NewContactSummary(BaseModel):
 class NewContactListResponse(BaseModel):
     summary: NewContactSummary
     items: list[NewContactItem]
+    page: int
+    page_size: int
+    total_pages: int
