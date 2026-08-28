@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     groq_base_url: str = "https://api.groq.com/openai/v1"
     call_transcription_model: str = "whisper-large-v3-turbo"
     call_analysis_model: str = "openai/gpt-oss-20b"
-    call_min_duration_seconds: int = Field(default=7, ge=1, le=60)
+    call_min_duration_seconds: int = Field(default=10, ge=1, le=60)
     call_max_audio_bytes: int = Field(default=25_000_000, ge=1_000_000, le=100_000_000)
     call_analysis_timeout_seconds: int = Field(default=120, ge=15, le=300)
     call_analysis_max_attempts: int = Field(default=3, ge=1, le=10)
@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     whatsapp_qr_gateway_url: str = ""
     whatsapp_qr_gateway_secret: SecretStr = SecretStr("")
     whatsapp_admin_pause_minutes: int = Field(default=60, ge=5, le=1440)
+
+    # Telegram staff bot. The token is configured only in the bot process.
+    telegram_bot_token: SecretStr = SecretStr("")
+    telegram_poll_timeout_seconds: int = Field(default=25, ge=5, le=50)
 
     # Отдельный секрет для /platform/* (создание новых клиник) — не JWT, не
     # per-tenant роль. Видит только оператор платформы. Та же логика защиты

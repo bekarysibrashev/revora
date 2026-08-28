@@ -35,6 +35,7 @@ from app.modules.marketing.embedded_worker import EmbeddedMetaSyncWorker
 from app.modules.sales.router import router as sales_router
 from app.modules.reports.router import router as reports_router
 from app.modules.tenancy.router import router as tenancy_router
+from app.modules.telegram.router import router as telegram_router
 from app.modules.whatsapp.router import router as whatsapp_router
 from app.modules.whatsapp.router import webhook_router as whatsapp_webhook_router
 from app.modules.whatsapp.router import qr_webhook_router as whatsapp_qr_webhook_router
@@ -130,6 +131,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application.include_router(auth_router, prefix=settings.api_v1_prefix)
     application.include_router(tenancy_router, prefix=settings.api_v1_prefix)
+    application.include_router(telegram_router, prefix=settings.api_v1_prefix)
     application.include_router(admin_router, prefix=settings.api_v1_prefix)
     application.include_router(analytics_router, prefix=settings.api_v1_prefix)
     application.include_router(integrations_router, prefix=settings.api_v1_prefix)

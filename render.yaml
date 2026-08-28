@@ -83,7 +83,7 @@ services:
       - key: CALL_ANALYSIS_MODEL
         value: openai/gpt-oss-20b
       - key: CALL_MIN_DURATION_SECONDS
-        value: "7"
+        value: "10"
       - key: CALL_MAX_AUDIO_BYTES
         value: "25000000"
       - key: CALL_ANALYSIS_TIMEOUT_SECONDS
@@ -132,6 +132,34 @@ services:
           envVarKey: WHATSAPP_QR_GATEWAY_SECRET
       - key: WHATSAPP_ADMIN_PAUSE_MINUTES
         value: "60"
+
+  - type: worker
+    name: revora-san-telegram
+    runtime: python
+    plan: starter
+    region: frankfurt
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.telegram_worker
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: revora-san-db
+          property: connectionString
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: MINIO_SECRET_KEY
+        generateValue: true
+      - key: PLATFORM_ADMIN_TOKEN
+        generateValue: true
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_POLL_TIMEOUT_SECONDS
+        value: "25"
 
   - type: web
     name: revora-san-web
