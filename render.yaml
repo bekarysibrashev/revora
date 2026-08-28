@@ -33,7 +33,7 @@ services:
       - key: MINIO_SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://revora-san-web.onrender.com
+        value: https://revora-san-web-k0sa.onrender.com
       - key: INITIAL_OWNER_EMAIL
         sync: false
       - key: INITIAL_OWNER_PASSWORD
@@ -168,7 +168,7 @@ services:
     staticPublishPath: frontend/out
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        value: https://revora-san-api.onrender.com/api/v1
+        value: https://revora-san-api-0sj5.onrender.com/api/v1
 
   - type: web
     name: revora-whatsapp-gateway
