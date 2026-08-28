@@ -517,9 +517,28 @@ function Send-RevoraBatch {
     $body = [Text.Encoding]::UTF8.GetBytes($json)
 
     return Invoke-WithRetry -Description "Revora upload" -Operation {
-        Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/push" -MaximumRedirection 0 -TimeoutSec 300 `
-            -Headers @{ Authorization = "Bearer $Token" } `
-            -ContentType "application/json; charset=utf-8" -Body $body
+        try {
+            Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/push" -MaximumRedirection 0 -TimeoutSec 300 `
+                -Headers @{ Authorization = "Bearer $Token" } `
+                -ContentType "application/json; charset=utf-8" -Body $body
+        }
+        catch {
+            $responseBody = $null
+            if ($null -ne $_.Exception.Response) {
+                try {
+                    $stream = $_.Exception.Response.GetResponseStream()
+                    if ($null -ne $stream) {
+                        $reader = New-Object System.IO.StreamReader($stream)
+                        $responseBody = $reader.ReadToEnd()
+                        $reader.Dispose()
+                    }
+                } catch { }
+            }
+            if ($responseBody) {
+                throw "Revora rejected entity '$Entity' ($($Records.Count) records): $responseBody"
+            }
+            throw
+        }
     }
 }
 
