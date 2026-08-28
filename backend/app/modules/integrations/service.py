@@ -285,6 +285,11 @@ class IntegrationService:
             )
 
         approved_fields = set(approved_fields)
+        # PhoneHash is produced locally by the connector after it removes raw
+        # phone columns.  It is intentionally not part of 1C $metadata, so it
+        # must be accepted alongside the metadata-derived allowlist.
+        if any("PhoneHash" in record for record in payload.records):
+            approved_fields.add("PhoneHash")
         if "PhoneHash" in SAFE_ONE_C_FIELDS.get(payload.entity, frozenset()):
             # The connector replaces raw phone-like fields with a one-way hash
             # locally for patient/lead objects that Revora already recognizes.
