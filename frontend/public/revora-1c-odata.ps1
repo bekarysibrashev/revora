@@ -597,7 +597,22 @@ function Get-MetadataEntityDefinitions {
     param([Parameter(Mandatory = $true)][object[]]$Entities)
 
     $definitions = @()
-    $dateCandidates = @("Period", "Date", "Дата", "ДатаОперации", "ДатаСоздания", "ДатаНачала")
+    # Keep the script body ASCII-only for Windows PowerShell 5.1, which reads
+    # UTF-8 files without a BOM using the legacy Windows code page.
+    $dateCandidateBase64 = @(
+        "0JTQsNGC0LA=",
+        "0JTQsNGC0LDQntC/0LXRgNCw0YbQuNC4",
+        "0JTQsNGC0LDQodC+0LfQtNCw0L3QuNGP",
+        "0JTQsNGC0LDQndCw0YfQsNC70LA="
+    )
+    $dateCandidates = @("Period", "Date") + @(
+        $dateCandidateBase64 | ForEach-Object {
+            [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_))
+        }
+    )
+    $phoneWord = [Text.Encoding]::UTF8.GetString(
+        [Convert]::FromBase64String("0YLQtdC70LXRhNC+0L0=")
+    )
     foreach ($item in @($Entities)) {
         $name = [string]$item.name
         $fields = @($item.properties | ForEach-Object { [string]$_.name } | Where-Object { $_ })
@@ -614,7 +629,11 @@ function Get-MetadataEntityDefinitions {
             }
         }
         $protectPhone = if ($null -ne $known -and $known.protect_phone) {
-            @($fields | Where-Object { $_ -eq [string]$known.protect_phone -or $_ -match "(?i)(телефон|phone)" })
+            @($fields | Where-Object {
+                $_ -eq [string]$known.protect_phone -or
+                $_.IndexOf($phoneWord, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                $_ -match "(?i)phone"
+            })
         }
         else { @() }
         $binaryFields = @(
