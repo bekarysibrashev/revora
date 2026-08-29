@@ -12,6 +12,7 @@ from app.modules.telegram.models import TelegramReportCadence, TelegramTaskPrior
 class InvitationCreateRequest(BaseModel):
     role: UserRole
     branch_id: UUID | None = None
+    linked_user_id: UUID | None = None
     expires_in_hours: int = Field(default=24, ge=1, le=168)
     max_uses: int = Field(default=1, ge=1, le=20)
 
@@ -22,6 +23,7 @@ class InvitationResponse(BaseModel):
     code_hint: str
     role: UserRole
     branch_id: UUID | None
+    linked_user_id: UUID | None
     expires_at: datetime
     max_uses: int
 
@@ -31,6 +33,7 @@ class EmployeeResponse(BaseModel):
 
     id: UUID
     branch_id: UUID | None
+    linked_user_id: UUID | None
     role: UserRole
     telegram_user_id: int
     username: str | None
@@ -49,6 +52,7 @@ class EmployeeUpdateRequest(BaseModel):
     is_active: bool | None = None
     role: UserRole | None = None
     branch_id: UUID | None = None
+    linked_user_id: UUID | None = None
 
     @model_validator(mode="after")
     def require_changes(self) -> "EmployeeUpdateRequest":

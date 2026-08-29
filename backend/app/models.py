@@ -39,6 +39,7 @@ from app.modules.ml.models import MLDatasetSnapshot, MLExperiment, MLModelVersio
 from app.modules.reports.models import OfficialReportImport, OfficialReportMetric
 from app.modules.tenancy.models import Branch, Tenant
 from app.modules.telegram.models import (
+    TelegramAgentTaskDraft,
     TelegramEmployee,
     TelegramEmployeeRoute,
     TelegramInvitation,

@@ -33,6 +33,16 @@ class TelegramService:
         self._validate_role_branch(payload.role, payload.branch_id)
         if payload.branch_id and not await self.repository.branch_exists(actor.tenant_id, payload.branch_id):
             raise AppError("BRANCH_NOT_FOUND", "Branch not found", 404)
+        await self._validate_linked_user(
+            actor.tenant_id, payload.role, payload.linked_user_id, payload.branch_id,
+            required_for_leader=True
+        )
+        if payload.linked_user_id and payload.max_uses != 1:
+            raise AppError(
+                "LINKED_INVITATION_SINGLE_USE",
+                "An invitation linked to a Revora user must be single-use",
+                422,
+            )
 
         code = f"RV-{secrets.token_urlsafe(18)}"
         code_hash = sha256(code.encode("utf-8")).hexdigest()
@@ -42,6 +52,7 @@ class TelegramService:
             code_hint=code[-6:],
             role=payload.role,
             branch_id=payload.branch_id,
+            linked_user_id=payload.linked_user_id,
             created_by_user_id=actor.id,
             expires_at=datetime.now(UTC) + timedelta(hours=payload.expires_in_hours),
             max_uses=payload.max_uses,
@@ -52,7 +63,11 @@ class TelegramService:
             action="telegram.invitation.created",
             entity_type="telegram_invitation",
             entity_id=invitation.id,
-            changes={"role": payload.role.value, "branch_id": str(payload.branch_id) if payload.branch_id else None},
+            changes={
+                "role": payload.role.value,
+                "branch_id": str(payload.branch_id) if payload.branch_id else None,
+                "linked_user_id": str(payload.linked_user_id) if payload.linked_user_id else None,
+            },
         )
         return InvitationResponse(
             id=invitation.id,
@@ -60,6 +75,7 @@ class TelegramService:
             code_hint=invitation.code_hint,
             role=invitation.role,
             branch_id=invitation.branch_id,
+            linked_user_id=invitation.linked_user_id,
             expires_at=invitation.expires_at,
             max_uses=invitation.max_uses,
         )
@@ -93,9 +109,19 @@ class TelegramService:
             raise AppError("TELEGRAM_EMPLOYEE_NOT_FOUND", "Telegram employee not found", 404)
         next_role = payload.role or employee.role
         next_branch = payload.branch_id if "branch_id" in payload.model_fields_set else employee.branch_id
+        next_linked_user = (
+            payload.linked_user_id
+            if "linked_user_id" in payload.model_fields_set
+            else employee.linked_user_id
+        )
         self._validate_role_branch(next_role, next_branch)
         if next_branch and not await self.repository.branch_exists(actor.tenant_id, next_branch):
             raise AppError("BRANCH_NOT_FOUND", "Branch not found", 404)
+        await self._validate_linked_user(
+            actor.tenant_id, next_role, next_linked_user, next_branch,
+            required_for_leader=False,
+            current_employee_id=employee.id,
+        )
         for field, value in payload.model_dump(exclude_unset=True).items():
             setattr(employee, field, value)
         await self.repository.add_audit(
@@ -113,6 +139,9 @@ class TelegramService:
         employee = await self.repository.get_employee(actor.tenant_id, payload.employee_id)
         if employee is None or not employee.is_active:
             raise AppError("TELEGRAM_EMPLOYEE_NOT_FOUND", "Active Telegram employee not found", 404)
+        allowed_branches = {link.branch_id for link in actor.branch_links}
+        if actor.role == UserRole.MANAGER and allowed_branches and employee.branch_id not in allowed_branches:
+            raise AppError("BRANCH_FORBIDDEN", "Employee is outside your branch scope", 403)
         if payload.due_at and payload.due_at <= datetime.now(UTC):
             raise AppError("TASK_DUE_AT_INVALID", "due_at must be in the future", 422)
         task = await self.repository.create_task(
@@ -198,3 +227,47 @@ class TelegramService:
     def _validate_role_branch(role: UserRole, branch_id: UUID | None) -> None:
         if role in {UserRole.ADMINISTRATOR, UserRole.SALES_MANAGER} and branch_id is None:
             raise AppError("BRANCH_REQUIRED", "This role requires a branch", 422)
+
+    async def _validate_linked_user(
+        self,
+        tenant_id: UUID,
+        role: UserRole,
+        linked_user_id: UUID | None,
+        branch_id: UUID | None,
+        *,
+        required_for_leader: bool,
+        current_employee_id: UUID | None = None,
+    ) -> None:
+        if role in {UserRole.OWNER, UserRole.MANAGER} and linked_user_id is None:
+            if required_for_leader:
+                raise AppError(
+                    "REVORA_USER_REQUIRED",
+                    "A leader invitation must be linked to a Revora user",
+                    422,
+                )
+            return
+        if linked_user_id is None:
+            return
+        linked_user = await self.repository.get_user(tenant_id, linked_user_id)
+        if linked_user is None or not linked_user.is_active:
+            raise AppError("REVORA_USER_NOT_FOUND", "Active Revora user not found", 404)
+        if linked_user.role != role:
+            raise AppError(
+                "REVORA_USER_ROLE_MISMATCH",
+                "Telegram role must match the linked Revora user role",
+                422,
+            )
+        linked_branches = {link.branch_id for link in linked_user.branch_links}
+        if linked_branches and role != UserRole.OWNER and branch_id is not None and branch_id not in linked_branches:
+            raise AppError(
+                "BRANCH_FORBIDDEN",
+                "Telegram branch is outside the linked Revora user scope",
+                403,
+            )
+        existing = await self.repository.get_employee_by_linked_user(tenant_id, linked_user_id)
+        if existing is not None and existing.id != current_employee_id:
+            raise AppError(
+                "REVORA_USER_ALREADY_LINKED",
+                "This Revora user is already linked to Telegram",
+                409,
+            )

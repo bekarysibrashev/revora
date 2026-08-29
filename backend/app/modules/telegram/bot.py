@@ -14,8 +14,10 @@ from sqlalchemy import distinct, func, select, text
 
 from app.core.config import Settings
 from app.core.database import AsyncSessionFactory
+from app.core.errors import AppError
 from app.modules.ai.models import AIInsight
 from app.modules.auth.models import UserRole
+from app.modules.telegram.agent import TelegramAgentReply, TelegramAgentService
 from app.modules.telegram.models import (
     TelegramEmployee,
     TelegramEmployeeRoute,
@@ -154,6 +156,15 @@ class TelegramBotStore:
             if invitation.uses >= invitation.max_uses:
                 raise RegistrationError("Лимит активаций приглашения исчерпан.")
 
+            linked_employee = None
+            if invitation.linked_user_id is not None:
+                linked_employee = await session.scalar(
+                    select(TelegramEmployee).where(
+                        TelegramEmployee.tenant_id == route.tenant_id,
+                        TelegramEmployee.linked_user_id == invitation.linked_user_id,
+                    )
+                )
+
             existing_route = await session.get(TelegramEmployeeRoute, telegram_user_id)
             if existing_route is not None:
                 if existing_route.tenant_id != route.tenant_id:
@@ -161,16 +172,28 @@ class TelegramBotStore:
                 employee = await session.get(TelegramEmployee, existing_route.employee_id)
                 if employee is None:
                     raise RegistrationError("Не удалось проверить существующую регистрацию.")
+                if linked_employee is not None and linked_employee.id != employee.id:
+                    raise RegistrationError("Пользователь Revora уже связан с другим Telegram.")
                 employee.telegram_chat_id = telegram_chat_id
+                if invitation.linked_user_id is not None:
+                    employee.linked_user_id = invitation.linked_user_id
+                employee.role = invitation.role
+                employee.branch_id = invitation.branch_id
                 employee.username = username
                 employee.full_name = full_name
                 employee.last_seen_at = now
                 existing_route.telegram_chat_id = telegram_chat_id
+                invitation.uses += 1
                 return employee
+
+            if linked_employee is not None:
+                raise RegistrationError("Пользователь Revora уже связан с другим Telegram.")
 
             employee = TelegramEmployee(
                 tenant_id=route.tenant_id,
                 branch_id=invitation.branch_id,
+                linked_user_id=invitation.linked_user_id,
+                agent_session_id=None,
                 role=invitation.role,
                 telegram_user_id=telegram_user_id,
                 telegram_chat_id=telegram_chat_id,
@@ -447,6 +470,7 @@ class TelegramBotRunner:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
         self.api = TelegramAPI(token, settings.telegram_poll_timeout_seconds)
         self.store = TelegramBotStore()
+        self.agent = TelegramAgentService(settings)
         self.offset: int | None = None
 
     async def run_forever(self) -> None:
@@ -456,6 +480,8 @@ class TelegramBotRunner:
             {
                 "commands": [
                     {"command": "tasks", "description": "Мои активные задания"},
+                    {"command": "agent", "description": "Задать вопрос ИИ-агенту"},
+                    {"command": "new", "description": "Новый диалог с ИИ"},
                     {"command": "me", "description": "Мой профиль и роль"},
                     {"command": "help", "description": "Помощь"},
                 ]
@@ -543,8 +569,38 @@ class TelegramBotRunner:
                 )
         elif command == "/me":
             await self.api.send_message(int(chat["id"]), self._welcome(employee))
+        elif command == "/agent":
+            if argument:
+                await self.api.call("sendChatAction", {"chat_id": int(chat["id"]), "action": "typing"})
+                try:
+                    reply = await self.agent.respond(telegram_user_id, argument)
+                    await self._send_agent_reply(int(chat["id"]), reply)
+                except AppError as exc:
+                    await self.api.send_message(int(chat["id"]), escape(exc.message))
+            else:
+                await self.api.send_message(
+                    int(chat["id"]),
+                    "Напишите вопрос об аналитике клиники или поручение, например:\n"
+                    "<i>Покажи проблемы за вчера</i>\n"
+                    "<i>Поставь Айжан задачу проверить неподтверждённые записи до 17:00</i>",
+                )
+        elif command == "/new":
+            try:
+                await self.agent.reset(telegram_user_id)
+                await self.api.send_message(int(chat["id"]), "Начат новый диалог с ИИ-агентом.")
+            except AppError as exc:
+                await self.api.send_message(int(chat["id"]), escape(exc.message))
+        elif command.startswith("/"):
+            await self.api.send_message(int(chat["id"]), self._help(employee))
+        elif employee.role in {UserRole.OWNER, UserRole.MANAGER}:
+            await self.api.call("sendChatAction", {"chat_id": int(chat["id"]), "action": "typing"})
+            try:
+                reply = await self.agent.respond(telegram_user_id, raw_text)
+                await self._send_agent_reply(int(chat["id"]), reply)
+            except AppError as exc:
+                await self.api.send_message(int(chat["id"]), escape(exc.message))
         else:
-            await self.api.send_message(int(chat["id"]), "Команды: /tasks — задания, /me — мой профиль, /help — помощь.")
+            await self.api.send_message(int(chat["id"]), self._help(employee))
 
     async def _register(self, message: dict, code: str) -> None:
         sender = message["from"]
@@ -568,19 +624,37 @@ class TelegramBotRunner:
         sender = callback.get("from") or {}
         data = str(callback.get("data") or "")
         try:
-            prefix, action, raw_task_id = data.split(":", 2)
-            if prefix != "task" or action not in {"accept", "done"}:
-                raise ValueError
-            task_id = UUID(raw_task_id)
+            prefix, action, raw_id = data.split(":", 2)
+            item_id = UUID(raw_id)
         except ValueError:
             await self.api.answer_callback(str(callback.get("id")), "Неизвестная команда")
             return
-        task = await self.store.transition_task(int(sender.get("id", 0)), task_id, action)
-        if task is None:
-            await self.api.answer_callback(str(callback.get("id")), "Задание недоступно")
-        else:
-            label = "Задание принято" if action == "accept" else "Задание выполнено"
-            await self.api.answer_callback(str(callback.get("id")), label)
+        telegram_user_id = int(sender.get("id", 0))
+        if prefix == "task" and action in {"accept", "done"}:
+            task = await self.store.transition_task(telegram_user_id, item_id, action)
+            if task is None:
+                await self.api.answer_callback(str(callback.get("id")), "Задание недоступно")
+            else:
+                label = "Задание принято" if action == "accept" else "Задание выполнено"
+                await self.api.answer_callback(str(callback.get("id")), label)
+            return
+        if prefix == "agent" and action in {"confirm", "cancel"}:
+            try:
+                if action == "confirm":
+                    task = await self.agent.confirm(telegram_user_id, item_id)
+                    await self.api.answer_callback(str(callback.get("id")), "Задание отправлено")
+                    chat_id = ((callback.get("message") or {}).get("chat") or {}).get("id")
+                    if chat_id:
+                        await self.api.send_message(
+                            int(chat_id), f"✅ Задание <b>{escape(task.title)}</b> поставлено в очередь доставки."
+                        )
+                else:
+                    await self.agent.cancel(telegram_user_id, item_id)
+                    await self.api.answer_callback(str(callback.get("id")), "Черновик отменён")
+            except AppError as exc:
+                await self.api.answer_callback(str(callback.get("id")), exc.message[:180])
+            return
+        await self.api.answer_callback(str(callback.get("id")), "Неизвестная команда")
 
     @staticmethod
     def _welcome(employee: TelegramEmployee) -> str:
@@ -588,8 +662,42 @@ class TelegramBotRunner:
         return (
             f"Вы зарегистрированы как <b>{escape(employee.full_name)}</b>.\n"
             f"Роль: <b>{escape(role)}</b>\n\n"
-            "Команды: /tasks — задания, /me — мой профиль, /help — помощь."
+            + TelegramBotRunner._help(employee)
         )
+
+    @staticmethod
+    def _help(employee: TelegramEmployee) -> str:
+        commands = "Команды: /tasks — задания, /me — мой профиль"
+        if employee.role in {UserRole.OWNER, UserRole.MANAGER}:
+            commands += ", /agent — ИИ-агент, /new — новый диалог"
+        return commands + ", /help — помощь."
+
+    async def _send_agent_reply(self, chat_id: int, reply: TelegramAgentReply) -> None:
+        if reply.draft is None:
+            for start in range(0, len(reply.text), 3600):
+                await self.api.send_message(chat_id, escape(reply.text[start:start + 3600]))
+            return
+        draft = reply.draft
+        priority = PRIORITY_LABELS.get(str(draft.priority), str(draft.priority))
+        due = (
+            draft.due_at.astimezone(UTC).strftime("%d.%m.%Y %H:%M UTC")
+            if draft.due_at else "не указан"
+        )
+        message = (
+            f"<b>Черновик задания</b>\n\n"
+            f"Исполнитель: <b>{escape(reply.assignee_name or '—')}</b>\n"
+            f"Приоритет: <b>{escape(priority)}</b>\n"
+            f"Срок: <b>{escape(due)}</b>\n\n"
+            f"<b>{escape(draft.title)}</b>\n{escape(draft.description)}\n\n"
+            "Ничего ещё не отправлено. Черновик действует 30 минут."
+        )
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "✅ Подтвердить", "callback_data": f"agent:confirm:{draft.id}"},
+                {"text": "❌ Отмена", "callback_data": f"agent:cancel:{draft.id}"},
+            ]]
+        }
+        await self.api.send_message(chat_id, message, keyboard)
 
     @staticmethod
     def _task_text(task) -> str:

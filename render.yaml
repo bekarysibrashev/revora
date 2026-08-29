@@ -160,6 +160,18 @@ services:
         sync: false
       - key: TELEGRAM_POLL_TIMEOUT_SECONDS
         value: "25"
+      - key: ANALYST_AI_PROVIDER
+        value: groq
+      - key: ANALYST_AI_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://api.openai.com/v1
 
   - type: web
     name: revora-san-web

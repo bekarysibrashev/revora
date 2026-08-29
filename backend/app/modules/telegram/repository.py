@@ -5,9 +5,10 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.modules.admin.models import AuditLog
-from app.modules.auth.models import UserRole
+from app.modules.auth.models import User, UserRole
 from app.modules.telegram.models import (
     TelegramEmployee,
     TelegramInvitation,
@@ -59,6 +60,23 @@ class TelegramRepository:
             )
         ) is not None
 
+    async def get_user(self, tenant_id: UUID, user_id: UUID) -> User | None:
+        return await self.session.scalar(
+            select(User)
+            .options(selectinload(User.branch_links))
+            .where(User.tenant_id == tenant_id, User.id == user_id)
+        )
+
+    async def get_employee_by_linked_user(
+        self, tenant_id: UUID, user_id: UUID
+    ) -> TelegramEmployee | None:
+        return await self.session.scalar(
+            select(TelegramEmployee).where(
+                TelegramEmployee.tenant_id == tenant_id,
+                TelegramEmployee.linked_user_id == user_id,
+            )
+        )
+
     async def create_invitation(
         self,
         *,
@@ -67,6 +85,7 @@ class TelegramRepository:
         code_hint: str,
         role: UserRole,
         branch_id: UUID | None,
+        linked_user_id: UUID | None,
         created_by_user_id: UUID,
         expires_at: datetime,
         max_uses: int,
@@ -77,6 +96,7 @@ class TelegramRepository:
             code_hint=code_hint,
             role=role,
             branch_id=branch_id,
+            linked_user_id=linked_user_id,
             created_by_user_id=created_by_user_id,
             expires_at=expires_at,
             max_uses=max_uses,
