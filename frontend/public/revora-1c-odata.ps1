@@ -891,12 +891,10 @@ function Invoke-ConnectorSync {
                 if ($waitingForResumeEntity -and $entity -ne $ResumeEntity) { continue }
                 $entitySent = 0
                 $entityInitialSkip = if ($waitingForResumeEntity) { $ResumeOffset } else { 0 }
-                # A resumed initial import must keep the same unfiltered catalog
-                # that produced the saved offset. Normal future runs use dates.
-                $entityChangedSince = if ($waitingForResumeEntity -and $ResumeOffset -gt 0) {
-                    $null
-                }
-                elseif ($entity -eq $CounterpartyEntity -and ($ForceFull -or $null -eq $lastSuccessful)) {
+                # Resume with the same period filter as the interrupted run;
+                # otherwise the saved offset would point into a different data
+                # set. Catalogs without a date field ignore ChangedSince.
+                $entityChangedSince = if ($entity -eq $CounterpartyEntity -and ($ForceFull -or $null -eq $lastSuccessful)) {
                     # Documents in the selected period can reference patients
                     # created years earlier. A full rebuild therefore needs the
                     # complete patient directory; regular scheduled runs remain
