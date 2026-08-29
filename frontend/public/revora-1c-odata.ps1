@@ -669,6 +669,10 @@ function Get-MetadataEntityDefinitions {
         if (-not $name -or $fields.Count -eq 0) { continue }
 
         $known = @($ApprovedEntityDefinitions | Where-Object { $_.entity -eq $name }) | Select-Object -First 1
+        # Revora uploads only entities used by its verified analytics model.
+        # The full metadata inventory is still sent to the API for diagnostics,
+        # but unrelated 1C objects must not exhaust the clinic database.
+        if ($null -eq $known) { continue }
         $dateField = $null
         if ($null -ne $known -and $known.date_field -and $fields -contains [string]$known.date_field) {
             $dateField = [string]$known.date_field
@@ -686,6 +690,24 @@ function Get-MetadataEntityDefinitions {
             })
         }
         else { @() }
+        $selectedFields = @()
+        if ($known.select) {
+            $selectedFields = @(
+                ([string]$known.select).Split(",") |
+                    ForEach-Object { $_.Trim() } |
+                    Where-Object { $_ -and $fields -contains $_ }
+            )
+        }
+        foreach ($requiredField in @("Ref_Key", "Recorder", "Recorder_Key", "Period", "LineNumber", $dateField)) {
+            if ($requiredField -and $fields -contains $requiredField -and $selectedFields -notcontains $requiredField) {
+                $selectedFields += $requiredField
+            }
+        }
+        foreach ($phoneField in @($protectPhone)) {
+            if ($fields -contains $phoneField -and $selectedFields -notcontains $phoneField) {
+                $selectedFields += $phoneField
+            }
+        }
         $binaryFields = @(
             $item.properties |
                 Where-Object { [string]$_.type -eq "Edm.Binary" } |
@@ -702,9 +724,9 @@ function Get-MetadataEntityDefinitions {
             else { 50 }
         $definitions += [pscustomobject]@{
             entity = $name
-            # Omitting $select makes 1C return every scalar property declared
-            # in metadata and avoids IIS URL-length failures on wide objects.
-            select = $null
+            # Fetch only the verified analytics fields. This keeps the free
+            # PostgreSQL database bounded even when 1C publishes 200+ objects.
+            select = if ($selectedFields.Count -gt 0) { $selectedFields -join "," } else { $null }
             fields = @($fields)
             date_field = $dateField
             static_filter = $staticFilter
