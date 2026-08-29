@@ -305,6 +305,30 @@ async def test_push_stores_allowed_records_and_deduplicates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_push_removes_postgres_unsupported_null_characters() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    service = IntegrationService(repository, FakeOneCWriter())
+
+    result = await service.ingest_one_c_push(
+        token,
+        OneCPushRequest(
+            entity="Catalog_Специализации",
+            records=[{
+                "Ref_Key": "specialty-null-char",
+                "Description": "Ортодонт\x00",
+                "DeletionMark": False,
+            }],
+        ),
+    )
+
+    assert result.records_stored == 1
+    stored = next(iter(repository.raw_records.values()))
+    assert stored.payload["Description"] == "Ортодонт"
+
+
+@pytest.mark.asyncio
 async def test_existing_connector_token_uses_current_server_allowlist() -> None:
     tenant_id, connection_id = uuid4(), uuid4()
     token, digest = issue_connector_token(tenant_id, connection_id)

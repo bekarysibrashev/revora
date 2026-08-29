@@ -81,6 +81,23 @@ from app.modules.integrations.tabular_adapter import InvalidTabularFile, Unsuppo
 
 
 MAPPABLE_ONE_C_ENTITIES = (*MAPPABLE_ONE_C_FINANCE_ENTITIES, *MAPPABLE_OPERATIONAL_ENTITIES)
+
+
+def _sanitize_one_c_json(value: object) -> object:
+    """Remove characters PostgreSQL JSONB cannot store, preserving the data shape."""
+
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [_sanitize_one_c_json(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key).replace("\x00", ""): _sanitize_one_c_json(item)
+            for key, item in value.items()
+        }
+    return value
+
+
 REPROCESSABLE_ONE_C_ENTITIES = (
     REVENUE_ENTITY,
     MONEY_ENTITY,
@@ -252,6 +269,10 @@ class IntegrationService:
         self, connector_token: str, payload: OneCPushRequest
     ) -> OneCPushResponse:
         parts, connection = await self._connector_connection(connector_token)
+        records = [
+            _sanitize_one_c_json(record)
+            for record in payload.records
+        ]
 
         # The latest OData metadata uploaded by the localhost connector is the
         # authoritative dynamic allowlist. This lets a clinic publish new 1C
@@ -288,7 +309,7 @@ class IntegrationService:
         # PhoneHash is produced locally by the connector after it removes raw
         # phone columns.  It is intentionally not part of 1C $metadata, so it
         # must be accepted alongside the metadata-derived allowlist.
-        if any("PhoneHash" in record for record in payload.records):
+        if any("PhoneHash" in record for record in records):
             approved_fields.add("PhoneHash")
         if "PhoneHash" in SAFE_ONE_C_FIELDS.get(payload.entity, frozenset()):
             # The connector replaces raw phone-like fields with a one-way hash
@@ -299,7 +320,7 @@ class IntegrationService:
                 if "телефон" not in field.casefold() and "phone" not in field.casefold()
             }
             approved_fields.add("PhoneHash")
-        for record in payload.records:
+        for record in records:
             unexpected_fields = sorted(set(record) - approved_fields)
             if unexpected_fields:
                 raise AppError(
@@ -309,7 +330,7 @@ class IntegrationService:
                     {"entity": payload.entity, "fields": unexpected_fields[:20]},
                 )
         encoded_size = len(
-            json.dumps(payload.records, ensure_ascii=False, default=str).encode("utf-8")
+            json.dumps(records, ensure_ascii=False, default=str).encode("utf-8")
         )
         if encoded_size > 2 * 1024 * 1024:
             raise AppError("ONE_C_BATCH_TOO_LARGE", "1C batch exceeds 2 MB", 413)
@@ -327,7 +348,7 @@ class IntegrationService:
         branch_code_map = await self.repository.one_c_branch_code_map(
             parts.tenant_id, connection.id
         )
-        for record in payload.records:
+        for record in records:
             raw_record, created = await self.repository.store_raw_record(
                 tenant_id=parts.tenant_id,
                 connection_id=connection.id,
@@ -362,7 +383,7 @@ class IntegrationService:
         await self.repository.finish_sync_run(
             run,
             status="completed",
-            records_read=len(payload.records),
+            records_read=len(records),
             records_written=stored,
         )
         await self.repository.mark_connection_synced(
@@ -372,7 +393,7 @@ class IntegrationService:
             sync_run_id=run.id,
             status="completed",
             entity=payload.entity,
-            records_received=len(payload.records),
+            records_received=len(records),
             records_stored=stored,
             records_duplicate=duplicates,
             records_normalized=normalized,

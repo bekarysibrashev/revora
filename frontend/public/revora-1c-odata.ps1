@@ -488,6 +488,21 @@ function Remove-OneCNavigationFields {
     return @($Records)
 }
 
+function Remove-OneCUnsupportedCharacters {
+    param([object[]]$Records)
+
+    # PostgreSQL JSONB cannot store U+0000.  Some legacy 1C text fields may
+    # contain it, so remove only that unsupported character before upload.
+    foreach ($record in @($Records)) {
+        foreach ($property in @($record.PSObject.Properties)) {
+            if ($property.Value -is [string] -and $property.Value.IndexOf([char]0) -ge 0) {
+                $property.Value = $property.Value.Replace([string][char]0, "")
+            }
+        }
+    }
+    return @($Records)
+}
+
 function Get-RevoraUploadBatches {
     param(
         [Parameter(Mandatory = $true)][object[]]$Records,
@@ -906,6 +921,7 @@ function Invoke-ConnectorSync {
                     $records = @(Protect-OneCRecords -Records @($page.Records) -PhoneFields @($definition.protect_phone))
                     $records = @(Remove-OneCBinaryFields -Records $records -BinaryFields @($definition.binary_fields))
                     $records = @(Remove-OneCNavigationFields -Records $records)
+                    $records = @(Remove-OneCUnsupportedCharacters -Records $records)
                     # Wide dynamically discovered objects can be much larger
                     # than the original fixed field subset. Split by both row
                     # count and encoded size to stay below API/proxy limits.
