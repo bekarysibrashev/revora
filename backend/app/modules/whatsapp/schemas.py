@@ -27,6 +27,7 @@ class ConversationListItem(BaseModel):
     id: UUID
     channel_name: str
     contact_masked: str
+    contact_full: str
     state: str
     language: str
     handoff_reason: str | None

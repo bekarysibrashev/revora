@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 from datetime import UTC, datetime
 from pathlib import Path
@@ -115,15 +116,22 @@ async def _qr_gateway_request(
             message="QR-шлюз ещё не развернут",
         )
     try:
-        # Render's free web services can sleep. Waking the QR gateway can take
-        # 50+ seconds, so the proxy must outwait the cold-start instead of
-        # turning a successful wake-up into a misleading "nothing happened".
-        async with httpx.AsyncClient(timeout=90) as client:
-            response = await client.request(
-                method,
-                f"{url}{path}",
-                headers={"X-Gateway-Secret": secret},
-            )
+        # Render's free web services can sleep and return a transient 502 while
+        # the instance is waking. Retry those gateway responses instead of
+        # turning a successful wake-up into a misleading "unavailable" state.
+        async with httpx.AsyncClient(timeout=30) as client:
+            response: httpx.Response | None = None
+            for attempt in range(4):
+                response = await client.request(
+                    method,
+                    f"{url}{path}",
+                    headers={"X-Gateway-Secret": secret},
+                )
+                if response.status_code not in {502, 503, 504}:
+                    break
+                if attempt < 3:
+                    await asyncio.sleep(2 + attempt * 4)
+            assert response is not None
         response.raise_for_status()
         return WhatsAppQrStatusResponse(configured=True, **response.json())
     except (httpx.HTTPError, ValueError, TypeError) as exc:

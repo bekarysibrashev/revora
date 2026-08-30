@@ -15,7 +15,7 @@ type Status = {
   knowledge_total: number; knowledge_approved: number;
 };
 type Conversation = {
-  id: string; channel_name: string; contact_masked: string; state: string;
+  id: string; channel_name: string; contact_masked: string; contact_full: string; state: string;
   language: string; handoff_reason: string | null; last_message_at: string;
   unread_count: number; assigned_user_id: string | null;
 };
@@ -260,7 +260,7 @@ export default function WhatsAppPage() {
             {tab === "dialogs" && <div className="wa-layout">
               <aside className="wa-dialog-list">
                 {conversations.data?.items.map((item) => <button key={item.id} className={selected === item.id ? "active" : ""} onClick={() => setSelected(item.id)}>
-                  <strong>{item.contact_masked}</strong>
+                  <strong>{item.contact_full}</strong>
                   <small>{item.channel_name} · {stateLabels[item.state] || item.state}</small>
                 </button>)}
                 {!conversations.data?.items.length && <p>Диалогов пока нет.</p>}
@@ -268,7 +268,7 @@ export default function WhatsAppPage() {
               <div className="wa-chat">
                 {!selected && <div className="center-state">Выберите диалог</div>}
                 {detail.data && <>
-                  <header><div><strong>{detail.data.conversation.contact_masked}</strong><small>{stateLabels[detail.data.conversation.state] || detail.data.conversation.state}</small></div>
+                  <header><div><strong>{detail.data.conversation.contact_full}</strong><small>{stateLabels[detail.data.conversation.state] || detail.data.conversation.state}</small></div>
                     {detail.data.conversation.state === "human_active"
                       ? <button onClick={() => transition.mutate("release")}>Вернуть ИИ</button>
                       : <button onClick={() => transition.mutate("takeover")}>Забрать диалог</button>}

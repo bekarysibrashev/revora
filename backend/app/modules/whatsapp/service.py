@@ -221,7 +221,7 @@ class WhatsAppService:
                 .join(WhatsAppChannel, WhatsAppChannel.id == WhatsAppConversation.channel_id)
                 .where(WhatsAppConversation.tenant_id == user.tenant_id)
                 .order_by(WhatsAppConversation.last_message_at.desc())
-                .limit(200)
+                .limit(500)
             )
         ).all()
         return ConversationListResponse(
@@ -923,12 +923,16 @@ class WhatsAppService:
         if user.role != UserRole.OWNER:
             raise AppError("FORBIDDEN", "Only the owner can manage bot knowledge", 403)
 
-    @staticmethod
-    def _conversation(item: WhatsAppConversation, channel_name: str) -> ConversationListItem:
+    def _conversation(self, item: WhatsAppConversation, channel_name: str) -> ConversationListItem:
+        try:
+            contact_full = decrypt_contact(item.contact_ciphertext, self._data_secret())
+        except WhatsAppDataProtectionError:
+            contact_full = item.contact_masked
         return ConversationListItem(
             id=item.id,
             channel_name=channel_name,
             contact_masked=item.contact_masked,
+            contact_full=contact_full,
             state=item.state,
             language=item.language,
             handoff_reason=item.handoff_reason,
