@@ -1,5 +1,6 @@
 """Точка входа FastAPI-приложения Revora."""
 
+import argparse
 from contextlib import asynccontextmanager
 import logging
 from typing import AsyncIterator
@@ -16,6 +17,7 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestIdMiddleware
 from app.core.errors import AppError
 from app.core.database import AsyncSessionFactory
+from app.cli.create_initial_owner import ensure_initial_owner
 from app.modules.admin.router import router as admin_router
 from app.modules.analytics.router import router as analytics_router
 from app.modules.auth.router import router as auth_router
@@ -51,6 +53,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.info("Starting %s in %s", settings.app_name, settings.app_env)
+        owner_email = settings.initial_owner_email.strip()
+        owner_password = settings.initial_owner_password.get_secret_value()
+        if owner_email and owner_password:
+            created = await ensure_initial_owner(
+                argparse.Namespace(
+                    tenant_name=settings.initial_tenant_name,
+                    tenant_slug=settings.initial_tenant_slug,
+                    branch_name=settings.initial_branch_name,
+                    branch_code=settings.initial_branch_code,
+                    extra_branch_name=settings.initial_extra_branch_name,
+                    extra_branch_code=settings.initial_extra_branch_code,
+                    email=owner_email,
+                    full_name=f"Владелец {settings.initial_tenant_name}",
+                    password=owner_password,
+                )
+            )
+            if created:
+                logger.info(
+                    "Initialized empty database for tenant %s",
+                    settings.initial_tenant_slug,
+                )
+        elif settings.app_env == "production":
+            logger.warning(
+                "Initial owner credentials are missing; empty database bootstrap is disabled"
+            )
         call_worker.start()
         meta_sync_worker.start()
         try:

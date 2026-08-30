@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     login_max_attempts: int = Field(default=5, ge=3, le=10)
     login_lock_minutes: int = Field(default=15, ge=1, le=1440)
 
+    # Bootstrap an empty production database after infrastructure replacement.
+    # Render runs initialDeployHook only when the web service itself is first
+    # created, so replacing only PostgreSQL would otherwise leave no tenant or
+    # owner account behind.
+    initial_owner_email: str = ""
+    initial_owner_password: SecretStr = SecretStr("")
+    initial_tenant_name: str = "SAN Dental"
+    initial_tenant_slug: str = "sandental"
+    initial_branch_name: str = "Сейфуллина"
+    initial_branch_code: str = "seifullina"
+    initial_extra_branch_name: str = "Батыс Мура"
+    initial_extra_branch_code: str = "batys-mura"
+
     # Kcell sends this value in every webhook request. It is set only in Render.
     kcell_crm_token: SecretStr = SecretStr("")
     kcell_tenant_slug: str = "demo"

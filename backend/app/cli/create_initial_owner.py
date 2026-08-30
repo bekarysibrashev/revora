@@ -12,10 +12,11 @@ from app.modules.auth.repository import AuthRepository
 from app.modules.tenancy.models import Branch, Tenant
 
 
-async def create_initial_owner(args: argparse.Namespace) -> None:
+async def ensure_initial_owner(args: argparse.Namespace) -> bool:
+    """Create the bootstrap tenant only when it does not already exist."""
     async with AsyncSessionFactory() as session, session.begin():
         if await session.scalar(select(Tenant.id).where(Tenant.slug == args.tenant_slug)):
-            raise SystemExit(f"Tenant slug already exists: {args.tenant_slug}")
+            return False
 
         tenant = Tenant(name=args.tenant_name, slug=args.tenant_slug)
         session.add(tenant)
@@ -50,7 +51,13 @@ async def create_initial_owner(args: argparse.Namespace) -> None:
             UserBranch(user_id=owner.id, branch_id=branch.id) for branch in branches
         )
 
-    print(f"Created tenant '{tenant.slug}' and owner '{owner.email}'.")
+    return True
+
+
+async def create_initial_owner(args: argparse.Namespace) -> None:
+    if not await ensure_initial_owner(args):
+        raise SystemExit(f"Tenant slug already exists: {args.tenant_slug}")
+    print(f"Created tenant '{args.tenant_slug}' and owner '{args.email.lower().strip()}'.")
 
 
 def parse_args() -> argparse.Namespace:
