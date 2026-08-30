@@ -542,7 +542,16 @@ class WhatsAppService:
             ).all()
         ) if sources else set()
         new_rows = [row for row in rows if row.source not in existing_sources]
+        now = datetime.now(UTC)
+        auto_approved_count = 0
         for row in new_rows:
+            # The admin curates the workbook itself before uploading it, so a
+            # row is trusted and goes live immediately -- except anything the
+            # importer flagged as promotional/human_only, which always needs
+            # a human to look at it before the bot can use it with patients.
+            auto_approved = row.risk_level != "human_only"
+            if auto_approved:
+                auto_approved_count += 1
             self.session.add(
                 WhatsAppKnowledgeItem(
                     tenant_id=user.tenant_id,
@@ -553,11 +562,14 @@ class WhatsAppService:
                     keywords=[],
                     risk_level=row.risk_level,
                     source=row.source,
-                    is_approved=False,
+                    is_approved=auto_approved,
+                    approved_by_id=user.id if auto_approved else None,
+                    approved_at=now if auto_approved else None,
                 )
             )
         return KnowledgeImportResponse(
             imported=len(new_rows),
+            auto_approved=auto_approved_count,
             review_required=sum(row.risk_level == "review" for row in new_rows),
             human_only=sum(row.risk_level == "human_only" for row in new_rows),
         )

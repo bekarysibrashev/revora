@@ -115,6 +115,7 @@ class KnowledgeUpdateRequest(BaseModel):
 
 class KnowledgeImportResponse(BaseModel):
     imported: int
+    auto_approved: int
     review_required: int
     human_only: int
 

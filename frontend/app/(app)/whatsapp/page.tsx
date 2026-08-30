@@ -169,7 +169,7 @@ export default function WhatsAppPage() {
   async function uploadKnowledge(file: File) {
     setImportResult("");
     try {
-      const result = await api<{ imported: number; review_required: number; human_only: number }>(
+      const result = await api<{ imported: number; auto_approved: number; review_required: number; human_only: number }>(
         "/whatsapp/knowledge/import",
         {
           method: "POST",
@@ -180,7 +180,7 @@ export default function WhatsAppPage() {
           body: file,
         },
       );
-      setImportResult(`Импортировано: ${result.imported}. На проверку: ${result.review_required}. Только человеку: ${result.human_only}.`);
+      setImportResult(`Импортировано: ${result.imported}. Одобрено автоматически: ${result.auto_approved}. Требует ручной проверки: ${result.human_only}.`);
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["wa-knowledge"] }),
         qc.invalidateQueries({ queryKey: ["wa-status"] }),
@@ -290,7 +290,7 @@ export default function WhatsAppPage() {
               {user?.role === "owner" ? <>
                 <div className="wa-knowledge-actions">
                   <button className="primary" onClick={() => { setKnowledgeDraft(emptyKnowledge); setKnowledgeEditorOpen(true); }}>Добавить ответ</button>
-                  <label className="file-drop"><strong>Загрузить Excel со скриптами</strong><span>Все строки попадут в черновики. Ничего не включается автоматически.</span>
+                  <label className="file-drop"><strong>Загрузить Excel со скриптами</strong><span>Строки одобряются автоматически и сразу используются ботом — редактируйте сам файл перед загрузкой. Рекламные/только для администратора строки всегда остаются на ручной проверке.</span>
                     <input type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadKnowledge(file); }} />
                   </label>
                 </div>
