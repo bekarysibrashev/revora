@@ -153,6 +153,7 @@ class OneCPushResponse(BaseModel):
     records_duplicate: int
     records_normalized: int = 0
     records_quarantined: int = 0
+    records_failed: int = 0
 
 
 class OneCMetadataProperty(BaseModel):

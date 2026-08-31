@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.errors import AppError
 from app.modules.integrations.one_c import (
@@ -21,8 +22,26 @@ from app.modules.integrations.repository import IntegrationRepository
 from app.modules.integrations.service import EXCLUDED_BRANCH_CODE, IntegrationService
 
 
+class _FakeNestedTransaction:
+    """Mirrors AsyncSession.begin_nested(): a no-op SAVEPOINT for fakes that
+    do not talk to a real database. An exception inside the block still
+    propagates, matching how a real SAVEPOINT rolls back and re-raises."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeSession:
+    def begin_nested(self):
+        return _FakeNestedTransaction()
+
+
 class FakeOneCRepository:
     def __init__(self, tenant_id, connection_id, digest):
+        self.session = _FakeSession()
         self.connection = SimpleNamespace(
             id=connection_id,
             tenant_id=tenant_id,
@@ -147,10 +166,18 @@ class FakeOneCRepository:
 
 
 class FakeOneCWriter:
-    def __init__(self):
+    def __init__(self, fail_at_call_index: int | None = None):
         self.writes = []
+        self._fail_at = fail_at_call_index
+        self._calls = 0
 
     async def write(self, **kwargs):
+        index = self._calls
+        self._calls += 1
+        if self._fail_at is not None and index == self._fail_at:
+            # Simulates a raw database error (for example a value that does
+            # not fit the target column) rather than a CanonicalWriteError.
+            raise SQLAlchemyError("simulated PostgreSQL numeric overflow")
         self.writes.append(kwargs)
         return uuid4()
 
@@ -302,6 +329,38 @@ async def test_push_stores_allowed_records_and_deduplicates() -> None:
     ]
     assert repository.context == tenant_id
     assert repository.connection.status == "connected"
+
+
+@pytest.mark.asyncio
+async def test_push_isolates_a_bad_record_instead_of_failing_the_whole_batch() -> None:
+    """A raw database error on one record (e.g. an amount PostgreSQL's
+    Numeric column rejects) must not abort the whole batch. Before the
+    SAVEPOINT fix, this raised out of ingest_one_c_push entirely and every
+    other record in the same request -- good or bad -- was lost with it."""
+
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    writer = FakeOneCWriter(fail_at_call_index=1)  # the middle 'doc-bad' record
+    service = IntegrationService(repository, writer)
+    entity = "AccumulationRegister_Выручка_RecordType"
+    payload = OneCPushRequest(
+        entity=entity,
+        records=[
+            {"Recorder": "doc-1", "LineNumber": 1, "Period": "2026-07-31T12:00:00", "Сумма": 1000},
+            {"Recorder": "doc-bad", "LineNumber": 1, "Period": "2026-07-31T12:00:00", "Сумма": 2000},
+            {"Recorder": "doc-3", "LineNumber": 1, "Period": "2026-07-31T12:00:00", "Сумма": 3000},
+        ],
+    )
+
+    result = await service.ingest_one_c_push(token, payload)
+
+    assert result.records_stored == 3
+    assert result.records_normalized == 2
+    assert result.records_quarantined == 1
+    assert len(writer.writes) == 2
+    assert len(repository.quarantined) == 1
+    assert repository.quarantined[0]["issues"][0].code == "ONE_C_CANONICAL_WRITE_FAILED"
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,8 @@ import json
 import secrets
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.errors import AppError
 from app.modules.auth.models import User, UserRole
 from app.modules.integrations.adapter import IntegrationAdapter
@@ -340,6 +342,7 @@ class IntegrationService:
         duplicates = 0
         normalized = 0
         quarantined = 0
+        failed = 0
         branch_code = (
             str(connection.settings["default_branch_code"])
             if connection.settings.get("default_branch_code")
@@ -349,16 +352,25 @@ class IntegrationService:
             parts.tenant_id, connection.id
         )
         for record in records:
-            raw_record, created = await self.repository.store_raw_record(
-                tenant_id=parts.tenant_id,
-                connection_id=connection.id,
-                sync_run_id=run.id,
-                source_entity=payload.entity,
-                source_record_id=source_record_id(record),
-                source_schema_version=payload.schema_version,
-                record_hash=compute_record_hash(payload.entity, record),
-                payload=record,
-            )
+            # One record's raw storage runs in its own SAVEPOINT. A single
+            # malformed row (for example a value PostgreSQL rejects) must not
+            # poison the whole request's transaction and take the rest of an
+            # otherwise-healthy batch down with it.
+            try:
+                async with self.repository.session.begin_nested():
+                    raw_record, created = await self.repository.store_raw_record(
+                        tenant_id=parts.tenant_id,
+                        connection_id=connection.id,
+                        sync_run_id=run.id,
+                        source_entity=payload.entity,
+                        source_record_id=source_record_id(record),
+                        source_schema_version=payload.schema_version,
+                        record_hash=compute_record_hash(payload.entity, record),
+                        payload=record,
+                    )
+            except SQLAlchemyError:
+                failed += 1
+                continue
             if created:
                 stored += 1
             else:
@@ -398,6 +410,7 @@ class IntegrationService:
             records_duplicate=duplicates,
             records_normalized=normalized,
             records_quarantined=quarantined,
+            records_failed=failed,
         )
 
     async def ingest_one_c_metadata(
@@ -579,12 +592,18 @@ class IntegrationService:
             )
             return "quarantined"
         try:
-            await self.canonical_writer.write(
-                tenant_id=tenant_id,
-                target_entity=mapping.target_entity,
-                data=mapping.data,
-            )
-        except CanonicalWriteError as exc:
+            # A nested SAVEPOINT means a raw database error here (for example
+            # a value PostgreSQL's column type rejects) only unwinds this one
+            # record's write. Without it, Postgres marks the whole request's
+            # transaction as failed and every later record in the same batch
+            # would also start raising, even though nothing is wrong with them.
+            async with self.repository.session.begin_nested():
+                await self.canonical_writer.write(
+                    tenant_id=tenant_id,
+                    target_entity=mapping.target_entity,
+                    data=mapping.data,
+                )
+        except (CanonicalWriteError, SQLAlchemyError) as exc:
             await self.repository.quarantine(
                 tenant_id=tenant_id,
                 raw_record=raw_record,
