@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/modules/auth";
+import { SESSION_EXPIRED_REASON_KEY } from "@/shared/api-client";
 
 export default function LoginPage() {
   const { login, user, ready } = useAuth();
@@ -18,6 +19,14 @@ export default function LoginPage() {
       router.replace(user.role === "sales_manager" ? "/sales" : "/dashboard");
     }
   }, [ready, user, router]);
+
+  useEffect(() => {
+    const reason = sessionStorage.getItem(SESSION_EXPIRED_REASON_KEY);
+    if (reason) {
+      setError(reason);
+      sessionStorage.removeItem(SESSION_EXPIRED_REASON_KEY);
+    }
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();

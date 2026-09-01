@@ -21,7 +21,7 @@ const coreItems: NavItem[] = [
   { href: "/sales", label: "Продажи", mark: "С", roles: ["owner", "manager", "administrator", "sales_manager"] },
   { href: "/doctors", label: "Врачи", mark: "В", roles: ["owner", "manager", "administrator"] },
   { href: "/marketing", label: "Маркетинг", mark: "М", roles: ["owner", "manager"] },
-  { href: "/analyst", label: "Data Science Lab", mark: "DS", roles: ["owner", "manager", "administrator", "sales_manager"] },
+  { href: "/analyst", label: "ИИ-аналитик", mark: "AI", roles: ["owner", "manager", "administrator", "sales_manager"] },
 ];
 
 const groups: NavGroup[] = [

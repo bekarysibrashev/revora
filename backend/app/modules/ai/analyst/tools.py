@@ -74,7 +74,7 @@ class AnalystToolRegistry:
         response = await tool.execute(user, date_from, date_to, branch_id)
         raw_payload = response.model_dump(mode="json")
         data_as_of = _find_data_as_of(raw_payload)
-        payload = _privacy_safe_payload(raw_payload)
+        payload = _cap_large_lists(_privacy_safe_payload(raw_payload))
         return ToolResult(name, tool.label, payload, date_from, date_to, branch_id, data_as_of)
 
 def _find_data_as_of(payload: dict) -> str | None:
@@ -116,3 +116,53 @@ def _privacy_safe_payload(payload: dict) -> dict:
         return result
 
     return clean(payload)
+
+
+_RANKING_KEYS = (
+    "revenue_accrual", "revenue_payment", "amount", "total", "value", "spend", "count",
+)
+
+
+def _as_number(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _cap_large_lists(payload: dict, max_items: int = 20) -> dict:
+    """Keep tool payloads small before they are serialized into the LLM prompt.
+
+    A handful of Revora tools (doctors_overview, sales/marketing breakdowns) can
+    return one row per doctor/campaign with no upper bound. Sent verbatim, a
+    clinic with 100+ doctors blows past the LLM provider's request-size limit
+    (observed as a raw HTTP 413 from Groq) on an ordinary question. Instead, any
+    list longer than max_items is sorted by the most relevant numeric field
+    (so "which doctor earned the most" style questions keep the doctors that
+    matter) and truncated, with a note the model can quote to the user.
+    """
+
+    def cap(value):
+        if isinstance(value, dict):
+            return {key: cap(item) for key, item in value.items()}
+        if isinstance(value, list):
+            items = [cap(item) for item in value]
+            if len(items) <= max_items:
+                return items
+            sort_key = None
+            if items and isinstance(items[0], dict):
+                for key in _RANKING_KEYS:
+                    if key in items[0]:
+                        sort_key = key
+                        break
+            if sort_key:
+                items = sorted(items, key=lambda item: _as_number(item.get(sort_key)), reverse=True)
+            kept = items[:max_items]
+            note = f"top {max_items} of {len(items)} rows"
+            if sort_key:
+                note += f", sorted by {sort_key} descending"
+            kept.append({"analyst_note": note})
+            return kept
+        return value
+
+    return cap(payload)

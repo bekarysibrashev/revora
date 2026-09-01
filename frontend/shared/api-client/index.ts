@@ -30,11 +30,14 @@ function session(): Session | null {
   }
 }
 
-function expireSession() {
+export const SESSION_EXPIRED_REASON_KEY = "revora_session_expired_reason";
+
+function expireSession(reason?: string) {
   if (typeof window === "undefined") return;
 
   sessionStorage.removeItem("revora_session");
   sessionStorage.removeItem("revora_user");
+  if (reason) sessionStorage.setItem(SESSION_EXPIRED_REASON_KEY, reason);
   window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
 }
 
@@ -98,7 +101,7 @@ export async function api<T>(
     if (retry && current.refresh_token && (await recoverUnauthorized())) {
       return api<T>(path, init, false);
     }
-    expireSession();
+    expireSession("Сессия истекла. Войдите снова, чтобы продолжить.");
   }
 
   if (!response.ok) {
@@ -132,7 +135,7 @@ export async function apiBinary(
     if (retry && current.refresh_token && (await recoverUnauthorized())) {
       return apiBinary(path, init, false);
     }
-    expireSession();
+    expireSession("Сессия истекла. Войдите снова, чтобы продолжить.");
   }
 
   if (!response.ok) {
