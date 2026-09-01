@@ -29,8 +29,9 @@ in-memory sort of the matching rows, but that set shrinks from "most of
 raw_records" to "this connection's pending rows", which is the actual
 target of a single batch.
 
-Purely additive: no data is touched, nothing is removed, safe to run
-against a live table (CONCURRENTLY, outside the migration's transaction).
+Purely additive: no data is touched, nothing is removed. The API is stopped
+while migrations run, so a regular transactional index build avoids the long
+snapshot wait that can leave Render waiting for a port during deploy.
 """
 
 from collections.abc import Sequence
@@ -45,19 +46,14 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    with op.get_context().autocommit_block():
-        op.execute(
-            """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS
-                ix_raw_records_pending_batch_scan
-            ON raw_records (tenant_id, connection_id, status, source_entity)
-            WHERE status = 'pending'
-            """
-        )
+    op.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_raw_records_pending_batch_scan
+        ON raw_records (tenant_id, connection_id, status, source_entity)
+        WHERE status = 'pending'
+        """
+    )
 
 
 def downgrade() -> None:
-    with op.get_context().autocommit_block():
-        op.execute(
-            "DROP INDEX CONCURRENTLY IF EXISTS ix_raw_records_pending_batch_scan"
-        )
+    op.execute("DROP INDEX IF EXISTS ix_raw_records_pending_batch_scan")
