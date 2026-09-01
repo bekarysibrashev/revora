@@ -69,8 +69,15 @@ class IntegrationRepository:
                     .where(
                         IntegrationConnection.tenant_id == tenant_id,
                         IntegrationConnection.provider == "1c_odata_push",
+                        # A connector can finish uploading after an API
+                        # restart, leaving the durable queue in
+                        # ``waiting_for_upload``. It is safe to process those
+                        # rows too: raw records are immutable and each
+                        # canonical write is idempotent. Without this state
+                        # the queue could remain pending forever until an
+                        # owner pressed the manual normalization button.
                         IntegrationConnection.settings["normalization_status"].astext.in_(
-                            ("queued", "running")
+                            ("queued", "running", "waiting_for_upload")
                         ),
                     )
                     .order_by(IntegrationConnection.updated_at)
