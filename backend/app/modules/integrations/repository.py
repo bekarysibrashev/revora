@@ -781,7 +781,16 @@ class IntegrationRepository:
         )
 
     @staticmethod
-    def _chunks(values: list[UUID], size: int = 1000):
+    def _chunks(values: list[UUID], size: int = 20000):
+        # reset_one_c_records_for_reprocessing() can touch 100k+ ids in one
+        # call (e.g. every Document_Прием_Лечение row). Each chunk is one
+        # network round trip to Postgres; a small chunk size turned that
+        # into hundreds of sequential round trips, which was slow enough on
+        # its own to make the whole request time out even after the fix
+        # that stopped loading full record payloads. Postgres has no
+        # practical trouble with a 20k-item IN(...) list for a plain
+        # UPDATE, so a much bigger chunk trades a larger single query for
+        # far fewer round trips.
         for index in range(0, len(values), size):
             yield values[index : index + size]
 
