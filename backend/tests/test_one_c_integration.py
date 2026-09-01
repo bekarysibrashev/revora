@@ -17,6 +17,7 @@ from app.modules.integrations.schemas import (
     OneCMetadataRequest,
     OneCNormalizeRequest,
     OneCPushRequest,
+    OneCSyncManifestRequest,
 )
 from app.modules.integrations.repository import IntegrationRepository
 from app.modules.integrations.service import EXCLUDED_BRANCH_CODE, IntegrationService
@@ -58,6 +59,7 @@ class FakeOneCRepository:
         self.metadata = None
         self.reset_count = 0
         self.removed_canonical = []
+        self.sync_manifest = None
 
     async def set_tenant_context(self, tenant_id):
         self.context = tenant_id
@@ -163,6 +165,17 @@ class FakeOneCRepository:
         ):
             return self.metadata
         return None
+
+    async def update_one_c_sync_manifest(self, connection, *, manifest):
+        self.sync_manifest = manifest
+        connection.settings = {
+            **connection.settings,
+            "connector_version": manifest["connector_version"],
+            "sync_status": manifest["status"],
+            "sync_expected_entities": manifest["expected_entities"],
+            "sync_completed_entities": manifest["completed_entities"],
+            "sync_error": manifest.get("error_message"),
+        }
 
 
 class FakeOneCWriter:
@@ -292,6 +305,81 @@ def test_source_record_id_is_stable_for_register_rows() -> None:
 
 def test_source_record_id_keeps_each_document_table_line() -> None:
     assert source_record_id({"Ref_Key": "payroll-1", "LineNumber": 7}) == "payroll-1|7"
+
+
+@pytest.mark.asyncio
+async def test_completed_sync_manifest_requires_every_expected_entity() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    service = IntegrationService(repository, FakeOneCWriter())
+    started_at = datetime(2026, 9, 1, 8, 0, tzinfo=UTC)
+
+    result = await service.ingest_one_c_sync_manifest(
+        token,
+        OneCSyncManifestRequest(
+            connector_version="6.0.0",
+            status="completed",
+            started_at=started_at,
+            completed_at=datetime(2026, 9, 1, 8, 30, tzinfo=UTC),
+            expected_entities=["Catalog_Услуги", "Document_Прием"],
+            completed_entities=[
+                {"entity": "Catalog_Услуги", "records": 10},
+                {"entity": "Document_Прием", "records": 20},
+            ],
+        ),
+    )
+
+    assert result.is_complete is True
+    assert result.completed_entities == 2
+    assert repository.sync_manifest["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_incomplete_sync_cannot_be_marked_completed() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    service = IntegrationService(repository, FakeOneCWriter())
+
+    with pytest.raises(AppError) as error:
+        await service.ingest_one_c_sync_manifest(
+            token,
+            OneCSyncManifestRequest(
+                connector_version="6.0.0",
+                status="completed",
+                started_at=datetime(2026, 9, 1, 8, 0, tzinfo=UTC),
+                completed_at=datetime(2026, 9, 1, 8, 30, tzinfo=UTC),
+                expected_entities=["Catalog_Услуги", "Document_Прием"],
+                completed_entities=[{"entity": "Catalog_Услуги", "records": 10}],
+            ),
+        )
+
+    assert error.value.code == "ONE_C_SYNC_INCOMPLETE"
+    assert repository.sync_manifest is None
+
+
+@pytest.mark.asyncio
+async def test_running_sync_manifest_records_partial_progress() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    service = IntegrationService(repository, FakeOneCWriter())
+
+    result = await service.ingest_one_c_sync_manifest(
+        token,
+        OneCSyncManifestRequest(
+            connector_version="6.0.0",
+            status="running",
+            started_at=datetime(2026, 9, 1, 8, 0, tzinfo=UTC),
+            expected_entities=["Catalog_Услуги", "Document_Прием"],
+            completed_entities=[{"entity": "Catalog_Услуги", "records": 10}],
+        ),
+    )
+
+    assert result.is_complete is False
+    assert result.completed_entities == 1
+    assert repository.sync_manifest["status"] == "running"
 
 
 @pytest.mark.asyncio

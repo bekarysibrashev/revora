@@ -160,7 +160,40 @@ class IntegrationRepository:
             "last_synced_at": synced_at.isoformat(),
             "last_entity": entity,
         }
-        connection.status = "connected"
+        connection.status = (
+            "syncing"
+            if (connection.settings or {}).get("sync_status") == "running"
+            else "connected"
+        )
+        await self.session.flush()
+
+    async def update_one_c_sync_manifest(
+        self,
+        connection: IntegrationConnection,
+        *,
+        manifest: dict[str, object],
+    ) -> None:
+        connection.settings = {
+            **(connection.settings or {}),
+            "connector_version": manifest["connector_version"],
+            "sync_status": manifest["status"],
+            "sync_started_at": manifest["started_at"],
+            "sync_completed_at": manifest.get("completed_at"),
+            "sync_period_from": manifest.get("period_from"),
+            "sync_expected_entities": manifest["expected_entities"],
+            "sync_completed_entities": manifest["completed_entities"],
+            "sync_error": manifest.get("error_message"),
+            **(
+                {"last_synced_at": manifest["completed_at"]}
+                if manifest["status"] == "completed" and manifest.get("completed_at")
+                else {}
+            ),
+        }
+        connection.status = {
+            "running": "syncing",
+            "completed": "connected",
+            "failed": "sync_failed",
+        }[str(manifest["status"])]
         await self.session.flush()
 
     async def raw_record_counts(

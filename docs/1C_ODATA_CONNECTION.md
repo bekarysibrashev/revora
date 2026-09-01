@@ -53,6 +53,16 @@ http://localhost/Revora/odata/standard.odata
 
 Настройки и рабочая копия скрипта сохранятся в `%LOCALAPPDATA%\Revora`.
 
+Если подключение уже настроено, новый скачанный файл обновляет только код
+коннектора и сохраняет существующие пароли, ключ и задачу Планировщика:
+
+```powershell
+.\revora-1c-odata.ps1 -UpdateInstalled
+& "$env:LOCALAPPDATA\Revora\revora-1c-odata.ps1" -ShowVersion
+```
+
+Для текущего parent-bounded коннектора ожидается версия `6.0.0`.
+
 ### 3. Проверить доступ
 
 ```powershell

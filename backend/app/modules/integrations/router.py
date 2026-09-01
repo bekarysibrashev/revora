@@ -25,6 +25,8 @@ from app.modules.integrations.schemas import (
     OneCMetadataResponse,
     OneCPushRequest,
     OneCPushResponse,
+    OneCSyncManifestRequest,
+    OneCSyncManifestResponse,
 )
 from app.modules.integrations.service import IntegrationService
 from app.modules.integrations.tabular_adapter import TabularFileAdapter
@@ -61,6 +63,19 @@ async def push_one_c_metadata(
     if credentials is None:
         raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
     return await service.ingest_one_c_metadata(credentials.credentials, payload)
+
+
+@router.post("/1c/sync-manifest", response_model=OneCSyncManifestResponse)
+async def push_one_c_sync_manifest(
+    payload: OneCSyncManifestRequest,
+    service: IntegrationServiceDependency,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(connector_bearer)
+    ],
+) -> OneCSyncManifestResponse:
+    if credentials is None:
+        raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
+    return await service.ingest_one_c_sync_manifest(credentials.credentials, payload)
 
 
 @router.get(

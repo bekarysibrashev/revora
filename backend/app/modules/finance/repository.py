@@ -17,7 +17,6 @@ from app.modules.finance.models import (
     RevenueFact,
 )
 from app.shared.timezone import clinic_day_end_exclusive, clinic_day_start
-from app.modules.reports.repository import OfficialReportsRepository
 
 ZERO = Decimal("0")
 
@@ -126,24 +125,14 @@ class FinanceRepository:
             payroll_statement = payroll_statement.where(PayrollFact.branch_id == branch_id)
         payroll = (await self.session.execute(payroll_statement)).one()
         timestamps = [value for value in (revenue[2], expense[3], payroll[1]) if value is not None]
-        official, official_as_of = await OfficialReportsRepository(self.session).exact_values(
-            tenant_id,
-            date_from,
-            date_to,
-            {"revenue_accrual", "revenue_payment", "payroll_accrual"},
-            [branch_id] if branch_id else None,
-        )
-        if official_as_of:
-            timestamps.append(official_as_of)
         return PnlTotals(
-            revenue_accrual=official.get("revenue_accrual", Decimal(revenue[0])),
-            revenue_payment=official.get("revenue_payment", Decimal(revenue[1])),
+            revenue_accrual=Decimal(revenue[0]),
+            revenue_payment=Decimal(revenue[1]),
             variable_expenses=Decimal(expense[0]),
             fixed_expenses=Decimal(expense[1]),
             uncategorized_expenses=Decimal(expense[2]),
-            payroll_accrual=official.get("payroll_accrual", Decimal(payroll[0])),
+            payroll_accrual=Decimal(payroll[0]),
             data_as_of=max(timestamps) if timestamps else None,
-            official_metrics=frozenset(official),
         )
 
     async def cashflow_totals(
@@ -224,28 +213,11 @@ class FinanceRepository:
             for value in (row[1], expense_paid[1], payroll_paid[1], balance[1])
             if value is not None
         ]
-        official, official_as_of = await OfficialReportsRepository(self.session).exact_values(
-            tenant_id,
-            date_from,
-            date_to,
-            {"cash_inflow", "purchases_paid", "payroll_paid"},
-            [branch_id] if branch_id else None,
-        )
-        if official_as_of:
-            timestamps.append(official_as_of)
-        inflow = official.get("cash_inflow", Decimal(row[0]))
-        has_known_outflow = {"purchases_paid", "payroll_paid"}.issubset(official)
-        outflow = (
-            official["purchases_paid"] + official["payroll_paid"]
-            if has_known_outflow
-            else Decimal(expense_paid[0]) + Decimal(payroll_paid[0])
-        )
         return CashFlowTotals(
-            inflow=inflow,
-            outflow=outflow,
+            inflow=Decimal(row[0]),
+            outflow=Decimal(expense_paid[0]) + Decimal(payroll_paid[0]),
             closing_balance=closing_balance,
             data_as_of=max(timestamps) if timestamps else None,
-            official_metrics=frozenset(official),
             cashflow_is_complete=False,
         )
 

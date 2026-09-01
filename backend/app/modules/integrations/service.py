@@ -78,6 +78,8 @@ from app.modules.integrations.schemas import (
     OneCSourceSummary,
     OneCPushRequest,
     OneCPushResponse,
+    OneCSyncManifestRequest,
+    OneCSyncManifestResponse,
 )
 from app.modules.integrations.tabular_adapter import InvalidTabularFile, UnsupportedTabularFile
 
@@ -221,12 +223,30 @@ class IntegrationService:
             connection.id,
             period_from=period_from,
         )
-        last_synced_at = None
-        if settings.get("last_synced_at"):
+        def setting_datetime(name: str) -> datetime | None:
+            if not settings.get(name):
+                return None
             try:
-                last_synced_at = datetime.fromisoformat(str(settings["last_synced_at"]))
-            except ValueError:
-                last_synced_at = None
+                return datetime.fromisoformat(str(settings[name]))
+            except (TypeError, ValueError):
+                return None
+
+        last_synced_at = setting_datetime("last_synced_at")
+        expected_entities = [
+            str(entity) for entity in settings.get("sync_expected_entities", []) if entity
+        ]
+        completed_entities = list(settings.get("sync_completed_entities", []) or [])
+        completed_names = {
+            str(item.get("entity"))
+            for item in completed_entities
+            if isinstance(item, dict) and item.get("entity")
+        }
+        sync_status = str(settings.get("sync_status") or "idle")
+        sync_is_complete = bool(
+            sync_status == "completed"
+            and expected_entities
+            and set(expected_entities) == completed_names
+        )
         return ConnectionSyncStatusResponse(
             connection_id=connection.id,
             status=connection.status,
@@ -265,6 +285,20 @@ class IntegrationService:
                 )
                 for entity, dimension, value, count, amount in source_summaries
             ],
+            connector_version=(
+                str(settings["connector_version"])
+                if settings.get("connector_version")
+                else None
+            ),
+            sync_status=sync_status,
+            sync_started_at=setting_datetime("sync_started_at"),
+            sync_completed_at=setting_datetime("sync_completed_at"),
+            expected_entity_count=len(expected_entities),
+            completed_entity_count=len(completed_names),
+            sync_is_complete=sync_is_complete,
+            sync_error=(
+                str(settings["sync_error"]) if settings.get("sync_error") else None
+            ),
         )
 
     async def ingest_one_c_push(
@@ -446,6 +480,45 @@ class IntegrationService:
             entity_count=len(entities),
             property_count=property_count,
             discovered_at=snapshot.discovered_at,
+        )
+
+    async def ingest_one_c_sync_manifest(
+        self, connector_token: str, payload: OneCSyncManifestRequest
+    ) -> OneCSyncManifestResponse:
+        _, connection = await self._connector_connection(connector_token)
+        expected = list(dict.fromkeys(payload.expected_entities))
+        completed_by_entity = {
+            item.entity: item.records for item in payload.completed_entities
+        }
+        unknown = sorted(set(completed_by_entity) - set(expected))
+        if unknown:
+            raise AppError(
+                "ONE_C_SYNC_MANIFEST_INVALID",
+                "Completed entities must be present in expected entities",
+                422,
+                {"entities": unknown[:20]},
+            )
+        is_complete = set(completed_by_entity) == set(expected)
+        if payload.status == "completed" and not is_complete:
+            raise AppError(
+                "ONE_C_SYNC_INCOMPLETE",
+                "A completed sync must contain every expected entity",
+                422,
+            )
+        manifest = payload.model_dump(mode="json")
+        manifest["expected_entities"] = expected
+        manifest["completed_entities"] = [
+            {"entity": entity, "records": completed_by_entity[entity]}
+            for entity in expected
+            if entity in completed_by_entity
+        ]
+        await self.repository.update_one_c_sync_manifest(connection, manifest=manifest)
+        return OneCSyncManifestResponse(
+            connection_id=connection.id,
+            status=payload.status,
+            expected_entities=len(expected),
+            completed_entities=len(completed_by_entity),
+            is_complete=is_complete,
         )
 
     async def get_one_c_metadata(

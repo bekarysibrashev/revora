@@ -9,8 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.doctors.models import Doctor, DoctorRating
 from app.modules.finance.models import RevenueFact
 from app.modules.sales.models import Appointment
-from app.modules.reports.one_c_parser import normalize_label
-from app.modules.reports.repository import OfficialReportsRepository
 
 
 @dataclass(frozen=True)
@@ -115,20 +113,6 @@ class DoctorsRepository:
             .order_by(func.coalesce(revenue.c.revenue_accrual, 0).desc(), Doctor.full_name)
         )
         rows = (await self.session.execute(statement)).all()
-        official_rows, official_as_of = await OfficialReportsRepository(
-            self.session
-        ).exact_dimension_metrics(
-            tenant_id,
-            date_from,
-            date_to,
-            "doctor_revenue_payment",
-            "doctor",
-            branch_ids,
-        )
-        official_by_name: dict[str, Decimal] = {}
-        for metric in official_rows:
-            key = normalize_label(metric.dimension_label)
-            official_by_name[key] = official_by_name.get(key, Decimal("0")) + Decimal(metric.value)
         return [
             DoctorTotals(
                 doctor_id=row[0],
@@ -137,10 +121,10 @@ class DoctorsRepository:
                 appointments_total=int(row[3]),
                 appointments_completed=int(row[4]),
                 revenue_accrual=Decimal(row[5]),
-                revenue_payment=official_by_name.get(normalize_label(row[1]), Decimal(row[6])),
+                revenue_payment=Decimal(row[6]),
                 average_rating=Decimal(row[7]) if row[7] is not None else None,
                 data_as_of=max(
-                    [value for value in (row[8], official_as_of) if value is not None],
+                    [value for value in (row[8],) if value is not None],
                     default=None,
                 ),
             )

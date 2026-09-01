@@ -20,6 +20,12 @@ param(
     [Parameter(ParameterSetName = "Metadata", Mandatory = $true)]
     [switch]$DiscoverMetadata,
 
+    [Parameter(ParameterSetName = "Version", Mandatory = $true)]
+    [switch]$ShowVersion,
+
+    [Parameter(ParameterSetName = "Update", Mandatory = $true)]
+    [switch]$UpdateInstalled,
+
     [Parameter(ParameterSetName = "Run")]
     [switch]$FullSync,
 
@@ -53,6 +59,8 @@ $StatePath = Join-Path $ConnectorDirectory "one-c-odata-state.xml"
 $LogPath = Join-Path $ConnectorDirectory "one-c-odata.log"
 $TaskName = "Revora 1C OData Sync"
 $IncrementalOverlapDays = 7
+$ConnectorVersion = "6.0.0"
+$ParentFilterChunkSize = 10
 
 # Kept as UTF-8 Base64 so this file works in Windows PowerShell 5.1 even when
 # it is saved without a BOM on an older Windows server.
@@ -239,7 +247,8 @@ function Save-ConnectorConfig {
 
     New-Item -ItemType Directory -Path $ConnectorDirectory -Force | Out-Null
     [pscustomobject]@{
-        Version = 2
+        Version = 3
+        ConnectorVersion = $ConnectorVersion
         RevoraApiUrl = $RevoraApiUrl.TrimEnd("/")
         OneCBaseUrl = $OneCBaseUrl.TrimEnd("/")
         OneCUsername = $oneCCredential.UserName
@@ -271,6 +280,25 @@ function Load-ConnectorConfig {
     # with old config files and is never authoritative.
     $loaded.Entities = @()
     return $loaded
+}
+
+function Update-InstalledConnector {
+    $currentScript = $MyInvocation.ScriptName
+    if (-not $currentScript) {
+        throw "The update must be run from a saved revora-1c-odata.ps1 file."
+    }
+    $sourcePath = (Resolve-Path -LiteralPath $currentScript).Path
+    $targetPath = [IO.Path]::GetFullPath($InstalledScriptPath)
+    if ($sourcePath -eq $targetPath) {
+        Write-Host "Revora 1C OData connector $ConnectorVersion is already installed."
+        return
+    }
+    if (-not (Test-Path -LiteralPath $ConfigPath)) {
+        throw "Connector configuration was not found. Run -Setup instead of -UpdateInstalled."
+    }
+    Copy-Item -LiteralPath $sourcePath -Destination $targetPath -Force
+    Write-Host "Revora 1C OData connector $ConnectorVersion installed at $targetPath"
+    Write-Host "Existing credentials and the scheduled task were preserved."
 }
 
 function Get-NextLink {
@@ -425,6 +453,97 @@ function Get-ODataPages {
     }
 }
 
+function ConvertTo-ODataLiteral {
+    param(
+        [Parameter(Mandatory = $true)][string]$Value,
+        [string]$EdmType
+    )
+
+    if ($EdmType -eq "Edm.Guid") {
+        $guidValue = $Value.Trim().TrimStart("{").TrimEnd("}")
+        $parsedGuid = [guid]::Empty
+        if (-not [guid]::TryParse($guidValue, [ref]$parsedGuid)) {
+            throw "1C returned an invalid Ref_Key GUID: $Value"
+        }
+        return "guid'$($parsedGuid.ToString())'"
+    }
+    return "'$($Value.Replace("'", "''"))'"
+}
+
+function Get-ParentReferenceKeys {
+    param(
+        [Parameter(Mandatory = $true)]$ParentDefinition,
+        [Parameter(Mandatory = $true)][pscredential]$Credential,
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Nullable[datetime]]$ChangedSince,
+        [Parameter(Mandatory = $true)][int]$ConfiguredPageSize
+    )
+
+    $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    Get-ODataPages -Entity $ParentDefinition.entity -Credential $Credential `
+        -BaseUrl $BaseUrl -ChangedSince $ChangedSince -SelectFields "Ref_Key" `
+        -DateField $ParentDefinition.date_field -AvailableFields @($ParentDefinition.fields) `
+        -StaticFilter $ParentDefinition.static_filter -ConfiguredPageSize $ConfiguredPageSize |
+    ForEach-Object {
+        foreach ($record in @($_.Records)) {
+            $property = $record.PSObject.Properties["Ref_Key"]
+            if ($null -ne $property -and $property.Value) {
+                [void]$keys.Add([string]$property.Value)
+            }
+        }
+    }
+    return @($keys | ForEach-Object { [string]$_ })
+}
+
+function Get-ParentBoundTablePartPages {
+    param(
+        [Parameter(Mandatory = $true)]$Definition,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ParentKeys,
+        [Parameter(Mandatory = $true)][pscredential]$Credential,
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][int]$ConfiguredPageSize,
+        [ValidateRange(0, 100000000)][int]$InitialSkip = 0
+    )
+
+    # 1C table parts do not expose the parent document date. Reading them with
+    # no filter silently loads the whole database history. Restrict every query
+    # to Ref_Key values of parent documents already selected for this sync.
+    $remainingSkip = $InitialSkip
+    for ($start = 0; $start -lt $ParentKeys.Count; $start += $ParentFilterChunkSize) {
+        $end = [Math]::Min($start + $ParentFilterChunkSize - 1, $ParentKeys.Count - 1)
+        $keyFilters = @()
+        for ($index = $start; $index -le $end; $index++) {
+            $literal = ConvertTo-ODataLiteral -Value $ParentKeys[$index] -EdmType $Definition.reference_key_type
+            $keyFilters += "Ref_Key eq $literal"
+        }
+        $parentFilter = "(" + ($keyFilters -join " or ") + ")"
+        $combinedFilter = if ($Definition.static_filter) {
+            "($($Definition.static_filter)) and $parentFilter"
+        }
+        else { $parentFilter }
+
+        Get-ODataPages -Entity $Definition.entity -Credential $Credential `
+            -BaseUrl $BaseUrl -ChangedSince $null -SelectFields $Definition.select `
+            -DateField $null -AvailableFields @($Definition.fields) `
+            -StaticFilter $combinedFilter -ConfiguredPageSize $ConfiguredPageSize |
+        ForEach-Object {
+            $records = @($_.Records)
+            if ($remainingSkip -ge $records.Count) {
+                $remainingSkip -= $records.Count
+            }
+            else {
+                if ($remainingSkip -gt 0) {
+                    $records = @($records | Select-Object -Skip $remainingSkip)
+                    $remainingSkip = 0
+                }
+                if ($records.Count -gt 0) {
+                    Write-Output -NoEnumerate ([pscustomobject]@{ Records = $records })
+                }
+            }
+        }
+    }
+}
+
 function ConvertTo-ProtectedPhoneHash {
     param([object]$Value)
 
@@ -543,7 +662,7 @@ function Send-RevoraBatch {
     $json = @{
         entity = $Entity
         records = $Records
-        schema_version = "1c-odata-v5-dynamic-metadata"
+        schema_version = "1c-odata-v6-parent-bounded"
     } | ConvertTo-Json -Depth 30 -Compress
     $body = [Text.Encoding]::UTF8.GetBytes($json)
 
@@ -570,6 +689,37 @@ function Send-RevoraBatch {
             }
             throw
         }
+    }
+}
+
+function Send-RevoraSyncManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiUrl,
+        [Parameter(Mandatory = $true)][string]$Token,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [Parameter(Mandatory = $true)][datetime]$StartedUtc,
+        [Nullable[datetime]]$PeriodFrom,
+        [Parameter(Mandatory = $true)][string[]]$ExpectedEntities,
+        [object[]]$CompletedEntities = @(),
+        [string]$ErrorMessage
+    )
+
+    $json = @{
+        connector_version = $ConnectorVersion
+        status = $Status
+        started_at = $StartedUtc.ToString("o")
+        completed_at = if ($Status -in @("completed", "failed")) { [datetime]::UtcNow.ToString("o") } else { $null }
+        period_from = if ($null -ne $PeriodFrom) { ([datetime]$PeriodFrom).ToString("o") } else { $null }
+        expected_entities = @($ExpectedEntities)
+        completed_entities = @($CompletedEntities)
+        error_message = if ($ErrorMessage) { $ErrorMessage.Substring(0, [Math]::Min(1000, $ErrorMessage.Length)) } else { $null }
+    } | ConvertTo-Json -Depth 10 -Compress
+    $body = [Text.Encoding]::UTF8.GetBytes($json)
+    return Invoke-WithRetry -Description "Revora sync manifest" -Operation {
+        Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/sync-manifest" `
+            -MaximumRedirection 0 -TimeoutSec 300 `
+            -Headers @{ Authorization = "Bearer $Token" } `
+            -ContentType "application/json; charset=utf-8" -Body $body
     }
 }
 
@@ -713,6 +863,11 @@ function Get-MetadataEntityDefinitions {
                 Where-Object { [string]$_.type -eq "Edm.Binary" } |
                 ForEach-Object { [string]$_.name }
         )
+        $referenceProperty = @(
+            $item.properties |
+                Where-Object { [string]$_.name -eq "Ref_Key" } |
+                Select-Object -First 1
+        )
         # Do not inherit the old per-entity row filters. Revora keeps the raw
         # OData layer complete (including deleted/inactive historical rows) and
         # applies business exclusions only when calculating a metric.
@@ -732,10 +887,56 @@ function Get-MetadataEntityDefinitions {
             static_filter = $staticFilter
             protect_phone = @($protectPhone)
             binary_fields = @($binaryFields)
+            reference_key_type = if ($referenceProperty.Count -gt 0) {
+                [string]$referenceProperty[0].type
+            }
+            else { $null }
             sync_order = $order
         }
     }
-    return @($definitions | Sort-Object sync_order, entity)
+    $sortedDefinitions = @($definitions | Sort-Object sync_order, entity)
+    foreach ($definition in $sortedDefinitions) {
+        $parentEntity = $null
+        if (
+            $definition.entity.StartsWith("Document_") -and
+            $definition.fields -contains "Ref_Key" -and
+            $definition.fields -contains "LineNumber" -and
+            -not $definition.date_field
+        ) {
+            $parentEntity = @(
+                $sortedDefinitions |
+                    Where-Object {
+                        $_.entity.StartsWith("Document_") -and
+                        $_.date_field -and
+                        $definition.entity.StartsWith("$($_.entity)_")
+                    } |
+                    Sort-Object { $_.entity.Length } -Descending |
+                    Select-Object -First 1
+            )
+            if ($parentEntity.Count -gt 0) { $parentEntity = [string]$parentEntity[0].entity }
+            else { $parentEntity = $null }
+        }
+        $definition | Add-Member -NotePropertyName "parent_entity" -NotePropertyValue $parentEntity -Force
+    }
+    return $sortedDefinitions
+}
+
+function Assert-SafeEntityDefinitions {
+    param([Parameter(Mandatory = $true)][object[]]$Definitions)
+
+    $unboundedTableParts = @(
+        $Definitions | Where-Object {
+            $_.entity.StartsWith("Document_") -and
+            $_.fields -contains "Ref_Key" -and
+            $_.fields -contains "LineNumber" -and
+            -not $_.date_field -and
+            -not $_.parent_entity
+        }
+    )
+    if ($unboundedTableParts.Count -gt 0) {
+        $names = @($unboundedTableParts | ForEach-Object { $_.entity }) -join ", "
+        throw "Refusing an unbounded table-part sync. Parent documents were not found for: $names"
+    }
 }
 
 function Send-RevoraMetadata {
@@ -784,6 +985,7 @@ function Test-Connector {
     $inventory = @(Get-OneCMetadataInventory -BaseUrl $Config.OneCBaseUrl -Credential $credential)
     $definitions = @(Get-MetadataEntityDefinitions -Entities $inventory)
     if ($definitions.Count -eq 0) { throw "No readable scalar OData entities were discovered." }
+    Assert-SafeEntityDefinitions -Definitions $definitions
     $definition = $definitions[0]
     $entity = [string]$definition.entity
     $encodedEntity = [Uri]::EscapeDataString($entity)
@@ -794,7 +996,8 @@ function Test-Connector {
         throw "1C returned an unexpected test response."
     }
     Send-RevoraMetadata -Config $Config -Entities $inventory | Out-Null
-    Write-ConnectorLog -Message "Connection test passed: OData metadata and all published scalar entities are discoverable."
+    $tableParts = @($definitions | Where-Object { $_.parent_entity })
+    Write-ConnectorLog -Message "Connection test passed: connector=$ConnectorVersion, analytics_entities=$($definitions.Count), parent_bounded_table_parts=$($tableParts.Count)."
 }
 
 function Install-ConnectorTask {
@@ -820,7 +1023,7 @@ function Install-ConnectorTask {
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-            -Description "Reads local 1C OData and uploads approved records to Revora every 3 hours." `
+            -Description "Revora 1C OData connector $ConnectorVersion. Uploads parent-bounded analytics records every 3 hours." `
             -User $taskCredential.UserName -Password $taskPassword -RunLevel Highest -Force | Out-Null
     }
     finally {
@@ -866,10 +1069,12 @@ function Invoke-ConnectorSync {
         }
 
         $startedUtc = [datetime]::UtcNow
+        Write-ConnectorLog -Message "Connector $ConnectorVersion started."
         $credential = [pscredential]::new($Config.OneCUsername, $Config.OneCPassword)
         $inventory = @(Get-OneCMetadataInventory -BaseUrl $Config.OneCBaseUrl -Credential $credential)
         $entityDefinitions = @(Get-MetadataEntityDefinitions -Entities $inventory)
         if ($entityDefinitions.Count -eq 0) { throw "No readable scalar OData entities were discovered." }
+        Assert-SafeEntityDefinitions -Definitions $entityDefinitions
         $runtimeEntities = @($entityDefinitions | ForEach-Object { $_.entity })
         Send-RevoraMetadata -Config $Config -Entities $inventory | Out-Null
         Write-ConnectorLog -Message "Dynamic OData inventory enabled: entities=$($runtimeEntities.Count)."
@@ -900,6 +1105,8 @@ function Invoke-ConnectorSync {
         $totalSent = 0
         $totalStored = 0
         $totalDuplicates = 0
+        $completedEntities = New-Object System.Collections.ArrayList
+        $parentReferenceCache = @{}
 
         try {
             if ($ResumeOffset -gt 0 -and -not $ResumeEntity) {
@@ -908,9 +1115,14 @@ function Invoke-ConnectorSync {
             if ($ResumeEntity -and $ResumeEntity -notin $runtimeEntities) {
                 throw "Resume entity '$ResumeEntity' is not enabled in the connector configuration."
             }
+            Send-RevoraSyncManifest -ApiUrl $Config.RevoraApiUrl -Token $token `
+                -Status "running" -StartedUtc $startedUtc -PeriodFrom $changedSince `
+                -ExpectedEntities $runtimeEntities | Out-Null
             $waitingForResumeEntity = [bool]$ResumeEntity
             foreach ($entity in $runtimeEntities) {
                 if ($waitingForResumeEntity -and $entity -ne $ResumeEntity) { continue }
+                $definition = @($entityDefinitions | Where-Object { $_.entity -eq $entity })[0]
+                if ($null -eq $definition) { throw "No metadata definition is available for $entity." }
                 $entitySent = 0
                 $entityInitialSkip = if ($waitingForResumeEntity) { $ResumeOffset } else { 0 }
                 # Resume with the same period filter as the interrupted run;
@@ -925,19 +1137,57 @@ function Invoke-ConnectorSync {
                 }
                 else { $changedSince }
                 $waitingForResumeEntity = $false
-                $definition = @($entityDefinitions | Where-Object { $_.entity -eq $entity })[0]
-                if ($null -eq $definition) { throw "No metadata definition is available for $entity." }
+                $pageCommand = if ($definition.parent_entity) {
+                    $parentEntity = [string]$definition.parent_entity
+                    if (-not $parentReferenceCache.ContainsKey($parentEntity)) {
+                        $parentDefinition = @($entityDefinitions | Where-Object { $_.entity -eq $parentEntity })[0]
+                        if ($null -eq $parentDefinition) {
+                            throw "Parent OData entity '$parentEntity' was not discovered for '$entity'."
+                        }
+                        $parentReferenceCache[$parentEntity] = @(
+                            Get-ParentReferenceKeys -ParentDefinition $parentDefinition `
+                                -Credential $credential -BaseUrl $Config.OneCBaseUrl `
+                                -ChangedSince $entityChangedSince -ConfiguredPageSize $configuredPageSize
+                        )
+                    }
+                    $parentKeys = @(
+                        $parentReferenceCache[$parentEntity] |
+                            ForEach-Object { [string]$_ }
+                    )
+                    Write-ConnectorLog -Message "${entity}: parent=$parentEntity, selected_parent_documents=$($parentKeys.Count)."
+                    {
+                        Get-ParentBoundTablePartPages -Definition $definition -ParentKeys $parentKeys `
+                            -Credential $credential -BaseUrl $Config.OneCBaseUrl `
+                            -ConfiguredPageSize $configuredPageSize -InitialSkip $entityInitialSkip
+                    }.GetNewClosure()
+                }
+                else {
+                    {
+                        Get-ODataPages -Entity $entity -Credential $credential `
+                            -BaseUrl $Config.OneCBaseUrl -ChangedSince $entityChangedSince `
+                            -SelectFields $definition.select -DateField $definition.date_field `
+                            -AvailableFields @($definition.fields) `
+                            -StaticFilter $definition.static_filter -ConfiguredPageSize $configuredPageSize `
+                            -InitialSkip $entityInitialSkip
+                    }.GetNewClosure()
+                }
                 # Use the pipeline so every OData page is uploaded immediately.
                 # A regular foreach expression materializes all pages first and
                 # can leave the console silent for a long time during upload.
-                Get-ODataPages -Entity $entity -Credential $credential `
-                    -BaseUrl $Config.OneCBaseUrl -ChangedSince $entityChangedSince `
-                    -SelectFields $definition.select -DateField $definition.date_field `
-                    -AvailableFields @($definition.fields) `
-                    -StaticFilter $definition.static_filter -ConfiguredPageSize $configuredPageSize `
-                    -InitialSkip $entityInitialSkip |
+                & $pageCommand |
                 ForEach-Object {
                     $page = $_
+                    if (-not $definition.parent_entity -and $definition.date_field -and $definition.fields -contains "Ref_Key") {
+                        if (-not $parentReferenceCache.ContainsKey($entity)) {
+                            $parentReferenceCache[$entity] = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                        }
+                        foreach ($record in @($page.Records)) {
+                            $referenceProperty = $record.PSObject.Properties["Ref_Key"]
+                            if ($null -ne $referenceProperty -and $referenceProperty.Value) {
+                                [void]$parentReferenceCache[$entity].Add([string]$referenceProperty.Value)
+                            }
+                        }
+                    }
                     $records = @(Protect-OneCRecords -Records @($page.Records) -PhoneFields @($definition.protect_phone))
                     $records = @(Remove-OneCBinaryFields -Records $records -BinaryFields @($definition.binary_fields))
                     $records = @(Remove-OneCNavigationFields -Records $records)
@@ -959,7 +1209,27 @@ function Invoke-ConnectorSync {
                     }
                 }
                 Write-ConnectorLog -Message "${entity}: sent=$entitySent"
+                [void]$completedEntities.Add([pscustomobject]@{ entity = $entity; records = $entitySent })
+                Send-RevoraSyncManifest -ApiUrl $Config.RevoraApiUrl -Token $token `
+                    -Status "running" -StartedUtc $startedUtc -PeriodFrom $changedSince `
+                    -ExpectedEntities $runtimeEntities -CompletedEntities @($completedEntities.ToArray()) | Out-Null
             }
+            Send-RevoraSyncManifest -ApiUrl $Config.RevoraApiUrl -Token $token `
+                -Status "completed" -StartedUtc $startedUtc -PeriodFrom $changedSince `
+                -ExpectedEntities $runtimeEntities -CompletedEntities @($completedEntities.ToArray()) | Out-Null
+        }
+        catch {
+            $syncError = $_.Exception.Message
+            try {
+                Send-RevoraSyncManifest -ApiUrl $Config.RevoraApiUrl -Token $token `
+                    -Status "failed" -StartedUtc $startedUtc -PeriodFrom $changedSince `
+                    -ExpectedEntities $runtimeEntities -CompletedEntities @($completedEntities.ToArray()) `
+                    -ErrorMessage $syncError | Out-Null
+            }
+            catch {
+                Write-ConnectorLog -Level "WARN" -Message "Could not report failed sync status to Revora: $($_.Exception.Message)"
+            }
+            throw $syncError
         }
         finally {
             $token = $null
@@ -980,6 +1250,16 @@ function Invoke-ConnectorSync {
 
 if ($Setup) {
     Save-ConnectorConfig
+    exit 0
+}
+
+if ($ShowVersion) {
+    Write-Host "Revora 1C OData connector $ConnectorVersion"
+    exit 0
+}
+
+if ($UpdateInstalled) {
+    Update-InstalledConnector
     exit 0
 }
 

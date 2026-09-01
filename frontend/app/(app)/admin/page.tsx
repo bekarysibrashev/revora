@@ -9,7 +9,7 @@ type User = { id:string; email:string; full_name:string; role:string; branch_ids
 type Connection = { id:string; name:string; provider:string; status:string; settings?:Record<string,unknown> };
 type Profile = { id:string; source_entity:string; target_entity:string; version:number; is_active:boolean; rules:Record<string,unknown> };
 type OneCToken = { connection_id:string; token:string; allowed_entities:string[] };
-type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; pending_records:number; normalized_records:number; quarantined_records:number; entities:{entity:string;records:number}[]; branch_mappings:{structural_unit_key:string;structural_unit_name:string;branch_code:string}[]; quarantine_reasons:{source_entity:string;error_code:string;field_name:string|null;message:string;records:number}[]; source_summaries:{source_entity:string;dimension:string;value:string;records:number;amount:string|number}[] };
+type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; pending_records:number; normalized_records:number; quarantined_records:number; entities:{entity:string;records:number}[]; branch_mappings:{structural_unit_key:string;structural_unit_name:string;branch_code:string}[]; quarantine_reasons:{source_entity:string;error_code:string;field_name:string|null;message:string;records:number}[]; source_summaries:{source_entity:string;dimension:string;value:string;records:number;amount:string|number}[]; connector_version:string|null; sync_status:string; sync_started_at:string|null; sync_completed_at:string|null; expected_entity_count:number; completed_entity_count:number; sync_is_complete:boolean; sync_error:string|null };
 type OneCNormalize = { connection_id:string; reset:number; processed:number; normalized:number; quarantined:number; remaining:number };
 type OneCMetadataProperty = { name:string; type:string; nullable:boolean|null };
 type OneCMetadataEntity = { name:string; entity_type:string; properties:OneCMetadataProperty[]; navigation_properties:{name:string;relationship:string|null;target_type:string|null}[] };
@@ -222,10 +222,14 @@ function OneCIntegration(){
     {!oneCConnections.length?<button className="primary small" onClick={()=>create.mutate()} disabled={create.isPending}>{create.isPending?"Создаём…":"Создать безопасное подключение 1С"}</button>:<>
       {oneCConnections.length>1&&<label>Подключение<select value={connectionId} onChange={e=>{setConnectionId(e.target.value);setToken(null)}}>{oneCConnections.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>}
       <div className="integration-health">
-        <span className={status?.status==="connected"?"badge active":"badge"}>{status?.status==="connected"?"Подключено":"Ожидает первого запуска"}</span>
+        <span className={status?.sync_is_complete?"badge active":"badge"}>{status?.sync_is_complete?"Полная синхронизация":"Данные ещё не полные"}</span>
         <span>Записей: <strong>{status?.total_records||0}</strong></span>
         <span>Последняя синхронизация: <strong>{status?.last_synced_at?new Date(status.last_synced_at).toLocaleString("ru-RU"):"ещё не было"}</strong></span>
+        {status?.connector_version&&<span>Коннектор: <strong>v{status.connector_version}</strong></span>}
       </div>
+      {status?.sync_status==="running"&&<div className="setup-steps"><p className="hint">1С синхронизируется: завершено сущностей {status.completed_entity_count} из {status.expected_entity_count}. До завершения цифры Dashboard нельзя считать полными.</p></div>}
+      {status?.sync_status==="failed"&&<div className="error-box">Синхронизация 1С прервана после {status.completed_entity_count} из {status.expected_entity_count} сущностей. {status.sync_error||"Запустите коннектор повторно."}</div>}
+      {status?.sync_status==="completed"&&!status.sync_is_complete&&<div className="error-box">Коннектор сообщил о завершении, но набор сущностей неполный. Dashboard не должен использовать этот запуск как контрольный.</div>}
       {status&&<div className="integration-health">
         <span>В аналитике за 90 дней: <strong>{status.normalized_records||0}</strong></span>
         <span>Ожидают обработки: <strong>{status.pending_records||0}</strong></span>
@@ -287,9 +291,13 @@ function OneCIntegration(){
         <ol>
           <li>Скачайте скрипт и положите его в отдельную папку.</li>
           <li>Откройте PowerShell под тем Windows-пользователем, от которого будет идти синхронизация.</li>
-          <li>Выполните настройку; скрипт сам запросит логин 1С, пароль и ключ Revora.</li>
+          <li>Для нового подключения выполните настройку; скрипт сам запросит логин 1С, пароль и ключ Revora.</li>
         </ol>
         <pre>{`.\\revora-1c-odata.ps1 -Setup -RevoraApiUrl "${API_URL}"`}</pre>
+        <p>Если коннектор уже настроен, обновите только его код без повторного ввода паролей:</p>
+        <pre>{`.\\revora-1c-odata.ps1 -UpdateInstalled`}</pre>
+        <p>Проверьте установленную версию (должна быть 6.0.0):</p>
+        <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -ShowVersion`}</pre>
         <p>Проверка доступа к 1С:</p>
         <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -TestConnection`}</pre>
         <p>Первая синхронизация за последние 90 дней:</p>

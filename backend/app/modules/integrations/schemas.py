@@ -156,6 +156,30 @@ class OneCPushResponse(BaseModel):
     records_failed: int = 0
 
 
+class OneCSyncManifestEntity(BaseModel):
+    entity: str = Field(min_length=3, max_length=200)
+    records: int = Field(ge=0)
+
+
+class OneCSyncManifestRequest(BaseModel):
+    connector_version: str = Field(min_length=1, max_length=50)
+    status: Literal["running", "completed", "failed"]
+    started_at: datetime
+    completed_at: datetime | None = None
+    period_from: datetime | None = None
+    expected_entities: list[str] = Field(min_length=1, max_length=100)
+    completed_entities: list[OneCSyncManifestEntity] = Field(default_factory=list, max_length=100)
+    error_message: str | None = Field(default=None, max_length=1000)
+
+
+class OneCSyncManifestResponse(BaseModel):
+    connection_id: UUID
+    status: Literal["running", "completed", "failed"]
+    expected_entities: int
+    completed_entities: int
+    is_complete: bool
+
+
 class OneCMetadataProperty(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     type: str = Field(min_length=1, max_length=300)
@@ -246,3 +270,11 @@ class ConnectionSyncStatusResponse(BaseModel):
     branch_mappings: list[OneCBranchMapping] = Field(default_factory=list)
     quarantine_reasons: list[OneCQuarantineReason] = Field(default_factory=list)
     source_summaries: list[OneCSourceSummary] = Field(default_factory=list)
+    connector_version: str | None = None
+    sync_status: str | None = None
+    sync_started_at: datetime | None = None
+    sync_completed_at: datetime | None = None
+    expected_entity_count: int = 0
+    completed_entity_count: int = 0
+    sync_is_complete: bool = False
+    sync_error: str | None = None
