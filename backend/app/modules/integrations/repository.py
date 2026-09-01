@@ -5,7 +5,7 @@ import re
 import unicodedata
 from uuid import UUID, uuid4
 
-from sqlalchemy import Numeric, case, cast, delete, func, or_, select, text, update
+from sqlalchemy import Numeric, String, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -653,59 +653,63 @@ class IntegrationRepository:
         source_entities: tuple[str, ...],
         period_from: datetime,
     ) -> int:
-        # Only pull the identity/ordering columns needed to pick the latest
-        # version per record -- NOT the JSONB payload. These entities can
-        # carry 100k+ rows (e.g. table-part lines), and loading the full
-        # payload for all of them into memory was slow enough on the app's
-        # hosting tier to make this endpoint time out before it could
-        # respond, which surfaced to the browser as an opaque CORS/network
-        # failure instead of the real cause.
-        rows = (
-            await self.session.execute(
-                select(
-                    RawRecord.id,
-                    RawRecord.source_entity,
-                    RawRecord.source_record_id,
-                    RawRecord.record_hash,
-                    RawRecord.received_at,
-                    RawRecord.created_at,
-                ).where(
-                    RawRecord.tenant_id == tenant_id,
-                    RawRecord.connection_id == connection_id,
-                    RawRecord.source_entity.in_(source_entities),
-                    self._one_c_history_condition(period_from),
+        # This used to pull every matching RawRecord into the app -- first
+        # the full row with its JSONB payload, then (after a first fix) a
+        # lighter 6-column version -- to work out the latest version per
+        # record in Python. Even the lightened version still meant loading
+        # 100k-200k+ rows into memory for entities like Document_Прием_
+        # Лечение, which was enough to get the whole process OOM-killed
+        # (exit 137) on the app's hosting tier, taking the request down
+        # with it. Do the ranking with a SQL window function instead, so
+        # nothing but a handful of small queries ever crosses into Python --
+        # Postgres computes "latest row per (source_entity, identity)"
+        # itself and the three status/error updates each reference that
+        # computation directly instead of an ID list built in the app.
+        identity = func.coalesce(
+            RawRecord.source_record_id, RawRecord.record_hash, cast(RawRecord.id, String)
+        )
+        ranked = (
+            select(
+                RawRecord.id,
+                func.row_number()
+                .over(
+                    partition_by=(RawRecord.source_entity, identity),
+                    order_by=(RawRecord.received_at.desc(), RawRecord.id.desc()),
                 )
+                .label("rn"),
             )
-        ).all()
-        latest_ids, superseded_ids = self._latest_one_c_record_versions(rows)
-        all_ids = [row.id for row in rows]
+            .where(
+                RawRecord.tenant_id == tenant_id,
+                RawRecord.connection_id == connection_id,
+                RawRecord.source_entity.in_(source_entities),
+                self._one_c_history_condition(period_from),
+            )
+            .subquery()
+        )
 
-        for chunk in self._chunks(latest_ids):
-            await self.session.execute(
-                update(RawRecord)
-                .where(RawRecord.id.in_(chunk))
-                .values(status="pending")
-                .execution_options(synchronize_session=False)
+        reset_result = await self.session.execute(
+            update(RawRecord)
+            .where(RawRecord.id.in_(select(ranked.c.id).where(ranked.c.rn == 1)))
+            .values(status="pending")
+            .execution_options(synchronize_session=False)
+        )
+        await self.session.execute(
+            update(RawRecord)
+            .where(RawRecord.id.in_(select(ranked.c.id).where(ranked.c.rn > 1)))
+            .values(status="superseded")
+            .execution_options(synchronize_session=False)
+        )
+        await self.session.execute(
+            update(NormalizationError)
+            .where(
+                NormalizationError.raw_record_id.in_(select(ranked.c.id)),
+                NormalizationError.status == "open",
             )
-        for chunk in self._chunks(superseded_ids):
-            await self.session.execute(
-                update(RawRecord)
-                .where(RawRecord.id.in_(chunk))
-                .values(status="superseded")
-                .execution_options(synchronize_session=False)
-            )
-        for chunk in self._chunks(all_ids):
-            await self.session.execute(
-                update(NormalizationError)
-                .where(
-                    NormalizationError.raw_record_id.in_(chunk),
-                    NormalizationError.status == "open",
-                )
-                .values(status="resolved", resolved_at=datetime.now(UTC))
-                .execution_options(synchronize_session=False)
-            )
+            .values(status="resolved", resolved_at=datetime.now(UTC))
+            .execution_options(synchronize_session=False)
+        )
         await self.session.flush()
-        return len(latest_ids)
+        return reset_result.rowcount or 0
 
     async def remove_one_c_canonical_record(
         self,
