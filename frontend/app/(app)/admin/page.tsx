@@ -115,8 +115,8 @@ const oneCEntityLabels:Record<string,string>={
   "Document_НачислениеЗарплаты_РасчетЗарплаты": "Расчёт зарплаты по сотрудникам",
 };
 
-const ONE_C_NORMALIZE_BATCH_SIZE=100;
-const ONE_C_NORMALIZE_TIMEOUT_MS=45_000;
+const ONE_C_NORMALIZE_BATCH_SIZE=25;
+const ONE_C_NORMALIZE_TIMEOUT_MS=90_000;
 const ONE_C_NORMALIZE_RETRIES=5;
 
 function wait(milliseconds:number){
@@ -257,7 +257,7 @@ function OneCIntegration(){
         {normalizeError&&<div className="error-box">{normalizeError}</div>}
       </div>}
       <div className="setup-steps">
-        <p><strong>Пересчёт после обновления правил аналитики.</strong> Повторно сопоставляет уже загруженные строки 1С за 90 дней, не удаляя исходные данные.</p>
+        <p><strong>Автоматический расчёт данных 1С.</strong> После синхронизации сервер сам обрабатывает очередь в фоне. Кнопка нужна только для ручного запуска или повторного сопоставления после изменения правил.</p>
         <button className="small" onClick={()=>normalizeExisting(true)} disabled={normalizing}>{normalizing?"Пересчитываем…":"Пересчитать аналитику 1С"}</button>
         {normalizeProgress&&<p className="hint">Обработано: {normalizeProgress.processed}. Добавлено в аналитику: {normalizeProgress.normalized}. Нужна проверка: {normalizeProgress.quarantined}. Осталось: {normalizeProgress.remaining}.</p>}
         {normalizeError&&<div className="error-box">{normalizeError}</div>}
