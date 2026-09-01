@@ -59,7 +59,7 @@ $StatePath = Join-Path $ConnectorDirectory "one-c-odata-state.xml"
 $LogPath = Join-Path $ConnectorDirectory "one-c-odata.log"
 $TaskName = "Revora 1C OData Sync"
 $IncrementalOverlapDays = 7
-$ConnectorVersion = "6.1.0"
+$ConnectorVersion = "6.1.1"
 $ParentFilterChunkSize = 10
 
 # Kept as UTF-8 Base64 so this file works in Windows PowerShell 5.1 even when
@@ -221,7 +221,7 @@ function Invoke-WithRetry {
     param(
         [Parameter(Mandatory = $true)][scriptblock]$Operation,
         [Parameter(Mandatory = $true)][string]$Description,
-        [ValidateRange(1, 5)][int]$Attempts = 3
+        [ValidateRange(1, 8)][int]$Attempts = 6
     )
 
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
@@ -230,7 +230,7 @@ function Invoke-WithRetry {
         }
         catch {
             if ($attempt -eq $Attempts) { throw }
-            $delay = [Math]::Pow(2, $attempt)
+            $delay = [Math]::Min(30, [Math]::Pow(2, $attempt))
             Write-ConnectorLog -Level "WARN" -Message "$Description failed (attempt $attempt/$Attempts). Retry in $delay seconds."
             Start-Sleep -Seconds $delay
         }
@@ -1203,6 +1203,7 @@ function Invoke-ConnectorSync {
         $totalDuplicates = 0
         $completedEntities = New-Object System.Collections.ArrayList
         $parentReferenceCache = @{}
+        $manifestEntities = @($runtimeEntities)
 
         try {
             if ($ResumeOffset -gt 0 -and -not $ResumeEntity) {
@@ -1211,9 +1212,14 @@ function Invoke-ConnectorSync {
             if ($ResumeEntity -and $ResumeEntity -notin $runtimeEntities) {
                 throw "Resume entity '$ResumeEntity' is not enabled in the connector configuration."
             }
+            if ($ResumeEntity) {
+                $resumeIndex = [Array]::IndexOf([string[]]$runtimeEntities, [string]$ResumeEntity)
+                $manifestEntities = @($runtimeEntities[$resumeIndex..($runtimeEntities.Count - 1)])
+                Write-ConnectorLog -Message "Resume manifest contains $($manifestEntities.Count) remaining entities."
+            }
             Send-RevoraSyncManifest -ApiUrl $Config.RevoraApiUrl -Token $token `
                 -Status "running" -StartedUtc $startedUtc -PeriodFrom $changedSince `
-                -ExpectedEntities $runtimeEntities | Out-Null
+                -ExpectedEntities $manifestEntities | Out-Null
             $waitingForResumeEntity = [bool]$ResumeEntity
             foreach ($entity in $runtimeEntities) {
                 if ($waitingForResumeEntity -and $entity -ne $ResumeEntity) { continue }
@@ -1308,18 +1314,18 @@ function Invoke-ConnectorSync {
                 [void]$completedEntities.Add([pscustomobject]@{ entity = $entity; records = $entitySent })
                 Send-RevoraSyncManifest -ApiUrl $Config.RevoraApiUrl -Token $token `
                     -Status "running" -StartedUtc $startedUtc -PeriodFrom $changedSince `
-                    -ExpectedEntities $runtimeEntities -CompletedEntities @($completedEntities.ToArray()) | Out-Null
+                    -ExpectedEntities $manifestEntities -CompletedEntities @($completedEntities.ToArray()) | Out-Null
             }
             Send-RevoraSyncManifest -ApiUrl $Config.RevoraApiUrl -Token $token `
                 -Status "completed" -StartedUtc $startedUtc -PeriodFrom $changedSince `
-                -ExpectedEntities $runtimeEntities -CompletedEntities @($completedEntities.ToArray()) | Out-Null
+                -ExpectedEntities $manifestEntities -CompletedEntities @($completedEntities.ToArray()) | Out-Null
         }
         catch {
             $syncError = $_.Exception.Message
             try {
                 Send-RevoraSyncManifest -ApiUrl $Config.RevoraApiUrl -Token $token `
                     -Status "failed" -StartedUtc $startedUtc -PeriodFrom $changedSince `
-                    -ExpectedEntities $runtimeEntities -CompletedEntities @($completedEntities.ToArray()) `
+                    -ExpectedEntities $manifestEntities -CompletedEntities @($completedEntities.ToArray()) `
                     -ErrorMessage $syncError | Out-Null
             }
             catch {
