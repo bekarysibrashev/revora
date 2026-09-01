@@ -653,20 +653,32 @@ class IntegrationRepository:
         source_entities: tuple[str, ...],
         period_from: datetime,
     ) -> int:
-        records = list(
-            (
-                await self.session.scalars(
-                    select(RawRecord).where(
-                        RawRecord.tenant_id == tenant_id,
-                        RawRecord.connection_id == connection_id,
-                        RawRecord.source_entity.in_(source_entities),
-                        self._one_c_history_condition(period_from),
-                    )
+        # Only pull the identity/ordering columns needed to pick the latest
+        # version per record -- NOT the JSONB payload. These entities can
+        # carry 100k+ rows (e.g. table-part lines), and loading the full
+        # payload for all of them into memory was slow enough on the app's
+        # hosting tier to make this endpoint time out before it could
+        # respond, which surfaced to the browser as an opaque CORS/network
+        # failure instead of the real cause.
+        rows = (
+            await self.session.execute(
+                select(
+                    RawRecord.id,
+                    RawRecord.source_entity,
+                    RawRecord.source_record_id,
+                    RawRecord.record_hash,
+                    RawRecord.received_at,
+                    RawRecord.created_at,
+                ).where(
+                    RawRecord.tenant_id == tenant_id,
+                    RawRecord.connection_id == connection_id,
+                    RawRecord.source_entity.in_(source_entities),
+                    self._one_c_history_condition(period_from),
                 )
-            ).all()
-        )
-        latest_ids, superseded_ids = self._latest_one_c_record_versions(records)
-        all_ids = [record.id for record in records]
+            )
+        ).all()
+        latest_ids, superseded_ids = self._latest_one_c_record_versions(rows)
+        all_ids = [row.id for row in rows]
 
         for chunk in self._chunks(latest_ids):
             await self.session.execute(
@@ -740,9 +752,16 @@ class IntegrationRepository:
 
     @staticmethod
     def _latest_one_c_record_versions(
-        records: list[RawRecord],
+        records: "Sequence[object]",
     ) -> tuple[list[UUID], list[UUID]]:
-        latest: dict[tuple[str, str], RawRecord] = {}
+        """Pick the newest row per (source_entity, identity).
+
+        Accepts either full RawRecord ORM instances or lightweight Row
+        results carrying the same id/source_entity/source_record_id/
+        record_hash/received_at/created_at attributes -- both expose these
+        as plain attributes, so the dedup logic is identical either way.
+        """
+        latest: dict[tuple[str, str], object] = {}
         for record in records:
             identity = record.source_record_id or record.record_hash or str(record.id)
             key = (record.source_entity, identity)

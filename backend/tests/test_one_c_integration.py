@@ -659,3 +659,60 @@ async def test_existing_normalized_rows_can_be_reset_for_new_rules() -> None:
     assert result.reset == 1
     assert result.normalized == 1
     assert raw.status == "normalized"
+
+
+def test_latest_one_c_record_versions_accepts_lightweight_rows() -> None:
+    """reset_one_c_records_for_reprocessing() now selects only the columns
+    needed for dedup (id/source_entity/source_record_id/record_hash/
+    received_at/created_at) instead of full RawRecord ORM rows with their
+    JSONB payload -- entities like Document_Прием_Лечение carry 100k+ rows,
+    and loading every payload into memory made the reprocess endpoint slow
+    enough to time out before responding. This locks in that the dedup
+    logic only relies on those six attributes, so it works the same whether
+    given full RawRecord instances or lightweight Row results.
+    """
+
+    older = SimpleNamespace(
+        id=uuid4(),
+        source_entity="Document_Прием_Лечение",
+        source_record_id="ref-A|1",
+        record_hash="hash-a1-old",
+        received_at=datetime(2026, 7, 1, tzinfo=UTC),
+        created_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    newer_same_identity = SimpleNamespace(
+        id=uuid4(),
+        source_entity="Document_Прием_Лечение",
+        source_record_id="ref-A|1",
+        record_hash="hash-a1-new",
+        received_at=datetime(2026, 7, 2, tzinfo=UTC),
+        created_at=datetime(2026, 7, 2, tzinfo=UTC),
+    )
+    different_line = SimpleNamespace(
+        id=uuid4(),
+        source_entity="Document_Прием_Лечение",
+        source_record_id="ref-A|2",
+        record_hash="hash-a2",
+        received_at=datetime(2026, 7, 1, tzinfo=UTC),
+        created_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    parent = SimpleNamespace(
+        id=uuid4(),
+        source_entity="Document_Прием",
+        source_record_id="ref-A",
+        record_hash="hash-parent-a",
+        received_at=datetime(2026, 7, 1, tzinfo=UTC),
+        created_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    rows = [older, newer_same_identity, different_line, parent]
+
+    latest_ids, superseded_ids = IntegrationRepository._latest_one_c_record_versions(
+        rows
+    )
+
+    assert set(latest_ids) == {
+        newer_same_identity.id,
+        different_line.id,
+        parent.id,
+    }
+    assert superseded_ids == [older.id]
