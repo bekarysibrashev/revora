@@ -222,7 +222,7 @@ export default function WhatsAppPage() {
                   disabled={connectQr.isPending || qrStatus.data?.configured === false}
                   onClick={() => connectQr.mutate()}
                 >
-                  {connectQr.isPending ? "Запускаем…" : qrStatus.data?.qr_data_url ? "Обновить QR" : "Получить QR-код"}
+                  {connectQr.isPending ? <><span className="spinner" aria-hidden="true"/>Запускаем…</> : qrStatus.data?.qr_data_url ? "Обновить QR" : "Получить QR-код"}
                 </button>}
               </div>
             </div>}
@@ -252,7 +252,7 @@ export default function WhatsAppPage() {
                   event.preventDefault(); if (testMessage.trim()) simulate.mutate(testMessage.trim());
                 }}>
                   <textarea value={testMessage} onChange={(event) => setTestMessage(event.target.value)} placeholder="Например: Сколько стоит лечение одного зуба?" rows={3} />
-                  <button className="primary" disabled={simulate.isPending}>{simulate.isPending ? "Проверяем…" : "Отправить"}</button>
+                  <button className="primary" disabled={simulate.isPending}>{simulate.isPending ? <><span className="spinner" aria-hidden="true"/>Проверяем…</> : "Отправить"}</button>
                 </form>
                 {simulate.isError && <div className="error-box">{simulate.error.message}</div>}
               </div>
@@ -306,7 +306,7 @@ export default function WhatsAppPage() {
                   <label>Ответ на русском<textarea rows={4} value={knowledgeDraft.content_ru} onChange={e => setKnowledgeDraft({...knowledgeDraft, content_ru:e.target.value})}/></label>
                   <label>Ответ на казахском<textarea rows={4} value={knowledgeDraft.content_kk} onChange={e => setKnowledgeDraft({...knowledgeDraft, content_kk:e.target.value})}/></label>
                   {saveKnowledge.isError && <div className="error-box">{saveKnowledge.error.message}</div>}
-                  <div className="inline-actions"><button type="button" onClick={() => setKnowledgeEditorOpen(false)}>Отмена</button><button className="primary" disabled={saveKnowledge.isPending || (!knowledgeDraft.content_ru.trim() && !knowledgeDraft.content_kk.trim())}>{saveKnowledge.isPending ? "Сохраняем…" : "Сохранить черновик"}</button></div>
+                  <div className="inline-actions"><button type="button" onClick={() => setKnowledgeEditorOpen(false)}>Отмена</button><button className="primary" disabled={saveKnowledge.isPending || (!knowledgeDraft.content_ru.trim() && !knowledgeDraft.content_kk.trim())}>{saveKnowledge.isPending ? <><span className="spinner" aria-hidden="true"/>Сохраняем…</> : "Сохранить черновик"}</button></div>
                 </form>}
               </> : <div className="info-panel"><span>i</span><div><strong>Базой знаний управляет владелец</strong><p>Администраторы видят утверждённые материалы, но не могут менять ответы бота.</p></div></div>}
               {importResult && <div className="success-box">{importResult}</div>}

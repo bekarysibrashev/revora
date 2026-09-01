@@ -70,7 +70,7 @@ function DataImport() {
       <div className="inline-form"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Название источника"/><button onClick={()=>createConnection.mutate()} disabled={createConnection.isPending}>Добавить источник</button></div>
     </section>
     <section className="panel"><Step n="2" title="Правила преобразования" text="Свяжите колонки клиники с единой структурой Revora."/>
-      {profiles.data?.items.length?<label>Сохранённый профиль<div className="inline-form"><select value={profile} onChange={e=>{const p=profiles.data?.items.find(x=>x.id===e.target.value);setProfile(e.target.value);if(p){setSource(p.source_entity);setTarget(p.target_entity);const r=p.rules as {fields?:unknown};if(r.fields)setRules(JSON.stringify(r.fields,null,2))}}}><option value="">Новый профиль</option>{profiles.data.items.map(x=><option key={x.id} value={x.id}>{x.source_entity} → {x.target_entity}, версия {x.version}{x.is_active?" · активен":""}</option>)}</select>{profile&&<button type="button" className="danger small" onClick={()=>{if(confirm("Удалить этот профиль маппинга? Уже загруженные записи не пострадают, но профиль пропадёт из списка."))deleteProfile.mutate(profile)}} disabled={deleteProfile.isPending}>{deleteProfile.isPending?"Удаление…":"Удалить"}</button>}</div></label>:null}
+      {profiles.data?.items.length?<label>Сохранённый профиль<div className="inline-form"><select value={profile} onChange={e=>{const p=profiles.data?.items.find(x=>x.id===e.target.value);setProfile(e.target.value);if(p){setSource(p.source_entity);setTarget(p.target_entity);const r=p.rules as {fields?:unknown};if(r.fields)setRules(JSON.stringify(r.fields,null,2))}}}><option value="">Новый профиль</option>{profiles.data.items.map(x=><option key={x.id} value={x.id}>{x.source_entity} → {x.target_entity}, версия {x.version}{x.is_active?" · активен":""}</option>)}</select>{profile&&<button type="button" className="danger small" onClick={()=>{if(confirm("Удалить этот профиль маппинга? Уже загруженные записи не пострадают, но профиль пропадёт из списка."))deleteProfile.mutate(profile)}} disabled={deleteProfile.isPending}>{deleteProfile.isPending?<><span className="spinner dark" aria-hidden="true"/>Удаление…</>:"Удалить"}</button>}</div></label>:null}
       <div className="form-grid"><label>Тип исходных данных<input value={source} onChange={e=>setSource(e.target.value)}/></label><label>Куда загрузить<select value={target} onChange={e=>setTarget(e.target.value)}>{targets.map(x=><option key={x[0]} value={x[0]}>{x[1]}</option>)}</select></label></div>
       <label>Соответствие колонок (JSON)<textarea rows={10} value={rules} onChange={e=>setRules(e.target.value)} spellCheck={false}/></label>
       <button className="primary small" onClick={saveMapping} disabled={!connection}>Сохранить новую версию правил</button>{profile&&<p className="success-box">Профиль готов к загрузке: {profile}</p>}
@@ -219,7 +219,7 @@ function OneCIntegration(){
   }
   return <section className="panel">
     <Step n="1С" title="Автоматическая синхронизация 1С" text="OData остаётся на localhost. Локальный коннектор отправляет в Revora только разрешённые финансовые регистры по HTTPS."/>
-    {!oneCConnections.length?<button className="primary small" onClick={()=>create.mutate()} disabled={create.isPending}>{create.isPending?"Создаём…":"Создать безопасное подключение 1С"}</button>:<>
+    {!oneCConnections.length?<button className="primary small" onClick={()=>create.mutate()} disabled={create.isPending}>{create.isPending?<><span className="spinner" aria-hidden="true"/>Создаём…</>:"Создать безопасное подключение 1С"}</button>:<>
       {oneCConnections.length>1&&<label>Подключение<select value={connectionId} onChange={e=>{setConnectionId(e.target.value);setToken(null)}}>{oneCConnections.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>}
       <div className="integration-health">
         <span className={status?.sync_is_complete?"badge active":"badge"}>{status?.sync_is_complete?"Полная синхронизация":"Данные ещё не полные"}</span>
@@ -269,7 +269,7 @@ function OneCIntegration(){
           <button type="button" className="small" onClick={()=>setShowMetadata(value=>!value)}>{showMetadata?"Скрыть структуру OData":"Показать структуру OData"}</button>
           {metadata.data&&<button type="button" className="small" onClick={downloadMetadata}>Скачать структуру JSON</button>}
         </div>
-        {showMetadata&&metadata.isLoading&&<p className="hint">Загружаем структуру 1С…</p>}
+        {showMetadata&&metadata.isLoading&&<p className="hint"><span className="loading-dots" aria-hidden="true"><i/><i/><i/></span> Загружаем структуру 1С…</p>}
         {showMetadata&&metadata.isError&&<div className="error-box">{metadata.error.message}</div>}
         {metadata.data&&<>
           <p className="hint">Опубликовано сущностей: <strong>{metadata.data.entities.length}</strong>. Здесь только названия таблиц и полей, без данных пациентов.</p>
@@ -278,7 +278,7 @@ function OneCIntegration(){
         </>}
       </div>
       <div className="inline-form">
-        <button className="primary small" onClick={()=>rotate.mutate()} disabled={rotate.isPending}>{rotate.isPending?"Создаём ключ…":token?"Перевыпустить ключ":"Получить ключ коннектора"}</button>
+        <button className="primary small" onClick={()=>rotate.mutate()} disabled={rotate.isPending}>{rotate.isPending?<><span className="spinner" aria-hidden="true"/>Создаём ключ…</>:token?"Перевыпустить ключ":"Получить ключ коннектора"}</button>
         <a className="button-link" href="/revora-1c-odata.ps1" download>Скачать коннектор PowerShell</a>
       </div>
       {token&&<div className="success-box">

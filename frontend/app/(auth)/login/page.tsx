@@ -72,7 +72,7 @@ export default function LoginPage() {
             <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required minLength={8} autoComplete="current-password" />
           </label>
           {error && <div className="error-box">{error}</div>}
-          <button className="primary" disabled={busy}>{busy ? "Входим…" : "Войти"}</button>
+          <button className="primary" disabled={busy}>{busy ? <><span className="spinner" aria-hidden="true"/>Входим…</> : "Войти"}</button>
           <small className="login-security-note">После 5 неверных паролей вход блокируется на 15 минут.</small>
         </form>
       </section>

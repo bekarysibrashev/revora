@@ -44,7 +44,7 @@ const defaults = {
 
 const directionLabel = (value: string) => value === "in" ? "Входящий" : value === "out" ? "Исходящий" : value;
 const outcomeLabel = (value: string | null) => ({ Success: "Состоялся", Missed: "Пропущен", Cancel: "Отменён", Busy: "Занято", NotAvailable: "Недоступен", NotAllowed: "Запрещён", NotFound: "Не найден" }[value || ""] || value || "—");
-const analysisLabel = (value: string | null) => ({ pending: "Ожидает", queued: "В очереди", retrying: "Повторная попытка", waiting_for_recording: "Ждёт запись", processing: "Анализируется", ready: "Готов", needs_review: "Нужна проверка", skipped_short: "Короче 8 сек.", failed: "Ошибка" }[value || ""] || "Правила не заданы");
+const analysisLabel = (value: string | null) => ({ pending: "Ожидает", queued: "В очереди", retrying: "Повторная попытка", waiting_for_recording: "Ждёт запись", processing: "Анализируется", ready: "Готов", needs_review: "Нужна проверка", skipped_short: "Не длиннее 10 сек.", failed: "Ошибка" }[value || ""] || "Правила не заданы");
 const durationLabel = (seconds: number | null) => seconds == null ? "—" : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
 export default function AiPage() {
@@ -135,7 +135,7 @@ export default function AiPage() {
       <div className="call-upload-row">
         <label>Оператор<input value={operatorName} maxLength={150} onChange={event=>setOperatorName(event.target.value)} /></label>
         <label className="file-drop">Аудиозапись<input type="file" accept=".mp3,.m4a,.wav,.ogg,.webm,audio/*" onChange={event=>setAudioFile(event.target.files?.[0]||null)} /><span>{audioFile?.name || "Выберите MP3, M4A, WAV, OGG или WEBM"}</span></label>
-        <button className="primary" disabled={!audioFile||upload.isPending} onClick={()=>upload.mutate()}>{upload.isPending?"ИИ анализирует…":"Проверить звонок"}</button>
+        <button className="primary" disabled={!audioFile||upload.isPending} onClick={()=>upload.mutate()}>{upload.isPending?<><span className="spinner" aria-hidden="true"/>ИИ анализирует…</>:"Проверить звонок"}</button>
       </div>
       {upload.error&&<p className="error-box">{upload.error instanceof Error?upload.error.message:"Не удалось загрузить запись"}</p>}
       {upload.data&&<p className={upload.data.status==="failed"?"error-box":"success-box"}>{upload.data.status==="failed"?"Анализ завершился ошибкой — откройте отчёт для кода ошибки.":"Анализ завершён. Откройте сформированный отчёт."}</p>}
@@ -237,7 +237,7 @@ export default function AiPage() {
       {form.criteria.map((item, index) => <div className="quality-criterion" key={index}><input value={item.name} onChange={event => { const criteria = [...form.criteria]; criteria[index] = { ...item, name: event.target.value }; setForm({ ...form, criteria }); }} /><input type="number" min="1" max="100" value={item.weight} onChange={event => { const criteria = [...form.criteria]; criteria[index] = { ...item, weight: Number(event.target.value) }; setForm({ ...form, criteria }); }} /><textarea value={item.description} onChange={event => { const criteria = [...form.criteria]; criteria[index] = { ...item, description: event.target.value }; setForm({ ...form, criteria }); }} /></div>)}
       <label>Причины потери — каждая с новой строки<textarea value={form.loss_reasons.join("\n")} onChange={event => setForm({ ...form, loss_reasons: event.target.value.split("\n").map(value => value.trim()).filter(Boolean) })} /></label>
       {save.error && <p className="error-box">{save.error instanceof Error ? save.error.message : "Не удалось сохранить"}</p>}
-      <button className="primary" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Сохраняем…" : "Сохранить новую версию"}</button>
+      <button className="primary" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? <><span className="spinner" aria-hidden="true"/>Сохраняем…</> : "Сохранить новую версию"}</button>
     </section></div>}
 
     {selectedCall&&<div className="modal-backdrop"><section className="panel modal call-report"><div className="page-header"><div><h2>AI-отчёт по звонку</h2><p>Полная расшифровка не сохраняется</p></div><button className="icon-button" onClick={()=>setSelectedCall(null)}>×</button></div>
@@ -248,7 +248,7 @@ export default function AiPage() {
         <div className="two-col"><div><h3>Сильные стороны</h3><ul>{analysis.data.strengths.map(item=><li key={item}>{item}</li>)}</ul></div><div><h3>Что улучшить</h3><ul>{analysis.data.recommendations.map(item=><li key={item}>{item}</li>)}</ul></div></div>
         {analysis.data.evidence.length>0&&<div><h3>Основания оценки</h3><div className="call-evidence">{analysis.data.evidence.map((item,index)=><article key={`${item.criterion}-${index}`}><strong>{durationLabel(Math.round(item.timestamp_from))}–{durationLabel(Math.round(item.timestamp_to))} · {item.criterion}</strong><p>{item.description}</p></article>)}</div></div>}
         {analysis.data.error_code&&<p className="error-box">Код ошибки: {analysis.data.error_code}</p>}
-        {calls.data?.items.find(item=>item.id===selectedCall)?.recording_url&&<button className="primary small" disabled={reanalyze.isPending} onClick={()=>reanalyze.mutate(selectedCall)}>{reanalyze.isPending?"Ставим в очередь…":"Проверить повторно"}</button>}
+        {calls.data?.items.find(item=>item.id===selectedCall)?.recording_url&&<button className="primary small" disabled={reanalyze.isPending} onClick={()=>reanalyze.mutate(selectedCall)}>{reanalyze.isPending?<><span className="spinner" aria-hidden="true"/>Ставим в очередь…</>:"Проверить повторно"}</button>}
       </>}</DataState>
     </section></div>}
   </>;

@@ -206,7 +206,7 @@ function PlatformDashboard({ token, onLock }: { token: string; onLock: () => voi
           <label>Пароль владельца
             <input type="password" minLength={8} value={ownerPassword} onChange={e => setOwnerPassword(e.target.value)} required />
           </label>
-          <button className="primary small" disabled={busy}>{busy ? "Создаём…" : "Создать клинику"}</button>
+          <button className="primary small" disabled={busy}>{busy ? <><span className="spinner" aria-hidden="true"/>Создаём…</> : "Создать клинику"}</button>
         </form>
         {error && <div className="error-box">{error}</div>}
         {result && (

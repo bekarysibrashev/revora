@@ -130,7 +130,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, [user, allowed, path, router]);
 
   if (!ready || !user) {
-    return <div className="center-state">Загружаем рабочее пространство…</div>;
+    return (
+      <div className="boot-screen" role="status" aria-live="polite">
+        <span className="brand">REVORA</span>
+        <span className="boot-spinner" aria-hidden="true" />
+        <span className="sr-only">Загружаем рабочее пространство…</span>
+      </div>
+    );
   }
 
   function chooseBranch(value: string) {
@@ -241,7 +247,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {(user.role === "owner" || user.role === "manager") ? (
             <Link
               href="/analytics"
-              className={`status data-${quality.data?.summary.status || "loading"}`}
+              className={`status data-${quality.data?.summary.status || "loading"}${quality.isLoading ? " is-loading" : ""}`}
               title={quality.data ? `Качество данных: ${quality.data.summary.score}/100` : "Проверяем качество данных"}
             >
               <i />
