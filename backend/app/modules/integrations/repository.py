@@ -59,6 +59,56 @@ class IntegrationRepository:
             ).all()
         )
 
+    async def queued_one_c_normalization_connections(
+        self, tenant_id: UUID, *, limit: int = 10
+    ) -> list[IntegrationConnection]:
+        return list(
+            (
+                await self.session.scalars(
+                    select(IntegrationConnection)
+                    .where(
+                        IntegrationConnection.tenant_id == tenant_id,
+                        IntegrationConnection.provider == "1c_odata_push",
+                        IntegrationConnection.settings["normalization_status"].astext.in_(
+                            ("queued", "running")
+                        ),
+                    )
+                    .order_by(IntegrationConnection.updated_at)
+                    .limit(limit)
+                )
+            ).all()
+        )
+
+    async def set_one_c_normalization_state(
+        self,
+        connection: IntegrationConnection,
+        *,
+        status: str,
+        remaining: int | None = None,
+        processed: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        settings = {
+            **(connection.settings or {}),
+            "normalization_status": status,
+            "normalization_error": error,
+            "normalization_updated_at": datetime.now(UTC).isoformat(),
+        }
+        if remaining is not None:
+            settings["normalization_remaining"] = remaining
+        if processed is not None:
+            settings["normalization_processed"] = processed
+        if status == "completed":
+            settings["normalization_completed_at"] = datetime.now(UTC).isoformat()
+        connection.settings = settings
+        connection.status = {
+            "queued": "processing",
+            "running": "processing",
+            "completed": "connected",
+            "failed": "processing_failed",
+        }.get(status, connection.status)
+        await self.session.flush()
+
     async def get_connection(
         self, tenant_id: UUID, connection_id: UUID
     ) -> IntegrationConnection | None:
@@ -173,6 +223,11 @@ class IntegrationRepository:
         *,
         manifest: dict[str, object],
     ) -> None:
+        normalization_status = {
+            "running": "waiting_for_upload",
+            "completed": "queued",
+            "failed": "blocked",
+        }[str(manifest["status"])]
         connection.settings = {
             **(connection.settings or {}),
             "connector_version": manifest["connector_version"],
@@ -183,6 +238,8 @@ class IntegrationRepository:
             "sync_expected_entities": manifest["expected_entities"],
             "sync_completed_entities": manifest["completed_entities"],
             "sync_error": manifest.get("error_message"),
+            "normalization_status": normalization_status,
+            "normalization_error": None,
             **(
                 {"last_synced_at": manifest["completed_at"]}
                 if manifest["status"] == "completed" and manifest.get("completed_at")
@@ -191,7 +248,7 @@ class IntegrationRepository:
         }
         connection.status = {
             "running": "syncing",
-            "completed": "connected",
+            "completed": "processing",
             "failed": "sync_failed",
         }[str(manifest["status"])]
         await self.session.flush()
@@ -655,6 +712,7 @@ class IntegrationRepository:
                     )
                     .order_by(dependency_order, RawRecord.received_at, RawRecord.id)
                     .limit(limit)
+                    .with_for_update(skip_locked=True)
                 )
             ).all()
         )
@@ -1032,6 +1090,75 @@ class IntegrationRepository:
         if existing is None:
             raise RuntimeError("Raw record conflict could not be resolved")
         return existing, False
+
+    async def bulk_store_raw_records(
+        self,
+        *,
+        tenant_id: UUID,
+        connection_id: UUID,
+        sync_run_id: UUID,
+        source_entity: str,
+        source_schema_version: str | None,
+        records: list[dict[str, object]],
+    ) -> int:
+        """Insert a connector batch in one database round trip.
+
+        ``records`` contains precomputed ``source_record_id``, ``record_hash``
+        and ``payload`` keys. Conflicting hashes are already present and are
+        deliberately ignored. Older versions of newly inserted source
+        identities are superseded in two set-based updates.
+        """
+        if not records:
+            return 0
+        values = [
+            {
+                "id": uuid4(),
+                "tenant_id": tenant_id,
+                "connection_id": connection_id,
+                "sync_run_id": sync_run_id,
+                "source_entity": source_entity,
+                "source_record_id": item["source_record_id"],
+                "source_schema_version": source_schema_version,
+                "record_hash": item["record_hash"],
+                "payload": item["payload"],
+                "status": "pending",
+            }
+            for item in records
+        ]
+        statement = (
+            insert(RawRecord)
+            .values(values)
+            .on_conflict_do_nothing(
+                index_elements=["tenant_id", "connection_id", "source_entity", "record_hash"]
+            )
+            .returning(RawRecord.id, RawRecord.source_record_id)
+        )
+        inserted = list((await self.session.execute(statement)).all())
+        inserted_ids = [row.id for row in inserted]
+        source_ids = [row.source_record_id for row in inserted if row.source_record_id]
+        if inserted_ids and source_ids:
+            previous_ids = select(RawRecord.id).where(
+                RawRecord.tenant_id == tenant_id,
+                RawRecord.connection_id == connection_id,
+                RawRecord.source_entity == source_entity,
+                RawRecord.source_record_id.in_(source_ids),
+                RawRecord.id.notin_(inserted_ids),
+                RawRecord.status != "superseded",
+            )
+            await self.session.execute(
+                update(NormalizationError)
+                .where(
+                    NormalizationError.raw_record_id.in_(previous_ids),
+                    NormalizationError.status == "open",
+                )
+                .values(status="resolved", resolved_at=datetime.now(UTC))
+            )
+            await self.session.execute(
+                update(RawRecord)
+                .where(RawRecord.id.in_(previous_ids))
+                .values(status="superseded")
+            )
+        return len(inserted)
 
     async def quarantine(
         self,

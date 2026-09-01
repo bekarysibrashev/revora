@@ -368,10 +368,63 @@ class IntegrationService:
         encoded_size = len(
             json.dumps(records, ensure_ascii=False, default=str).encode("utf-8")
         )
-        if encoded_size > 2 * 1024 * 1024:
-            raise AppError("ONE_C_BATCH_TOO_LARGE", "1C batch exceeds 2 MB", 413)
+        max_batch_bytes = 8 * 1024 * 1024 if payload.defer_normalization else 2 * 1024 * 1024
+        if encoded_size > max_batch_bytes:
+            raise AppError(
+                "ONE_C_BATCH_TOO_LARGE",
+                f"1C batch exceeds {max_batch_bytes // (1024 * 1024)} MB",
+                413,
+            )
 
         run = await self.repository.create_sync_run(parts.tenant_id, connection.id)
+        if payload.defer_normalization:
+            # The clinic machine is only a transport. Keep the request short:
+            # sanitize/validate once, insert the whole batch with one SQL
+            # statement, and leave canonical calculation to the durable
+            # backend worker after the manifest says the upload is complete.
+            latest_by_identity: dict[str, dict[str, object]] = {}
+            for record in records:
+                identity = source_record_id(record)
+                record_hash = compute_record_hash(payload.entity, record)
+                latest_by_identity[identity or record_hash] = {
+                    "source_record_id": identity,
+                    "record_hash": record_hash,
+                    "payload": record,
+                }
+            prepared = list(latest_by_identity.values())
+            stored = await self.repository.bulk_store_raw_records(
+                tenant_id=parts.tenant_id,
+                connection_id=connection.id,
+                sync_run_id=run.id,
+                source_entity=payload.entity,
+                source_schema_version=payload.schema_version,
+                records=prepared,
+            )
+            duplicates = len(records) - stored
+            await self.repository.finish_sync_run(
+                run,
+                status="accepted",
+                records_read=len(records),
+                records_written=stored,
+            )
+            connection.settings = {
+                **(connection.settings or {}),
+                "deferred_normalization_requested": True,
+            }
+            await self.repository.mark_connection_synced(
+                connection,
+                entity=payload.entity,
+                synced_at=datetime.now(UTC),
+            )
+            return OneCPushResponse(
+                sync_run_id=run.id,
+                status="accepted",
+                entity=payload.entity,
+                records_received=len(records),
+                records_stored=stored,
+                records_duplicate=duplicates,
+            )
+
         stored = 0
         duplicates = 0
         normalized = 0
@@ -619,6 +672,63 @@ class IntegrationService:
             quarantined=quarantined,
             remaining=remaining,
         )
+
+    async def normalize_one_c_background_batch(
+        self,
+        *,
+        tenant_id: UUID,
+        connection_id: UUID,
+        batch_size: int = 200,
+    ) -> tuple[int, int, int, int]:
+        """Calculate one durable backend batch without a browser/user request."""
+        connection = await self._connection(tenant_id, connection_id)
+        if connection.provider != ONE_C_PROVIDER:
+            return 0, 0, 0, 0
+        branch_code = (
+            str(connection.settings["default_branch_code"])
+            if connection.settings.get("default_branch_code")
+            else await self.repository.single_active_branch_code(tenant_id)
+        )
+        branch_code_map = await self.repository.one_c_branch_code_map(
+            tenant_id, connection.id
+        )
+        period_value = connection.settings.get("sync_period_from")
+        period_from = (
+            datetime.fromisoformat(str(period_value).replace("Z", "+00:00"))
+            if period_value
+            else datetime(1, 1, 1, tzinfo=UTC)
+        )
+        records = await self.repository.pending_one_c_records(
+            tenant_id=tenant_id,
+            connection_id=connection.id,
+            source_entities=MAPPABLE_ONE_C_ENTITIES,
+            period_from=period_from,
+            limit=batch_size,
+        )
+        normalized = 0
+        quarantined = 0
+        for raw_record in records:
+            mapping_payload = await self._one_c_mapping_payload(
+                tenant_id=tenant_id,
+                raw_record=raw_record,
+            )
+            outcome = await self._normalize_one_c_raw_record(
+                tenant_id=tenant_id,
+                raw_record=raw_record,
+                branch_code=self._one_c_record_branch_code(
+                    mapping_payload, branch_code_map, branch_code
+                ),
+                mapping_payload=mapping_payload,
+            )
+            normalized += int(outcome == "normalized")
+            quarantined += int(outcome == "quarantined")
+        remaining = await self.repository.pending_one_c_record_count(
+            tenant_id=tenant_id,
+            connection_id=connection.id,
+            source_entities=MAPPABLE_ONE_C_ENTITIES,
+            period_from=period_from,
+        )
+        return len(records), normalized, quarantined, remaining
 
     async def _normalize_one_c_raw_record(
         self,

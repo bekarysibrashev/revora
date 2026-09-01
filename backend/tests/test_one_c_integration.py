@@ -88,6 +88,24 @@ class FakeOneCRepository:
             self.raw_records[kwargs["record_hash"]] = raw
         return raw, created
 
+    async def bulk_store_raw_records(self, **kwargs):
+        stored = 0
+        for item in kwargs["records"]:
+            record_hash = item["record_hash"]
+            if record_hash in self.hashes:
+                continue
+            self.hashes.add(record_hash)
+            self.raw_records[record_hash] = SimpleNamespace(
+                id=uuid4(),
+                connection_id=kwargs["connection_id"],
+                status="pending",
+                source_entity=kwargs["source_entity"],
+                source_record_id=item["source_record_id"],
+                payload=item["payload"],
+            )
+            stored += 1
+        return stored
+
     async def single_active_branch_code(self, tenant_id):
         return "main"
 
@@ -417,6 +435,36 @@ async def test_push_stores_allowed_records_and_deduplicates() -> None:
     ]
     assert repository.context == tenant_id
     assert repository.connection.status == "connected"
+
+
+@pytest.mark.asyncio
+async def test_fast_push_only_stores_raw_rows_and_returns_without_calculation() -> None:
+    tenant_id, connection_id = uuid4(), uuid4()
+    token, digest = issue_connector_token(tenant_id, connection_id)
+    repository = FakeOneCRepository(tenant_id, connection_id, digest)
+    writer = FakeOneCWriter()
+    service = IntegrationService(repository, writer)
+    payload = OneCPushRequest(
+        entity="AccumulationRegister_Выручка_RecordType",
+        defer_normalization=True,
+        records=[{
+            "Recorder": "doc-fast",
+            "LineNumber": 1,
+            "Period": "2026-07-31T12:00:00",
+            "Сумма": 5000,
+        }],
+    )
+
+    first = await service.ingest_one_c_push(token, payload)
+    second = await service.ingest_one_c_push(token, payload)
+
+    assert first.status == "accepted"
+    assert first.records_stored == 1
+    assert first.records_normalized == 0
+    assert second.records_duplicate == 1
+    assert writer.writes == []
+    assert next(iter(repository.raw_records.values())).status == "pending"
+    assert repository.connection.settings["deferred_normalization_requested"] is True
 
 
 @pytest.mark.asyncio

@@ -59,7 +59,7 @@ $StatePath = Join-Path $ConnectorDirectory "one-c-odata-state.xml"
 $LogPath = Join-Path $ConnectorDirectory "one-c-odata.log"
 $TaskName = "Revora 1C OData Sync"
 $IncrementalOverlapDays = 7
-$ConnectorVersion = "6.0.0"
+$ConnectorVersion = "6.1.0"
 $ParentFilterChunkSize = 10
 
 # Kept as UTF-8 Base64 so this file works in Windows PowerShell 5.1 even when
@@ -237,6 +237,44 @@ function Invoke-WithRetry {
     }
 }
 
+function Invoke-WithHardTimeout {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
+        [hashtable]$Parameters = @{},
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    # Invoke-RestMethod/-WebRequest's own -TimeoutSec is unreliable on
+    # Windows PowerShell 5.1 when a connection is accepted but then goes
+    # silent (no bytes, no close) -- observed on the clinic's network as a
+    # sync that stops producing any log output and never recovers. Run the
+    # call on its own in-process runspace so it can be forced to stop if it
+    # never returns, instead of hanging indefinitely.
+    $shell = [PowerShell]::Create()
+    try {
+        [void]$shell.AddScript($ScriptBlock)
+        foreach ($key in $Parameters.Keys) {
+            [void]$shell.AddParameter($key, $Parameters[$key])
+        }
+        $asyncResult = $shell.BeginInvoke()
+        $signaled = $asyncResult.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))
+        if (-not $signaled) {
+            $shell.Stop() | Out-Null
+            throw "$Description timed out after $TimeoutSeconds seconds (connection appeared open but never responded)."
+        }
+        $output = @($shell.EndInvoke($asyncResult))
+        if ($shell.HadErrors -and $shell.Streams.Error.Count -gt 0) {
+            throw $shell.Streams.Error[0].Exception
+        }
+        if ($output.Count -eq 1) { return $output[0] }
+        return $output
+    }
+    finally {
+        $shell.Dispose()
+    }
+}
+
 function Save-ConnectorConfig {
     Assert-ConnectorUrls -ApiUrl $RevoraApiUrl -ODataUrl $OneCBaseUrl
 
@@ -340,9 +378,15 @@ function Invoke-OneCGet {
     Assert-LocalODataUrl -Url $Url
     $authorization = Get-BasicAuthorizationValue -Credential $Credential
     return Invoke-WithRetry -Description "1C OData request" -Operation {
-        Invoke-RestMethod -Method Get -Uri $Url -MaximumRedirection 0 -TimeoutSec 300 -Headers @{
-            Accept = "application/json"
+        Invoke-WithHardTimeout -TimeoutSeconds 300 -Description "1C OData request" -Parameters @{
+            Url = $Url
             Authorization = $authorization
+        } -ScriptBlock {
+            param($Url, $Authorization)
+            Invoke-RestMethod -Method Get -Uri $Url -MaximumRedirection 0 -TimeoutSec 295 -Headers @{
+                Accept = "application/json"
+                Authorization = $Authorization
+            }
         }
     }
 }
@@ -625,8 +669,8 @@ function Remove-OneCUnsupportedCharacters {
 function Get-RevoraUploadBatches {
     param(
         [Parameter(Mandatory = $true)][object[]]$Records,
-        [ValidateRange(1, 500)][int]$MaxRecords = 200,
-        [ValidateRange(100000, 1900000)][int]$MaxBytes = 1500000
+        [ValidateRange(1, 1000)][int]$MaxRecords = 500,
+        [ValidateRange(100000, 7500000)][int]$MaxBytes = 6500000
     )
 
     $current = New-Object System.Collections.ArrayList
@@ -662,15 +706,41 @@ function Send-RevoraBatch {
     $json = @{
         entity = $Entity
         records = $Records
-        schema_version = "1c-odata-v6-parent-bounded"
+        schema_version = "1c-odata-v7-fast-raw"
+        defer_normalization = $true
     } | ConvertTo-Json -Depth 30 -Compress
     $body = [Text.Encoding]::UTF8.GetBytes($json)
+    $compressedStream = New-Object System.IO.MemoryStream
+    try {
+        $gzipStream = New-Object System.IO.Compression.GZipStream(
+            $compressedStream,
+            [System.IO.Compression.CompressionMode]::Compress,
+            $true
+        )
+        try {
+            $gzipStream.Write($body, 0, $body.Length)
+        }
+        finally {
+            $gzipStream.Dispose()
+        }
+        $body = $compressedStream.ToArray()
+    }
+    finally {
+        $compressedStream.Dispose()
+    }
 
     return Invoke-WithRetry -Description "Revora upload" -Operation {
         try {
-            Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/push" -MaximumRedirection 0 -TimeoutSec 300 `
-                -Headers @{ Authorization = "Bearer $Token" } `
-                -ContentType "application/json; charset=utf-8" -Body $body
+            Invoke-WithHardTimeout -TimeoutSeconds 300 -Description "Revora upload" -Parameters @{
+                ApiUrl = $ApiUrl
+                Token = $Token
+                Body = $body
+            } -ScriptBlock {
+                param($ApiUrl, $Token, $Body)
+                Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/push" -MaximumRedirection 0 -TimeoutSec 295 `
+                    -Headers @{ Authorization = "Bearer $Token"; "Content-Encoding" = "gzip" } `
+                    -ContentType "application/json; charset=utf-8" -Body $Body
+            }
         }
         catch {
             $responseBody = $null
@@ -716,10 +786,17 @@ function Send-RevoraSyncManifest {
     } | ConvertTo-Json -Depth 10 -Compress
     $body = [Text.Encoding]::UTF8.GetBytes($json)
     return Invoke-WithRetry -Description "Revora sync manifest" -Operation {
-        Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/sync-manifest" `
-            -MaximumRedirection 0 -TimeoutSec 300 `
-            -Headers @{ Authorization = "Bearer $Token" } `
-            -ContentType "application/json; charset=utf-8" -Body $body
+        Invoke-WithHardTimeout -TimeoutSeconds 300 -Description "Revora sync manifest" -Parameters @{
+            ApiUrl = $ApiUrl
+            Token = $Token
+            Body = $body
+        } -ScriptBlock {
+            param($ApiUrl, $Token, $Body)
+            Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/sync-manifest" `
+                -MaximumRedirection 0 -TimeoutSec 295 `
+                -Headers @{ Authorization = "Bearer $Token" } `
+                -ContentType "application/json; charset=utf-8" -Body $Body
+        }
     }
 }
 
@@ -733,8 +810,14 @@ function Get-OneCMetadataInventory {
     Assert-LocalODataUrl -Url $metadataUrl
     $authorization = Get-BasicAuthorizationValue -Credential $Credential
     $response = Invoke-WithRetry -Description "1C metadata discovery" -Operation {
-        Invoke-WebRequest -UseBasicParsing -Method Get -Uri $metadataUrl -MaximumRedirection 0 -TimeoutSec 300 `
-            -Headers @{ Authorization = $authorization; Accept = "application/xml" }
+        Invoke-WithHardTimeout -TimeoutSeconds 300 -Description "1C metadata discovery" -Parameters @{
+            MetadataUrl = $metadataUrl
+            Authorization = $authorization
+        } -ScriptBlock {
+            param($MetadataUrl, $Authorization)
+            Invoke-WebRequest -UseBasicParsing -Method Get -Uri $MetadataUrl -MaximumRedirection 0 -TimeoutSec 295 `
+                -Headers @{ Authorization = $Authorization; Accept = "application/xml" }
+        }
     }
     try {
         [xml]$document = $response.Content
@@ -957,10 +1040,17 @@ function Send-RevoraMetadata {
         } | ConvertTo-Json -Depth 30 -Compress
         $body = [Text.Encoding]::UTF8.GetBytes($json)
         $result = Invoke-WithRetry -Description "Revora metadata upload" -Operation {
-            Invoke-RestMethod -Method Post -Uri "$($Config.RevoraApiUrl)/integrations/1c/metadata" `
-                -MaximumRedirection 0 -TimeoutSec 300 `
-                -Headers @{ Authorization = "Bearer $token" } `
-                -ContentType "application/json; charset=utf-8" -Body $body
+            Invoke-WithHardTimeout -TimeoutSeconds 300 -Description "Revora metadata upload" -Parameters @{
+                ApiUrl = $Config.RevoraApiUrl
+                Token = $token
+                Body = $body
+            } -ScriptBlock {
+                param($ApiUrl, $Token, $Body)
+                Invoke-RestMethod -Method Post -Uri "$ApiUrl/integrations/1c/metadata" `
+                    -MaximumRedirection 0 -TimeoutSec 295 `
+                    -Headers @{ Authorization = "Bearer $Token" } `
+                    -ContentType "application/json; charset=utf-8" -Body $Body
+            }
         }
         Write-ConnectorLog -Message "OData metadata uploaded: entities=$($result.entity_count), properties=$($result.property_count), fingerprint=$($result.fingerprint)."
         return $result
@@ -978,8 +1068,14 @@ function Test-Connector {
     $authorization = Get-BasicAuthorizationValue -Credential $credential
     Assert-LocalODataUrl -Url $metadataUrl
     Invoke-WithRetry -Description "1C metadata test" -Operation {
-        Invoke-WebRequest -UseBasicParsing -Method Get -Uri $metadataUrl -MaximumRedirection 0 -TimeoutSec 300 `
-            -Headers @{ Authorization = $authorization } | Out-Null
+        Invoke-WithHardTimeout -TimeoutSeconds 300 -Description "1C metadata test" -Parameters @{
+            MetadataUrl = $metadataUrl
+            Authorization = $authorization
+        } -ScriptBlock {
+            param($MetadataUrl, $Authorization)
+            Invoke-WebRequest -UseBasicParsing -Method Get -Uri $MetadataUrl -MaximumRedirection 0 -TimeoutSec 295 `
+                -Headers @{ Authorization = $Authorization } | Out-Null
+        }
     }
 
     $inventory = @(Get-OneCMetadataInventory -BaseUrl $Config.OneCBaseUrl -Credential $credential)
@@ -1195,7 +1291,7 @@ function Invoke-ConnectorSync {
                     # Wide dynamically discovered objects can be much larger
                     # than the original fixed field subset. Split by both row
                     # count and encoded size to stay below API/proxy limits.
-                    $uploadBatchSize = if ($entity -eq $CounterpartyEntity) { 50 } else { 200 }
+                    $uploadBatchSize = 500
                     Get-RevoraUploadBatches -Records $records -MaxRecords $uploadBatchSize |
                     ForEach-Object {
                         $batch = @($_.Records)
@@ -1236,7 +1332,7 @@ function Invoke-ConnectorSync {
         }
 
         Save-LastSuccessfulSync -StartedUtc $startedUtc
-        Write-ConnectorLog -Message "Sync completed: sent=$totalSent, stored=$totalStored, duplicates=$totalDuplicates."
+        Write-ConnectorLog -Message "Upload completed: sent=$totalSent, stored=$totalStored, duplicates=$totalDuplicates. Dashboard calculation is queued on the Revora backend."
     }
     catch {
         Write-ConnectorLog -Level "ERROR" -Message $_.Exception.Message

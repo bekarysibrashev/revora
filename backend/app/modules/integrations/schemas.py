@@ -140,8 +140,9 @@ class OneCConnectorTokenResponse(BaseModel):
 
 class OneCPushRequest(BaseModel):
     entity: str = Field(min_length=3, max_length=200)
-    records: list[dict[str, object]] = Field(min_length=1, max_length=500)
+    records: list[dict[str, object]] = Field(min_length=1, max_length=1000)
     schema_version: str = Field(default="odata-v3", min_length=1, max_length=100)
+    defer_normalization: bool = False
 
 
 class OneCPushResponse(BaseModel):

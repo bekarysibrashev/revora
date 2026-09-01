@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
-from app.core.middleware import RequestIdMiddleware
+from app.core.middleware import OneCGzipRequestMiddleware, RequestIdMiddleware
 from app.core.errors import AppError
 from app.core.database import AsyncSessionFactory
 from app.cli.create_initial_owner import ensure_initial_owner
@@ -32,6 +32,7 @@ from app.modules.ml.router import router as ml_router
 from app.modules.doctors.router import router as doctors_router
 from app.modules.finance.router import router as finance_router
 from app.modules.integrations.router import router as integrations_router
+from app.modules.integrations.embedded_worker import EmbeddedOneCNormalizationWorker
 from app.modules.marketing.router import router as marketing_router
 from app.modules.marketing.embedded_worker import EmbeddedMetaSyncWorker
 from app.modules.sales.router import router as sales_router
@@ -49,6 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     logger = logging.getLogger(__name__)
     call_worker = EmbeddedCallWorker(settings)
     meta_sync_worker = EmbeddedMetaSyncWorker(settings)
+    one_c_worker = EmbeddedOneCNormalizationWorker(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -80,11 +82,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         call_worker.start()
         meta_sync_worker.start()
+        one_c_worker.start()
         try:
             yield
         finally:
             await call_worker.stop()
             await meta_sync_worker.stop()
+            await one_c_worker.stop()
             logger.info("Stopping %s", settings.app_name)
 
     application = FastAPI(
@@ -97,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.state.settings = settings
     application.add_middleware(RequestIdMiddleware)
+    application.add_middleware(OneCGzipRequestMiddleware)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
