@@ -46,14 +46,11 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS ix_raw_records_pending_batch_scan
-        ON raw_records (tenant_id, connection_id, status, source_entity)
-        WHERE status = 'pending'
-        """
-    )
+    # The index is intentionally created out-of-band. Building it during API
+    # startup can wait on an open connector transaction and prevent uvicorn
+    # from binding its port, which makes the whole service unavailable.
+    return
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS ix_raw_records_pending_batch_scan")
+    return
