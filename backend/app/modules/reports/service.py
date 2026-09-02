@@ -4,6 +4,8 @@ from datetime import date
 import hashlib
 import json
 from pathlib import Path
+import re
+import unicodedata
 from uuid import UUID
 
 from app.core.errors import AppError
@@ -36,6 +38,38 @@ REPORT_METRIC_CODES = {
         "appointment_report_revenue", "appointment_report_paid",
     },
 }
+
+
+def _normalize_branch_name(value: object) -> str:
+    text_value = unicodedata.normalize("NFKD", str(value or "")).casefold()
+    return re.sub(r"[^a-zа-я0-9]+", "", text_value)
+
+
+def _transliterate_branch_name(value: str) -> str:
+    return value.translate(str.maketrans({
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d",
+        "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i",
+        "й": "i", "к": "k", "л": "l", "м": "m", "н": "n",
+        "о": "o", "п": "p", "р": "r", "с": "s", "т": "t",
+        "у": "u", "ф": "f", "х": "h", "ц": "ts", "ч": "ch",
+        "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "",
+        "э": "e", "ю": "yu", "я": "ya",
+    }))
+
+
+def _branch_matches_unit(unit_name: str, *, branch_name: str, branch_code: str) -> bool:
+    unit_aliases = {unit_name, _transliterate_branch_name(unit_name)}
+    return any(
+        branch_alias
+        and unit_alias
+        and (
+            branch_alias == unit_alias
+            or branch_alias in unit_alias
+            or unit_alias in branch_alias
+        )
+        for branch_alias in {branch_name, branch_code}
+        for unit_alias in unit_aliases
+    )
 
 
 class OfficialReportsService:
@@ -118,9 +152,32 @@ class OfficialReportsService:
             )
 
         branches = await self.repository.branches_by_code(tenant_id)
+        payload_branch_labels = {
+            item.branch_key.casefold(): item.dimension_label
+            for item in payload.metrics
+            if item.dimension_type == "branch" and item.branch_key
+        }
+        effective_branch_code_map = {
+            key.casefold(): code for key, code in branch_code_map.items()
+        }
+        for source_key, source_label in payload_branch_labels.items():
+            if source_key in effective_branch_code_map:
+                continue
+            unit_name = _normalize_branch_name(source_label)
+            matches = [
+                branch
+                for branch in branches.values()
+                if _branch_matches_unit(
+                    unit_name,
+                    branch_name=_normalize_branch_name(branch.name),
+                    branch_code=_normalize_branch_name(branch.code),
+                )
+            ]
+            if len(matches) == 1:
+                effective_branch_code_map[source_key] = str(matches[0].code)
+
         metrics: list[dict] = []
-        missing_keys: set[str] = set()
-        missing_codes: set[str] = set()
+        unmapped_branches: dict[str, str] = {}
         for item in payload.metrics:
             branch_id = None
             if item.dimension_type != "clinic" and not item.branch_key:
@@ -130,13 +187,18 @@ class OfficialReportsService:
                     422,
                 )
             if item.branch_key:
-                branch_code = branch_code_map.get(item.branch_key.casefold())
+                source_key = item.branch_key.casefold()
+                branch_code = effective_branch_code_map.get(source_key)
                 if not branch_code:
-                    missing_keys.add(item.branch_key)
+                    unmapped_branches[source_key] = payload_branch_labels.get(
+                        source_key, item.branch_key
+                    )
                     continue
                 branch = branches.get(branch_code)
                 if branch is None:
-                    missing_codes.add(branch_code)
+                    unmapped_branches[source_key] = payload_branch_labels.get(
+                        source_key, branch_code
+                    )
                     continue
                 branch_id = branch.id
             metrics.append({
@@ -149,18 +211,13 @@ class OfficialReportsService:
                 "unit": item.unit,
                 "details": item.details,
             })
-        if missing_keys:
-            raise AppError(
-                "ONE_C_BRANCH_MAPPING_REQUIRED",
-                "Не настроено соответствие подразделений 1С: " + ", ".join(sorted(missing_keys)),
-                422,
-            )
-        if missing_codes:
-            raise AppError(
-                "OFFICIAL_REPORT_BRANCH_MISSING",
-                "В Revora отсутствуют филиалы: " + ", ".join(sorted(missing_codes)),
-                422,
-            )
+
+        summary = dict(payload.summary)
+        if unmapped_branches:
+            summary["unmapped_branches"] = [
+                {"source_key": key, "source_label": label}
+                for key, label in sorted(unmapped_branches.items())
+            ]
 
         canonical = payload.model_dump(mode="json")
         source_hash = hashlib.sha256(
@@ -182,7 +239,7 @@ class OfficialReportsService:
             source_filename=f"1c-extension:{connection_id}:{payload.report_type}",
             source_hash=source_hash,
             imported_by_user_id=None,
-            summary=payload.summary,
+            summary=summary,
             metrics=metrics,
         )
         return self._response(report)

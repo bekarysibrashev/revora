@@ -4,7 +4,6 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.errors import AppError
 from app.modules.reports.schemas import OneCReportSnapshotRequest
 from app.modules.reports.service import OfficialReportsService
 
@@ -12,7 +11,9 @@ from app.modules.reports.service import OfficialReportsService
 class FakeReportsRepository:
     def __init__(self):
         self.report = None
-        self.branch = SimpleNamespace(id=uuid4(), code="seifullina")
+        self.branch = SimpleNamespace(
+            id=uuid4(), code="seifullina", name="SAN (Сейфуллина)"
+        )
 
     async def branches_by_code(self, tenant_id):
         return {self.branch.code: self.branch}
@@ -79,26 +80,66 @@ async def test_connector_snapshot_resolves_one_c_branch_and_replaces_period() ->
 
 
 @pytest.mark.asyncio
-async def test_connector_snapshot_rejects_unmapped_branch() -> None:
-    service = OfficialReportsService(FakeReportsRepository())
+async def test_connector_snapshot_maps_branch_from_snapshot_without_odata() -> None:
+    repository = FakeReportsRepository()
+    service = OfficialReportsService(repository)
     payload = OneCReportSnapshotRequest.model_validate({
         "report_type": "payroll",
         "period_from": date(2026, 7, 1),
         "period_to": date(2026, 7, 31),
         "metrics": [{
             "dimension_type": "branch",
-            "dimension_key": "unknown",
-            "dimension_label": "Неизвестная клиника",
+            "dimension_key": "branch-guid",
+            "dimension_label": "SAN (Сейфуллина)",
             "metric_code": "payroll_accrual",
             "value": 1,
-            "branch_key": "unknown-guid",
+            "branch_key": "structural-unit-guid",
         }],
     })
 
-    with pytest.raises(AppError) as error:
-        await service.ingest_connector_snapshot(
-            tenant_id=uuid4(), connection_id=uuid4(),
-            branch_code_map={}, payload=payload,
-        )
+    await service.ingest_connector_snapshot(
+        tenant_id=uuid4(), connection_id=uuid4(),
+        branch_code_map={}, payload=payload,
+    )
 
-    assert error.value.code == "ONE_C_BRANCH_MAPPING_REQUIRED"
+    assert repository.report.metrics[0].branch_id == repository.branch.id
+
+
+@pytest.mark.asyncio
+async def test_connector_snapshot_keeps_clinic_total_when_branch_is_unmapped() -> None:
+    repository = FakeReportsRepository()
+    service = OfficialReportsService(repository)
+    payload = OneCReportSnapshotRequest.model_validate({
+        "report_type": "payroll",
+        "period_from": date(2026, 7, 1),
+        "period_to": date(2026, 7, 31),
+        "metrics": [
+            {
+                "dimension_type": "branch",
+                "dimension_key": "unknown-guid",
+                "dimension_label": "Служебное подразделение",
+                "metric_code": "payroll_accrual",
+                "value": 1,
+                "branch_key": "unknown-guid",
+            },
+            {
+                "dimension_type": "clinic",
+                "dimension_key": "clinic",
+                "dimension_label": "Вся клиника",
+                "metric_code": "payroll_accrual",
+                "value": 10,
+            },
+        ],
+    })
+
+    await service.ingest_connector_snapshot(
+        tenant_id=uuid4(), connection_id=uuid4(),
+        branch_code_map={}, payload=payload,
+    )
+
+    assert len(repository.report.metrics) == 1
+    assert repository.report.metrics[0].dimension_type == "clinic"
+    assert repository.report.summary["unmapped_branches"] == [{
+        "source_key": "unknown-guid",
+        "source_label": "Служебное подразделение",
+    }]
