@@ -1,13 +1,16 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
-from uuid import UUID
+import re
+import unicodedata
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.doctors.models import Doctor, DoctorRating
 from app.modules.finance.models import RevenueFact
+from app.modules.reports.repository import OfficialReportsRepository
 from app.modules.sales.models import Appointment
 
 
@@ -113,7 +116,7 @@ class DoctorsRepository:
             .order_by(func.coalesce(revenue.c.revenue_accrual, 0).desc(), Doctor.full_name)
         )
         rows = (await self.session.execute(statement)).all()
-        return [
+        totals = [
             DoctorTotals(
                 doctor_id=row[0],
                 full_name=row[1],
@@ -130,6 +133,51 @@ class DoctorsRepository:
             )
             for row in rows
         ]
+        official_metrics, official_as_of = await OfficialReportsRepository(
+            self.session
+        ).exact_dimension_metrics(
+            tenant_id,
+            date_from,
+            date_to,
+            "doctor_revenue_payment",
+            "doctor",
+            branch_ids,
+        )
+        by_name: dict[str, list[int]] = {}
+        for index, item in enumerate(totals):
+            by_name.setdefault(self._normalize_name(item.full_name), []).append(index)
+        for metric in official_metrics:
+            matches = by_name.get(self._normalize_name(metric.dimension_label), [])
+            if len(matches) == 1:
+                index = matches[0]
+                current = totals[index]
+                timestamps = [
+                    value for value in (current.data_as_of, official_as_of) if value
+                ]
+                totals[index] = replace(
+                    current,
+                    revenue_payment=Decimal(metric.value),
+                    data_as_of=max(timestamps) if timestamps else None,
+                )
+                continue
+            totals.append(DoctorTotals(
+                doctor_id=uuid5(
+                    NAMESPACE_URL,
+                    f"revora:1c-doctor:{tenant_id}:{metric.dimension_key}",
+                ),
+                full_name=metric.dimension_label,
+                specialty=None,
+                appointments_total=0,
+                appointments_completed=0,
+                revenue_accrual=Decimal("0"),
+                revenue_payment=Decimal(metric.value),
+                average_rating=None,
+                data_as_of=official_as_of,
+            ))
+        return sorted(
+            totals,
+            key=lambda item: (-item.revenue_payment, item.full_name.casefold()),
+        )
 
     @staticmethod
     def _start(value: date) -> datetime:
@@ -138,3 +186,8 @@ class DoctorsRepository:
     @staticmethod
     def _end(value: date) -> datetime:
         return datetime.combine(value + timedelta(days=1), time.min, tzinfo=timezone.utc)
+
+    @staticmethod
+    def _normalize_name(value: str) -> str:
+        normalized = unicodedata.normalize("NFKD", value).casefold()
+        return re.sub(r"[^a-zа-я0-9]+", "", normalized)

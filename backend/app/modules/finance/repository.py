@@ -16,6 +16,7 @@ from app.modules.finance.models import (
     PayrollFact,
     RevenueFact,
 )
+from app.modules.reports.repository import OfficialReportsRepository
 from app.shared.timezone import clinic_day_end_exclusive, clinic_day_start
 
 ZERO = Decimal("0")
@@ -124,15 +125,29 @@ class FinanceRepository:
         if branch_id:
             payroll_statement = payroll_statement.where(PayrollFact.branch_id == branch_id)
         payroll = (await self.session.execute(payroll_statement)).one()
-        timestamps = [value for value in (revenue[2], expense[3], payroll[1]) if value is not None]
+        official_values, official_as_of = await OfficialReportsRepository(
+            self.session
+        ).exact_values(
+            tenant_id,
+            date_from,
+            date_to,
+            {"revenue_accrual", "revenue_payment", "payroll_accrual"},
+            [branch_id] if branch_id else None,
+        )
+        timestamps = [
+            value
+            for value in (revenue[2], expense[3], payroll[1], official_as_of)
+            if value is not None
+        ]
         return PnlTotals(
-            revenue_accrual=Decimal(revenue[0]),
-            revenue_payment=Decimal(revenue[1]),
+            revenue_accrual=official_values.get("revenue_accrual", Decimal(revenue[0])),
+            revenue_payment=official_values.get("revenue_payment", Decimal(revenue[1])),
             variable_expenses=Decimal(expense[0]),
             fixed_expenses=Decimal(expense[1]),
             uncategorized_expenses=Decimal(expense[2]),
-            payroll_accrual=Decimal(payroll[0]),
+            payroll_accrual=official_values.get("payroll_accrual", Decimal(payroll[0])),
             data_as_of=max(timestamps) if timestamps else None,
+            official_metrics=frozenset(official_values),
         )
 
     async def cashflow_totals(
@@ -177,6 +192,16 @@ class FinanceRepository:
         expense_paid = (await self.session.execute(expense_paid_statement)).one()
         payroll_paid = (await self.session.execute(payroll_paid_statement)).one()
 
+        official_values, official_as_of = await OfficialReportsRepository(
+            self.session
+        ).exact_values(
+            tenant_id,
+            date_from,
+            date_to,
+            {"cash_inflow", "revenue_payment", "purchases_paid", "payroll_paid"},
+            [branch_id] if branch_id else None,
+        )
+
         latest_balance = (
             select(
                 AccountBalance.account_ref.label("account_ref"),
@@ -210,14 +235,25 @@ class FinanceRepository:
 
         timestamps = [
             value
-            for value in (row[1], expense_paid[1], payroll_paid[1], balance[1])
+            for value in (row[1], expense_paid[1], payroll_paid[1], balance[1], official_as_of)
             if value is not None
         ]
+        inflow = official_values.get(
+            "cash_inflow",
+            official_values.get("revenue_payment", Decimal(row[0])),
+        )
+        purchases_paid = official_values.get(
+            "purchases_paid", Decimal(expense_paid[0])
+        )
+        payroll_paid_value = official_values.get(
+            "payroll_paid", Decimal(payroll_paid[0])
+        )
         return CashFlowTotals(
-            inflow=Decimal(row[0]),
-            outflow=Decimal(expense_paid[0]) + Decimal(payroll_paid[0]),
+            inflow=inflow,
+            outflow=purchases_paid + payroll_paid_value,
             closing_balance=closing_balance,
             data_as_of=max(timestamps) if timestamps else None,
+            official_metrics=frozenset(official_values),
             cashflow_is_complete=False,
         )
 

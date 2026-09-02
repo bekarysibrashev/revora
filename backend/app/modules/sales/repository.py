@@ -9,6 +9,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.finance.models import RevenueFact
+from app.modules.reports.repository import OfficialReportsRepository
 from app.modules.sales.models import Appointment, Lead
 from app.shared.timezone import clinic_day_end_exclusive, clinic_day_start
 
@@ -120,24 +121,51 @@ class SalesRepository:
                 RevenueFact.patient_id.in_(scoped_patient_ids)
             )
         revenue_row = (await self.session.execute(revenue_statement)).one()
+        official_values, official_as_of = await OfficialReportsRepository(
+            self.session
+        ).exact_values(
+            tenant_id,
+            date_from,
+            date_to,
+            {
+                "appointments_total", "appointments_completed",
+                "appointments_cancelled", "appointments_no_show",
+                "patients_total", "patients_primary", "revenue_payment",
+            },
+            branch_ids,
+        )
         timestamps = [
-            value for value in (lead_row[4], appointment_row[6], revenue_row[1]) if value
+            value
+            for value in (lead_row[4], appointment_row[6], revenue_row[1], official_as_of)
+            if value
         ]
-        patients_total = int(appointment_row[4] or 0)
-        patients_primary = int(appointment_row[5] or 0)
+        patients_total = int(
+            official_values.get("patients_total", appointment_row[4] or 0)
+        )
+        patients_primary = int(
+            official_values.get("patients_primary", appointment_row[5] or 0)
+        )
         return SalesTotals(
             leads_total=int(lead_row[0] or 0),
             leads_new=int(lead_row[1] or 0),
             leads_won=int(lead_row[2] or 0),
             leads_lost=int(lead_row[3] or 0),
-            appointments_total=int(appointment_row[0] or 0),
-            appointments_completed=int(appointment_row[1] or 0),
-            appointments_cancelled=int(appointment_row[2] or 0),
-            appointments_no_show=int(appointment_row[3] or 0),
+            appointments_total=int(
+                official_values.get("appointments_total", appointment_row[0] or 0)
+            ),
+            appointments_completed=int(
+                official_values.get("appointments_completed", appointment_row[1] or 0)
+            ),
+            appointments_cancelled=int(
+                official_values.get("appointments_cancelled", appointment_row[2] or 0)
+            ),
+            appointments_no_show=int(
+                official_values.get("appointments_no_show", appointment_row[3] or 0)
+            ),
             patients_total=patients_total,
             patients_primary=patients_primary,
             patients_repeat=max(0, patients_total - patients_primary),
-            paid_revenue=Decimal(revenue_row[0]),
+            paid_revenue=official_values.get("revenue_payment", Decimal(revenue_row[0])),
             data_as_of=max(timestamps) if timestamps else None,
         )
 
