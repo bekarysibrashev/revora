@@ -30,10 +30,16 @@ from app.modules.integrations.schemas import (
 )
 from app.modules.integrations.service import IntegrationService
 from app.modules.integrations.tabular_adapter import TabularFileAdapter
+from app.modules.reports.dependencies import get_official_reports_service
+from app.modules.reports.schemas import OneCReportSnapshotRequest, OfficialReportResponse
+from app.modules.reports.service import OfficialReportsService
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 IntegrationServiceDependency = Annotated[
     IntegrationService, Depends(get_integration_service)
+]
+OfficialReportsServiceDependency = Annotated[
+    OfficialReportsService, Depends(get_official_reports_service)
 ]
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 connector_bearer = HTTPBearer(auto_error=False)
@@ -50,6 +56,29 @@ async def push_one_c_batch(
     if credentials is None:
         raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
     return await service.ingest_one_c_push(credentials.credentials, payload)
+
+
+@router.post("/1c/report-snapshot", response_model=OfficialReportResponse)
+async def push_one_c_report_snapshot(
+    payload: OneCReportSnapshotRequest,
+    service: IntegrationServiceDependency,
+    reports_service: OfficialReportsServiceDependency,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(connector_bearer)
+    ],
+) -> OfficialReportResponse:
+    if credentials is None:
+        raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
+    parts, connection = await service.authenticate_one_c_connector(credentials.credentials)
+    branch_code_map = await service.one_c_connector_branch_code_map(
+        parts.tenant_id, connection.id
+    )
+    return await reports_service.ingest_connector_snapshot(
+        tenant_id=parts.tenant_id,
+        connection_id=connection.id,
+        branch_code_map=branch_code_map,
+        payload=payload,
+    )
 
 
 @router.post("/1c/metadata", response_model=OneCMetadataResponse)

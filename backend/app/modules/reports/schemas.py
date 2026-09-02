@@ -1,8 +1,10 @@
 """API contracts for importing official 1C reports."""
 
 from datetime import date, datetime
+from decimal import Decimal
+from typing import Literal
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class OfficialReportResponse(BaseModel):
@@ -24,3 +26,30 @@ class OfficialReportListResponse(BaseModel):
     items: list[OfficialReportResponse]
     total: int
     required_report_types: list[str]
+
+
+class OneCReportMetricInput(BaseModel):
+    dimension_type: str = Field(min_length=1, max_length=30)
+    dimension_key: str = Field(min_length=1, max_length=300)
+    dimension_label: str = Field(min_length=1, max_length=500)
+    metric_code: str = Field(min_length=1, max_length=80)
+    value: Decimal
+    unit: Literal["KZT", "count"] = "KZT"
+    branch_key: str | None = Field(default=None, max_length=100)
+    details: dict = Field(default_factory=dict)
+
+
+class OneCReportSnapshotRequest(BaseModel):
+    report_type: Literal[
+        "cash_receipts",
+        "service_revenue",
+        "payroll",
+        "doctor_revenue",
+        "purchases",
+        "patients",
+        "appointments",
+    ]
+    period_from: date
+    period_to: date
+    metrics: list[OneCReportMetricInput] = Field(min_length=1, max_length=10000)
+    summary: dict = Field(default_factory=dict)

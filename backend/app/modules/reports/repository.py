@@ -41,7 +41,7 @@ class OfficialReportsRepository:
     async def replace_active(
         self, *, tenant_id: UUID, report_type: str, period_from: date,
         period_to: date, source_filename: str, source_hash: str,
-        imported_by_user_id: UUID, summary: dict, metrics: list[dict],
+        imported_by_user_id: UUID | None, summary: dict, metrics: list[dict],
     ) -> OfficialReportImport:
         await self.session.execute(
             update(OfficialReportImport)

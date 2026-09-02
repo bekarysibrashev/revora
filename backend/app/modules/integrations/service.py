@@ -607,6 +607,16 @@ class IntegrationService:
             raise AppError("INVALID_CONNECTOR_TOKEN", "Invalid connector token", 401)
         return parts, connection
 
+    async def authenticate_one_c_connector(self, connector_token: str):
+        """Authenticate the clinic extension using the existing connector token."""
+
+        return await self._connector_connection(connector_token)
+
+    async def one_c_connector_branch_code_map(
+        self, tenant_id: UUID, connection_id: UUID
+    ) -> dict[str, str]:
+        return await self.repository.one_c_branch_code_map(tenant_id, connection_id)
+
     async def normalize_existing_one_c_records(
         self,
         user: User,
