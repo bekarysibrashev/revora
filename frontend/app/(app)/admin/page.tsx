@@ -1,19 +1,14 @@
 "use client";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { API_URL, api, apiBinary } from "@/shared/api-client";
+import { api, apiBinary } from "@/shared/api-client";
 import { PageHeader } from "@/shared/ui";
 
 type Branch = { id:string; name:string; code:string; address:string|null; is_active:boolean };
 type User = { id:string; email:string; full_name:string; role:string; branch_ids:string[]; is_active:boolean };
 type Connection = { id:string; name:string; provider:string; status:string; settings?:Record<string,unknown> };
 type Profile = { id:string; source_entity:string; target_entity:string; version:number; is_active:boolean; rules:Record<string,unknown> };
-type OneCToken = { connection_id:string; token:string; allowed_entities:string[] };
-type OneCStatus = { connection_id:string; status:string; last_synced_at:string|null; last_entity:string|null; total_records:number; pending_records:number; normalized_records:number; quarantined_records:number; entities:{entity:string;records:number}[]; branch_mappings:{structural_unit_key:string;structural_unit_name:string;branch_code:string}[]; quarantine_reasons:{source_entity:string;error_code:string;field_name:string|null;message:string;records:number}[]; source_summaries:{source_entity:string;dimension:string;value:string;records:number;amount:string|number}[]; connector_version:string|null; sync_status:string; sync_started_at:string|null; sync_completed_at:string|null; expected_entity_count:number; completed_entity_count:number; sync_is_complete:boolean; sync_error:string|null };
-type OneCNormalize = { connection_id:string; reset:number; processed:number; normalized:number; quarantined:number; remaining:number };
-type OneCMetadataProperty = { name:string; type:string; nullable:boolean|null };
-type OneCMetadataEntity = { name:string; entity_type:string; properties:OneCMetadataProperty[]; navigation_properties:{name:string;relationship:string|null;target_type:string|null}[] };
-type OneCMetadata = { schema_version:string; entities:OneCMetadataEntity[] };
+type OneCToken = { connection_id:string; token:string };
 type OfficialReport = { id:string;report_type:string;report_label:string;period_from:string;period_to:string;source_filename:string;metrics_count:number;summary:Record<string,string>;imported_at:string;duplicate:boolean };
 type TelegramEmployee = { id:string;branch_id:string|null;linked_user_id:string|null;role:string;telegram_user_id:number;username:string|null;full_name:string;is_active:boolean;registered_at:string;last_seen_at:string };
 type TelegramInvitation = { id:string;code:string;code_hint:string;role:string;branch_id:string|null;linked_user_id:string|null;expires_at:string;max_uses:number };
@@ -91,7 +86,7 @@ function OfficialReports(){
   const reports=useQuery({queryKey:["official-1c-reports"],queryFn:()=>api<{items:OfficialReport[];total:number;required_report_types:string[]}>("/reports/official-1c")});
   const required=reports.data?.required_report_types||Object.keys(officialReportLabels);const selected=reports.data?.items.filter(x=>x.period_from===from&&x.period_to===to)||[];const present=new Set(selected.map(x=>x.report_type));const missing=required.filter(x=>!present.has(x));
   async function upload(){if(!files.length)return;setUploading(true);setError("");setResults([]);const done:OfficialReport[]=[];try{for(const file of files){const p=new URLSearchParams({filename:file.name,period_from:from,period_to:to});done.push(await api<OfficialReport>(`/reports/official-1c?${p}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file}));setResults([...done])}setFiles([])}catch(e){setError(`${e instanceof Error?e.message:"Не удалось загрузить отчёты"}. Успешно применено до ошибки: ${done.length}.`)}finally{await qc.invalidateQueries({queryKey:["official-1c-reports"]});await Promise.all([qc.invalidateQueries({queryKey:["dashboard"]}),qc.invalidateQueries({queryKey:["pnl"]}),qc.invalidateQueries({queryKey:["cash"]}),qc.invalidateQueries({queryKey:["sales"]}),qc.invalidateQueries({queryKey:["doctors"]})]);setUploading(false)}}
-  return <section className="panel"><Step n="✓" title="Контрольные отчёты 1С" text="Официальные итоги отчётов имеют приоритет над восстановленными расчётами OData. Детальные строки пациентов не сохраняются."/>
+  return <section className="panel"><Step n="✓" title="Контрольные отчёты 1С" text="Официальные итоги отчётов имеют приоритет над восстановленными расчётами по данным 1С. Детальные строки пациентов не сохраняются."/>
     <div className="form-grid"><label>Период с<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>Период по<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label></div>
     <div className={missing.length?"error-box":"success-box"}><strong>Эталонные отчёты за выбранный период: {selected.length}/{required.length}</strong>{missing.length?<><br/>Не загружены: {missing.map(x=>officialReportLabels[x]||x).join(" · ")}</>:<><br/>Все согласованные контрольные отчёты загружены.</>}</div>
     <label className="file-drop"><input type="file" accept=".xls,.xlsx" multiple onChange={e=>setFiles(Array.from(e.target.files||[]))} disabled={uploading}/><strong>{files.length?`Выбрано файлов: ${files.length}`:"Выберите официальные отчёты 1С"}</strong><span>Можно выбрать все 7 файлов одновременно · XLS/XLSX до 50 МБ каждый</span></label>
@@ -101,28 +96,6 @@ function OfficialReports(){
   </section>
 }
 
-const oneCEntityLabels:Record<string,string>={
-  "AccumulationRegister_Выручка_RecordType":"Выручка",
-  "AccumulationRegister_ДенежныеСредства_RecordType":"Денежные средства",
-  "AccumulationRegister_Затраты_RecordType":"Затраты",
-  "AccumulationRegister_НарядЗаказы_RecordType":"Наряд-заказы",
-  "AccumulationRegister_Продажи_RecordType":"Продажи",
-  "AccumulationRegister_ПродажиСебестоимость_RecordType":"Себестоимость продаж",
-  "AccumulationRegister_РабочееВремяСотрудников_RecordType":"Рабочее время",
-  "AccumulationRegister_РасчетыСПерсоналом_RecordType":"Расчёты с персоналом",
-  "Catalog_СтруктурныеЕдиницы":"Филиалы 1С",
-  "Document_НачислениеЗарплаты": "Начисление зарплаты",
-  "Document_НачислениеЗарплаты_РасчетЗарплаты": "Расчёт зарплаты по сотрудникам",
-};
-
-const ONE_C_NORMALIZE_BATCH_SIZE=25;
-const ONE_C_NORMALIZE_TIMEOUT_MS=90_000;
-const ONE_C_NORMALIZE_RETRIES=5;
-
-function wait(milliseconds:number){
-  return new Promise(resolve=>setTimeout(resolve,milliseconds));
-}
-
 function OneCIntegration(){
   const qc=useQueryClient();
   const connections=useQuery({queryKey:["connections"],queryFn:()=>api<{items:Connection[]}>('/integrations/connections')});
@@ -130,11 +103,6 @@ function OneCIntegration(){
   const [connectionId,setConnectionId]=useState("");
   const [token,setToken]=useState<OneCToken|null>(null);
   const [copied,setCopied]=useState(false);
-  const [normalizing,setNormalizing]=useState(false);
-  const [normalizeProgress,setNormalizeProgress]=useState<{processed:number;normalized:number;quarantined:number;remaining:number}|null>(null);
-  const [normalizeError,setNormalizeError]=useState("");
-  const [showMetadata,setShowMetadata]=useState(false);
-  const [metadataSearch,setMetadataSearch]=useState("");
   useEffect(()=>{if(!connectionId&&oneCConnections[0])setConnectionId(oneCConnections[0].id)},[connectionId,oneCConnections]);
   const create=useMutation({
     mutationFn:()=>api<Connection>("/integrations/connections",{method:"POST",body:JSON.stringify({provider:"1c_odata_push",name:"1С Stoma",settings:{}})}),
@@ -144,171 +112,27 @@ function OneCIntegration(){
     mutationFn:()=>api<OneCToken>(`/integrations/connections/${connectionId}/connector-token`,{method:"POST"}),
     onSuccess:x=>{setToken(x);setCopied(false);qc.invalidateQueries({queryKey:["connections"]})}
   });
-  const sync=useQuery({
-    queryKey:["one-c-sync",connectionId],
-    queryFn:()=>api<OneCStatus>(`/integrations/connections/${connectionId}/sync-status`),
-    enabled:!!connectionId,
-    refetchInterval:15000
-  });
-  const metadata=useQuery({
-    queryKey:["one-c-metadata",connectionId],
-    queryFn:()=>api<OneCMetadata>(`/integrations/connections/${connectionId}/1c-metadata`),
-    enabled:!!connectionId&&showMetadata
-  });
-  const status=sync.data;
-  const visibleMetadata=(metadata.data?.entities||[]).filter(entity=>{
-    const query=metadataSearch.trim().toLocaleLowerCase("ru-RU");
-    return !query||entity.name.toLocaleLowerCase("ru-RU").includes(query)||entity.properties.some(property=>property.name.toLocaleLowerCase("ru-RU").includes(query));
-  });
+  const currentConnection=oneCConnections.find(x=>x.id===connectionId);
   async function copyToken(){if(!token)return;await navigator.clipboard.writeText(token.token);setCopied(true)}
-  function downloadMetadata(){
-    if(!metadata.data)return;
-    const blob=new Blob([JSON.stringify(metadata.data,null,2)],{type:"application/json;charset=utf-8"});
-    const url=URL.createObjectURL(blob);
-    const link=document.createElement("a");
-    link.href=url;link.download="revora-1c-odata-metadata.json";link.click();
-    URL.revokeObjectURL(url);
-  }
-  async function normalizeExisting(resetExisting=false){
-    if(!connectionId||normalizing)return;
-    if(resetExisting&&!confirm("Пересчитать канонические показатели 1С за последние 90 дней? Исходные данные не удаляются."))return;
-    setNormalizing(true);setNormalizeError("");
-    let totals={processed:0,normalized:0,quarantined:0,remaining:status?.pending_records||0};
-    setNormalizeProgress(totals);
-    try{
-      let first=true;
-      for(;;){
-        let batch:OneCNormalize|null=null;
-        let lastError:unknown=null;
-        for(let attempt=1;attempt<=ONE_C_NORMALIZE_RETRIES;attempt+=1){
-          const controller=new AbortController();
-          const timeout=window.setTimeout(()=>controller.abort(),ONE_C_NORMALIZE_TIMEOUT_MS);
-          const shouldReset=resetExisting&&first;
-          // A timed-out request may still finish on the server. Never send the
-          // reset flag twice or already completed batches could be reset again.
-          first=false;
-          try{
-            batch=await api<OneCNormalize>(`/integrations/connections/${connectionId}/normalize-1c`,{
-              method:"POST",
-              body:JSON.stringify({history_days:90,batch_size:ONE_C_NORMALIZE_BATCH_SIZE,reset_existing:shouldReset}),
-              signal:controller.signal,
-            });
-            lastError=null;
-            break;
-          }catch(error){
-            lastError=error;
-            if(attempt<ONE_C_NORMALIZE_RETRIES)await wait(attempt*1_500);
-          }finally{
-            window.clearTimeout(timeout);
-          }
-        }
-        if(!batch){
-          throw lastError instanceof Error?lastError:new Error("Сервер временно не отвечает. Обработка остановлена безопасно и может быть продолжена.");
-        }
-        totals={processed:totals.processed+batch.processed,normalized:totals.normalized+batch.normalized,quarantined:totals.quarantined+batch.quarantined,remaining:batch.remaining};
-        setNormalizeProgress(totals);
-        if(batch.remaining===0)break;
-        if(batch.processed===0)throw new Error(`Осталось ${batch.remaining} строк, но сервер не смог выбрать следующий пакет.`);
-        // Keep the browser responsive and avoid hammering Render with one
-        // continuous stream of database transactions.
-        await wait(100);
-      }
-      await qc.invalidateQueries({queryKey:["one-c-sync",connectionId]});
-    }catch(e){setNormalizeError(e instanceof Error?e.message:"Не удалось обработать данные 1С")}
-    finally{setNormalizing(false)}
-  }
   return <section className="panel">
-    <Step n="1С" title="Автоматическая синхронизация 1С" text="OData остаётся на localhost. Локальный коннектор отправляет в Revora только разрешённые финансовые регистры по HTTPS."/>
-    {!oneCConnections.length?<button className="primary small" onClick={()=>create.mutate()} disabled={create.isPending}>{create.isPending?<><span className="spinner" aria-hidden="true"/>Создаём…</>:"Создать безопасное подключение 1С"}</button>:<>
+    <Step n="1С" title="Подключение 1С" text="Расширение Revora внутри 1С считает контрольные отчёты и отправляет компактные снимки в Revora по HTTPS с использованием ключа коннектора ниже."/>
+    {!oneCConnections.length?<button className="primary small" onClick={()=>create.mutate()} disabled={create.isPending}>{create.isPending?<><span className="spinner" aria-hidden="true"/>Создаём…</>:"Создать подключение 1С"}</button>:<>
       {oneCConnections.length>1&&<label>Подключение<select value={connectionId} onChange={e=>{setConnectionId(e.target.value);setToken(null)}}>{oneCConnections.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>}
-      <div className="integration-health">
-        <span className={status?.sync_is_complete?"badge active":"badge"}>{status?.sync_is_complete?"Полная синхронизация":"Данные ещё не полные"}</span>
-        <span>Записей: <strong>{status?.total_records||0}</strong></span>
-        <span>Последняя синхронизация: <strong>{status?.last_synced_at?new Date(status.last_synced_at).toLocaleString("ru-RU"):"ещё не было"}</strong></span>
-        {status?.connector_version&&<span>Коннектор: <strong>v{status.connector_version}</strong></span>}
-      </div>
-      {status?.sync_status==="running"&&<div className="setup-steps"><p className="hint">1С синхронизируется: завершено сущностей {status.completed_entity_count} из {status.expected_entity_count}. До завершения цифры Dashboard нельзя считать полными.</p></div>}
-      {status?.sync_status==="failed"&&<div className="error-box">Синхронизация 1С прервана после {status.completed_entity_count} из {status.expected_entity_count} сущностей. {status.sync_error||"Запустите коннектор повторно."}</div>}
-      {status?.sync_status==="completed"&&!status.sync_is_complete&&<div className="error-box">Коннектор сообщил о завершении, но набор сущностей неполный. Dashboard не должен использовать этот запуск как контрольный.</div>}
-      {status&&<div className="integration-health">
-        <span>В аналитике за 90 дней: <strong>{status.normalized_records||0}</strong></span>
-        <span>Ожидают обработки: <strong>{status.pending_records||0}</strong></span>
-        <span>Нужна проверка: <strong>{status.quarantined_records||0}</strong></span>
-      </div>}
-      {!!status?.quarantine_reasons?.length&&<div className="setup-steps">
-        <p><strong>Почему строки не попали в аналитику:</strong></p>
-        <div className="table-wrap"><table><thead><tr><th>Данные 1С</th><th>Причина</th><th>Строк</th></tr></thead><tbody>{status.quarantine_reasons.map((reason,index)=><tr key={`${reason.source_entity}-${reason.error_code}-${reason.field_name||index}`}><td>{oneCEntityLabels[reason.source_entity]||reason.source_entity}</td><td>{reason.message}{reason.field_name?` (поле: ${reason.field_name})`:""}</td><td><strong>{reason.records}</strong></td></tr>)}</tbody></table></div>
-      </div>}
-      {!!status?.source_summaries?.length&&<div className="setup-steps">
-        <strong>Контрольные суммы исходных строк 1С</strong>
-        <p>Это суммы до расчётов Revora только по сопоставленным филиалам SAN. DentCO и неизвестные филиалы сюда не входят.</p>
-        <div className="table-wrap"><table><thead><tr><th>Данные 1С</th><th>Разрез</th><th>Значение 1С</th><th>Строк</th><th>Сумма в источнике</th></tr></thead><tbody>{status.source_summaries.map((summary,index)=><tr key={`${summary.source_entity}-${summary.dimension}-${summary.value}-${index}`}><td>{oneCEntityLabels[summary.source_entity]||summary.source_entity}</td><td>{summary.dimension}</td><td>{summary.value}</td><td>{summary.records}</td><td><strong>{Number(summary.amount).toLocaleString("ru-RU",{maximumFractionDigits:2})} KZT</strong></td></tr>)}</tbody></table></div>
-      </div>}
-      {status&&<div className="setup-steps">
-        <p><strong>Разделение 1С по филиалам:</strong></p>
-        {status.branch_mappings.length===2
-          ? <p className="success-box">{status.branch_mappings.map(x=>`${x.structural_unit_name} → ${x.branch_code}`).join(" · ")}</p>
-          : <p className="error-box">Ожидаются два сопоставленных филиала. Сначала синхронизируйте справочник «Структурные единицы» из 1С.</p>}
-      </div>}
-      {!!status?.pending_records&&<div className="setup-steps">
-        <p><strong>Сырые строки уже сохранены, но ещё не участвуют в дашбордах.</strong> Revora безопасно сопоставит выручку, продажи, затраты и движение денег за последние 90 дней. Неоднозначные строки не попадут в суммы.</p>
-        <button className="primary small" onClick={()=>normalizeExisting(false)} disabled={normalizing}>{normalizing?"Обрабатываем данные 1С…":"Добавить данные 1С в аналитику"}</button>
-        {normalizeProgress&&<p className="hint">Обработано: {normalizeProgress.processed}. Добавлено в аналитику: {normalizeProgress.normalized}. Нужна проверка: {normalizeProgress.quarantined}. Осталось: {normalizeProgress.remaining}.</p>}
-        {normalizeError&&<div className="error-box">{normalizeError}</div>}
-      </div>}
-      <div className="setup-steps">
-        <p><strong>Автоматический расчёт данных 1С.</strong> После синхронизации сервер сам обрабатывает очередь в фоне. Кнопка нужна только для ручного запуска или повторного сопоставления после изменения правил.</p>
-        <button className="small" onClick={()=>normalizeExisting(true)} disabled={normalizing}>{normalizing?"Пересчитываем…":"Пересчитать аналитику 1С"}</button>
-        {normalizeProgress&&<p className="hint">Обработано: {normalizeProgress.processed}. Добавлено в аналитику: {normalizeProgress.normalized}. Нужна проверка: {normalizeProgress.quarantined}. Осталось: {normalizeProgress.remaining}.</p>}
-        {normalizeError&&<div className="error-box">{normalizeError}</div>}
-      </div>
-      {(create.isError||rotate.isError||sync.isError)&&<div className="error-box">{(create.error||rotate.error||sync.error)?.message||"Не удалось выполнить запрос"}</div>}
-      {status?.entities.length?<div className="table-wrap"><table><thead><tr><th>Данные 1С</th><th>Сохранено строк</th></tr></thead><tbody>{status.entities.map(x=><tr key={x.entity}><td>{oneCEntityLabels[x.entity]||x.entity}</td><td>{x.records}</td></tr>)}</tbody></table></div>:null}
-      <div className="setup-steps">
-        <div className="inline-form">
-          <button type="button" className="small" onClick={()=>setShowMetadata(value=>!value)}>{showMetadata?"Скрыть структуру OData":"Показать структуру OData"}</button>
-          {metadata.data&&<button type="button" className="small" onClick={downloadMetadata}>Скачать структуру JSON</button>}
-        </div>
-        {showMetadata&&metadata.isLoading&&<p className="hint"><span className="loading-dots" aria-hidden="true"><i/><i/><i/></span> Загружаем структуру 1С…</p>}
-        {showMetadata&&metadata.isError&&<div className="error-box">{metadata.error.message}</div>}
-        {metadata.data&&<>
-          <p className="hint">Опубликовано сущностей: <strong>{metadata.data.entities.length}</strong>. Здесь только названия таблиц и полей, без данных пациентов.</p>
-          <input value={metadataSearch} onChange={event=>setMetadataSearch(event.target.value)} placeholder="Поиск таблицы или поля"/>
-          <div className="table-wrap"><table><thead><tr><th>Таблица OData</th><th>Поля</th></tr></thead><tbody>{visibleMetadata.map(entity=><tr key={entity.name}><td><strong>{entity.name}</strong></td><td><details><summary>{entity.properties.length} полей</summary><div className="hint">{entity.properties.map(property=>`${property.name} (${property.type})`).join(", ")}</div></details></td></tr>)}</tbody></table></div>
-        </>}
-      </div>
+      {currentConnection&&<div className="integration-health"><span className={currentConnection.status==="connected"?"badge active":"badge"}>{currentConnection.status}</span></div>}
+      {(create.isError||rotate.isError)&&<div className="error-box">{(create.error||rotate.error)?.message||"Не удалось выполнить запрос"}</div>}
       <div className="inline-form">
         <button className="primary small" onClick={()=>rotate.mutate()} disabled={rotate.isPending}>{rotate.isPending?<><span className="spinner" aria-hidden="true"/>Создаём ключ…</>:token?"Перевыпустить ключ":"Получить ключ коннектора"}</button>
-        <a className="button-link" href="/revora-1c-odata.ps1" download>Скачать коннектор PowerShell</a>
       </div>
       {token&&<div className="success-box">
         <strong>Скопируйте ключ сейчас — повторно он не показывается.</strong>
         <textarea rows={3} readOnly value={token.token} spellCheck={false}/>
         <button className="small" onClick={copyToken}>{copied?"Скопировано ✓":"Копировать ключ"}</button>
+        <p className="hint">Укажите этот ключ в настройках расширения Revora внутри 1С.</p>
       </div>}
-      <div className="setup-steps">
-        <p><strong>На серверном компьютере клиники:</strong></p>
-        <ol>
-          <li>Скачайте скрипт и положите его в отдельную папку.</li>
-          <li>Откройте PowerShell под тем Windows-пользователем, от которого будет идти синхронизация.</li>
-          <li>Для нового подключения выполните настройку; скрипт сам запросит логин 1С, пароль и ключ Revora.</li>
-        </ol>
-        <pre>{`.\\revora-1c-odata.ps1 -Setup -RevoraApiUrl "${API_URL}"`}</pre>
-        <p>Если коннектор уже настроен, обновите только его код без повторного ввода паролей:</p>
-        <pre>{`.\\revora-1c-odata.ps1 -UpdateInstalled`}</pre>
-        <p>Проверьте установленную версию (должна быть 6.0.0):</p>
-        <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -ShowVersion`}</pre>
-        <p>Проверка доступа к 1С:</p>
-        <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -TestConnection`}</pre>
-        <p>Первая синхронизация за последние 90 дней:</p>
-        <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -FullSync`}</pre>
-        <p>Установка задачи Планировщика Windows каждые 3 часа:</p>
-        <pre>{`& "$env:LOCALAPPDATA\\Revora\\revora-1c-odata.ps1" -InstallTask`}</pre>
-        <p className="hint">Пароль 1С и ключ сохраняются через Windows DPAPI для текущего пользователя Windows. Пароль 1С не передаётся в Revora. Коннектор читает OData только с localhost.</p>
-      </div>
     </>}
   </section>
 }
+
 const targets: [string,string][]=[["patient","Пациенты"],["doctor","Врачи"],["doctor_rating","Рейтинги врачей"],["service_direction","Направления"],["lead","Лиды"],["appointment","Записи"],["revenue_fact","Выручка"],["expense_fact","Расходы"],["cash_flow_fact","Движение денег"],["account_balance","Остатки"],["marketing_spend_fact","Затраты на маркетинг"],["attribution_fact","Атрибуция рекламы"]];
 function Step({n,title,text}:{n:string;title:string;text:string}){return <div className="step-title"><span>{n}</span><div><h2>{title}</h2><p>{text}</p></div></div>}
 

@@ -97,12 +97,6 @@ class Settings(BaseSettings):
     embedded_call_worker_interval_seconds: int = Field(default=20, ge=5, le=300)
     embedded_call_processing_timeout_minutes: int = Field(default=15, ge=5, le=120)
 
-    # The clinic-side 1C connector only uploads raw rows. This durable
-    # single-process worker builds canonical dashboard facts afterwards.
-    embedded_one_c_worker: bool = True
-    embedded_one_c_worker_interval_seconds: int = Field(default=5, ge=1, le=300)
-    embedded_one_c_worker_batch_size: int = Field(default=200, ge=10, le=1000)
-
     # WhatsApp AI assistant. Production sending stays disabled until explicitly enabled.
     whatsapp_verify_token: SecretStr = SecretStr("")
     whatsapp_app_secret: SecretStr = SecretStr("")

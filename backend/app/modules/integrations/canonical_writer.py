@@ -501,7 +501,8 @@ class CanonicalWriter:
         return record_id
 
     async def _ensure_patient_id(self, tenant_id: UUID, external_id: str) -> UUID:
-        """Resolve a patient or create a safe stub for document-first OData syncs."""
+        """Resolve a patient or create a safe stub when a document references one
+        that has not been imported yet (document-first source imports)."""
 
         existing = await self._optional_external_id(Patient, tenant_id, external_id)
         if existing is not None:

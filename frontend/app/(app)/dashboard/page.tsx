@@ -63,12 +63,12 @@ export default function DashboardPage() {
 
           <SectionTitle title="Финансы" subtitle="Фактические показатели из финансовых регистров 1С"/>
           <section className="ceo-kpi-grid">
-            <Kpi label="Выручка · начисление" value={money(currentRevenue)} source={official.has("revenue_accrual")?"Отчёт 1С":"OData 1С"} note={`Оплачено ${money(dashboard.data.finance.revenue_payment)}`}/>
-            <Kpi label="Выручка · оплата" value={money(dashboard.data.finance.revenue_payment)} source={official.has("revenue_payment")?"Отчёт 1С":"OData 1С"}/>
+            <Kpi label="Выручка · начисление" value={money(currentRevenue)} source={official.has("revenue_accrual")?"Отчёт 1С":"Данные 1С"} note={`Оплачено ${money(dashboard.data.finance.revenue_payment)}`}/>
+            <Kpi label="Выручка · оплата" value={money(dashboard.data.finance.revenue_payment)} source={official.has("revenue_payment")?"Отчёт 1С":"Данные 1С"}/>
             <Kpi label="Предыдущий период" value={money(previousRevenue)} source="1С" note="Период той же длины"/>
             <Kpi label="Темп роста" value={growth===null?"—":percent(growth)} source="Расчёт" tone={growth!==null&&growth>=0?"good":"bad"}/>
             <Kpi label="Валовая прибыль" source="Расчёт" missing={!pnl.data.profit_is_complete} value={money(pnl.data.gross_profit)}/>
-            <Kpi label="Начислено зарплаты" value={money(pnl.data.payroll_accrual)} source={official.has("payroll_accrual")?"Отчёт 1С":"OData 1С"} note="Справочно, без повторного прибавления к расходам"/>
+            <Kpi label="Начислено зарплаты" value={money(pnl.data.payroll_accrual)} source={official.has("payroll_accrual")?"Отчёт 1С":"Данные 1С"} note="Справочно, без повторного прибавления к расходам"/>
             <Kpi label="EBITDA" source="Расчёт" missing={!pnl.data.profit_is_complete} value={money(pnl.data.ebitda)}/>
             <Kpi label={pnl.data.profit_label} source="Расчёт" missing={!pnl.data.profit_is_complete} value={money(pnl.data.net_profit)} tone={Number(pnl.data.net_profit)>=0?"good":"bad"}/>
             <Kpi label="Маржинальность" value={margin===null?"—":percent(margin)} source="Расчёт" missing={!pnl.data.profit_is_complete}/>
@@ -108,7 +108,7 @@ export default function DashboardPage() {
             <Kpi label="Неявки" value={String(dashboard.data.sales.appointments_no_show)} source="1С" missing={!hasSales}/>
           </section>
 
-          <section className="panel"><div className="panel-head"><div><h2>Лучшие врачи</h2><p>Оплаченная выручка из официального отчёта 1С, нагрузка — из OData</p></div></div><div className="table-wrap"><table><thead><tr><th>Врач</th><th>Специальность</th><th>Завершено</th><th>Выполнение</th><th>Оплачено</th></tr></thead><tbody>{dashboard.data.top_doctors.map(item=><tr key={item.doctor_id}><td><strong>{item.full_name}</strong></td><td>{item.specialty||"—"}</td><td>{item.appointments_completed}</td><td>{percent(item.completion_rate)}</td><td>{money(item.revenue_payment)}</td></tr>)}{!dashboard.data.top_doctors.length&&<tr><td colSpan={5} className="empty">Не хватает данных из 1С: врачи, записи и связь выручки с врачом</td></tr>}</tbody></table></div></section>
+          <section className="panel"><div className="panel-head"><div><h2>Лучшие врачи</h2><p>Оплаченная выручка из официального отчёта 1С, нагрузка — из данных 1С</p></div></div><div className="table-wrap"><table><thead><tr><th>Врач</th><th>Специальность</th><th>Завершено</th><th>Выполнение</th><th>Оплачено</th></tr></thead><tbody>{dashboard.data.top_doctors.map(item=><tr key={item.doctor_id}><td><strong>{item.full_name}</strong></td><td>{item.specialty||"—"}</td><td>{item.appointments_completed}</td><td>{percent(item.completion_rate)}</td><td>{money(item.revenue_payment)}</td></tr>)}{!dashboard.data.top_doctors.length&&<tr><td colSpan={5} className="empty">Не хватает данных из 1С: врачи, записи и связь выручки с врачом</td></tr>}</tbody></table></div></section>
           {!!insights.data?.items.length&&<section className="insights"><h2>Что требует внимания</h2>{insights.data.items.slice(0,3).map(item=><article key={item.id} className={`insight ${item.severity}`}><span>!</span><div><strong>{item.title}</strong><p>{item.description}</p></div></article>)}</section>}
           <AsOf value={dashboard.data.finance.meta.data_as_of}/>
         </>;

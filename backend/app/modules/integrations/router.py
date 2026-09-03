@@ -13,20 +13,11 @@ from app.modules.integrations.schemas import (
     ConnectionCreateRequest,
     ConnectionListResponse,
     ConnectionResponse,
-    ConnectionSyncStatusResponse,
     IngestionSummaryResponse,
     MappingProfileCreateRequest,
     MappingProfileListResponse,
     MappingProfileResponse,
     OneCConnectorTokenResponse,
-    OneCNormalizeRequest,
-    OneCNormalizeResponse,
-    OneCMetadataRequest,
-    OneCMetadataResponse,
-    OneCPushRequest,
-    OneCPushResponse,
-    OneCSyncManifestRequest,
-    OneCSyncManifestResponse,
 )
 from app.modules.integrations.service import IntegrationService
 from app.modules.integrations.tabular_adapter import TabularFileAdapter
@@ -43,19 +34,6 @@ OfficialReportsServiceDependency = Annotated[
 ]
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 connector_bearer = HTTPBearer(auto_error=False)
-
-
-@router.post("/1c/push", response_model=OneCPushResponse)
-async def push_one_c_batch(
-    payload: OneCPushRequest,
-    service: IntegrationServiceDependency,
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(connector_bearer)
-    ],
-) -> OneCPushResponse:
-    if credentials is None:
-        raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
-    return await service.ingest_one_c_push(credentials.credentials, payload)
 
 
 @router.post("/1c/report-snapshot", response_model=OfficialReportResponse)
@@ -79,43 +57,6 @@ async def push_one_c_report_snapshot(
         branch_code_map=branch_code_map,
         payload=payload,
     )
-
-
-@router.post("/1c/metadata", response_model=OneCMetadataResponse)
-async def push_one_c_metadata(
-    payload: OneCMetadataRequest,
-    service: IntegrationServiceDependency,
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(connector_bearer)
-    ],
-) -> OneCMetadataResponse:
-    if credentials is None:
-        raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
-    return await service.ingest_one_c_metadata(credentials.credentials, payload)
-
-
-@router.post("/1c/sync-manifest", response_model=OneCSyncManifestResponse)
-async def push_one_c_sync_manifest(
-    payload: OneCSyncManifestRequest,
-    service: IntegrationServiceDependency,
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(connector_bearer)
-    ],
-) -> OneCSyncManifestResponse:
-    if credentials is None:
-        raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
-    return await service.ingest_one_c_sync_manifest(credentials.credentials, payload)
-
-
-@router.get(
-    "/connections/{connection_id}/1c-metadata", response_model=OneCMetadataRequest
-)
-async def get_one_c_metadata(
-    connection_id: UUID,
-    user: CurrentUser,
-    service: IntegrationServiceDependency,
-) -> OneCMetadataRequest:
-    return await service.get_one_c_metadata(user, connection_id)
 
 
 @router.get(
@@ -157,31 +98,6 @@ async def rotate_one_c_connector_token(
     service: IntegrationServiceDependency,
 ) -> OneCConnectorTokenResponse:
     return await service.rotate_one_c_connector_token(user, connection_id)
-
-
-@router.get(
-    "/connections/{connection_id}/sync-status",
-    response_model=ConnectionSyncStatusResponse,
-)
-async def one_c_sync_status(
-    connection_id: UUID,
-    user: CurrentUser,
-    service: IntegrationServiceDependency,
-) -> ConnectionSyncStatusResponse:
-    return await service.one_c_sync_status(user, connection_id)
-
-
-@router.post(
-    "/connections/{connection_id}/normalize-1c",
-    response_model=OneCNormalizeResponse,
-)
-async def normalize_existing_one_c_records(
-    connection_id: UUID,
-    payload: OneCNormalizeRequest,
-    user: CurrentUser,
-    service: IntegrationServiceDependency,
-) -> OneCNormalizeResponse:
-    return await service.normalize_existing_one_c_records(user, connection_id, payload)
 
 
 @router.post(

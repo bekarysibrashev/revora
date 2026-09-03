@@ -21,7 +21,6 @@ from app.modules.integrations.models import (
     IntegrationConnection,
     MappingProfile,
     NormalizationError,
-    OneCMetadataSnapshot,
     RawRecord,
     RecordLineage,
     SyncRun,

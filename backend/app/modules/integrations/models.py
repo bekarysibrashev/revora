@@ -24,28 +24,6 @@ class IntegrationConnection(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMix
     settings: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
-class OneCMetadataSnapshot(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
-    """Latest field-level OData inventory; contains schema only, never patient rows."""
-
-    __tablename__ = "one_c_metadata_snapshots"
-    __table_args__ = (UniqueConstraint("tenant_id", "connection_id"),)
-
-    tenant_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
-    )
-    connection_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("integration_connections.id", ondelete="CASCADE"),
-        index=True,
-    )
-    schema_version: Mapped[str] = mapped_column(String(100))
-    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
-    entities: Mapped[list] = mapped_column(JSONB, default=list)
-    discovered_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-
 class SyncRun(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "sync_runs"
 
