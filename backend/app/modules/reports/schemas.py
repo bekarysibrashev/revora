@@ -53,3 +53,12 @@ class OneCReportSnapshotRequest(BaseModel):
     period_to: date
     metrics: list[OneCReportMetricInput] = Field(min_length=1, max_length=10000)
     summary: dict = Field(default_factory=dict)
+
+
+class OneCReportSnapshotBatchRequest(BaseModel):
+    snapshots: list[OneCReportSnapshotRequest] = Field(min_length=1, max_length=250)
+
+
+class OneCReportSnapshotBatchResponse(BaseModel):
+    items: list[OfficialReportResponse]
+    total: int

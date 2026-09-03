@@ -198,3 +198,16 @@ def test_report_snapshot_route_rejects_a_malformed_connector_token() -> None:
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "INVALID_CONNECTOR_TOKEN"
+
+
+def test_report_snapshot_batch_route_requires_a_connector_token() -> None:
+    app = create_app(Settings(_env_file=None, app_env="test"))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/integrations/1c/report-snapshots/batch",
+            json={"snapshots": [_valid_snapshot_payload()]},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "CONNECTOR_TOKEN_REQUIRED"

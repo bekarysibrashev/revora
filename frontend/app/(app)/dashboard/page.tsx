@@ -23,8 +23,8 @@ function previousQuery(current:string) {
   return params.toString();
 }
 
-function Kpi({label,value,source,note,missing=false,tone}:{label:string;value?:string;source:string;note?:string;missing?:boolean;tone?:"good"|"bad"}) {
-  return <article className={`ceo-kpi ${missing?"missing":""}`}><div><p>{label}</p><span>{source}</span></div><strong className={tone||""}>{missing?"Не хватает данных":value}</strong>{missing?<small>Нужен дополнительный объект из 1С</small>:note&&<small>{note}</small>}</article>;
+function Kpi({label,value,source,note,missing=false,missingNote,tone}:{label:string;value?:string;source:string;note?:string;missing?:boolean;missingNote?:string;tone?:"good"|"bad"}) {
+  return <article className={`ceo-kpi ${missing?"missing":""}`}><div><p>{label}</p><span>{source}</span></div><strong className={tone||""}>{missing?"Не хватает данных":value}</strong>{missing?<small>{missingNote||"Нужен дополнительный объект из 1С"}</small>:note&&<small>{note}</small>}</article>;
 }
 
 function SectionTitle({title,subtitle}:{title:string;subtitle:string}) { return <div className="section-title"><div><h2>{title}</h2><p>{subtitle}</p></div></div>; }
@@ -43,7 +43,12 @@ export default function DashboardPage() {
       {dashboard.data&&pnl.data&&(()=>{
         const currentRevenue=Number(dashboard.data.finance.revenue_accrual||0);
         const previousRevenue=Number(previousDashboard.data?.finance.revenue_accrual||0);
-        const growth=previousRevenue?((currentRevenue-previousRevenue)/previousRevenue):null;
+        const currentOfficial=new Set(dashboard.data.finance.meta.official_metric_codes||[]);
+        const previousOfficial=new Set(previousDashboard.data?.finance.meta.official_metric_codes||[]);
+        const hasRevenue=currentOfficial.has("revenue_accrual");
+        const hasPayment=currentOfficial.has("revenue_payment");
+        const hasPreviousRevenue=previousOfficial.has("revenue_accrual");
+        const growth=hasRevenue&&hasPreviousRevenue&&previousRevenue?((currentRevenue-previousRevenue)/previousRevenue):null;
         const margin=currentRevenue?Number(pnl.data.net_profit)/currentRevenue:null;
         const averageCheck=dashboard.data.sales.appointments_completed?currentRevenue/dashboard.data.sales.appointments_completed:null;
         const hasSales=Boolean(dashboard.data.sales.meta.data_as_of);
@@ -57,18 +62,18 @@ export default function DashboardPage() {
         ];
         return <>
           <section className="ceo-hero">
-            <div><p className="eyebrow">Управленческий срез</p><h2>{money(currentRevenue)}</h2><span>выручка за выбранный период</span></div>
+            <div><p className="eyebrow">Управленческий срез</p><h2>{hasRevenue?money(currentRevenue):"Нет данных"}</h2><span>выручка за выбранный период</span></div>
             <div className="ceo-hero-stats"><span>{pnl.data.profit_label}<strong>{pnl.data.profit_is_complete?money(pnl.data.net_profit):"Не подтверждено"}</strong></span><span>{dashboard.data.finance.cashflow_is_complete?"Денежный поток":"Поток по доступным данным"}<strong>{money(dashboard.data.finance.net_cash_flow)}</strong></span><span>Рост<strong>{growth===null?"—":percent(growth)}</strong></span></div>
           </section>
 
           <SectionTitle title="Финансы" subtitle="Фактические показатели из финансовых регистров 1С"/>
           <section className="ceo-kpi-grid">
-            <Kpi label="Выручка · начисление" value={money(currentRevenue)} source={official.has("revenue_accrual")?"Отчёт 1С":"Данные 1С"} note={`Оплачено ${money(dashboard.data.finance.revenue_payment)}`}/>
-            <Kpi label="Выручка · оплата" value={money(dashboard.data.finance.revenue_payment)} source={official.has("revenue_payment")?"Отчёт 1С":"Данные 1С"}/>
-            <Kpi label="Предыдущий период" value={money(previousRevenue)} source="1С" note="Период той же длины"/>
+            <Kpi label="Выручка · начисление" value={money(currentRevenue)} source="Отчёт 1С" missing={!hasRevenue} missingNote="Нет полной дневной выгрузки за выбранный период" note={`Оплачено ${money(dashboard.data.finance.revenue_payment)}`}/>
+            <Kpi label="Выручка · оплата" value={money(dashboard.data.finance.revenue_payment)} source="Отчёт 1С" missing={!hasPayment} missingNote="Нет полной дневной выгрузки за выбранный период"/>
+            <Kpi label="Предыдущий период" value={money(previousRevenue)} source="1С" missing={!hasPreviousRevenue} missingNote="Предыдущий период ещё не выгружен" note="Период той же длины"/>
             <Kpi label="Темп роста" value={growth===null?"—":percent(growth)} source="Расчёт" tone={growth!==null&&growth>=0?"good":"bad"}/>
             <Kpi label="Валовая прибыль" source="Расчёт" missing={!pnl.data.profit_is_complete} value={money(pnl.data.gross_profit)}/>
-            <Kpi label="Начислено зарплаты" value={money(pnl.data.payroll_accrual)} source={official.has("payroll_accrual")?"Отчёт 1С":"Данные 1С"} note="Справочно, без повторного прибавления к расходам"/>
+            <Kpi label="Начислено зарплаты" value={money(pnl.data.payroll_accrual)} source="Отчёт 1С" missing={!official.has("payroll_accrual")} missingNote="Зарплата доступна только для выгруженного месячного периода" note="Справочно, без повторного прибавления к расходам"/>
             <Kpi label="EBITDA" source="Расчёт" missing={!pnl.data.profit_is_complete} value={money(pnl.data.ebitda)}/>
             <Kpi label={pnl.data.profit_label} source="Расчёт" missing={!pnl.data.profit_is_complete} value={money(pnl.data.net_profit)} tone={Number(pnl.data.net_profit)>=0?"good":"bad"}/>
             <Kpi label="Маржинальность" value={margin===null?"—":percent(margin)} source="Расчёт" missing={!pnl.data.profit_is_complete}/>

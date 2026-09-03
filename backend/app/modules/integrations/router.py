@@ -22,7 +22,12 @@ from app.modules.integrations.schemas import (
 from app.modules.integrations.service import IntegrationService
 from app.modules.integrations.tabular_adapter import TabularFileAdapter
 from app.modules.reports.dependencies import get_official_reports_service
-from app.modules.reports.schemas import OneCReportSnapshotRequest, OfficialReportResponse
+from app.modules.reports.schemas import (
+    OfficialReportResponse,
+    OneCReportSnapshotBatchRequest,
+    OneCReportSnapshotBatchResponse,
+    OneCReportSnapshotRequest,
+)
 from app.modules.reports.service import OfficialReportsService
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
@@ -56,6 +61,29 @@ async def push_one_c_report_snapshot(
         connection_id=connection.id,
         branch_code_map=branch_code_map,
         payload=payload,
+    )
+
+
+@router.post("/1c/report-snapshots/batch", response_model=OneCReportSnapshotBatchResponse)
+async def push_one_c_report_snapshots_batch(
+    payload: OneCReportSnapshotBatchRequest,
+    service: IntegrationServiceDependency,
+    reports_service: OfficialReportsServiceDependency,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(connector_bearer)
+    ],
+) -> OneCReportSnapshotBatchResponse:
+    if credentials is None:
+        raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
+    parts, connection = await service.authenticate_one_c_connector(credentials.credentials)
+    branch_code_map = await service.one_c_connector_branch_code_map(
+        parts.tenant_id, connection.id
+    )
+    return await reports_service.ingest_connector_snapshots(
+        tenant_id=parts.tenant_id,
+        connection_id=connection.id,
+        branch_code_map=branch_code_map,
+        snapshots=payload.snapshots,
     )
 
 

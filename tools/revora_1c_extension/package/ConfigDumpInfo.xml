@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo" xmlns:xen="http://v8.1c.ru/8.3/xcf/enums" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" format="Hierarchical" version="2.20">
+	<ConfigVersions>
+		<Metadata name="Configuration.Revora" id="f89177bb-60c5-44d6-a0cc-f249af533b4d" configVersion="878c054acb18360da9923f09df80d49b66c8cbec"/>
+		<Metadata name="Language.Русский" id="6a8c2b49-425b-4043-903c-55753ba505a0" configVersion="bc149d2f0037564a488f2906357f3b1dfe340310"/>
+		<Metadata name="Role.РВОсновнаяРоль" id="a3669f2f-aefa-4c4c-b59c-970305448fbc" configVersion="74405760eaf4bade44a38857fda32c3155a1f8eb"/>
+		<Metadata name="CommonModule.РвОбменСервер" id="8d7d1197-6bdf-4ae8-b66c-f455fe19590f" configVersion="f53ca524e92c461f866cf455fe19590f00000000"/>
+		<Metadata name="CommonModule.РвОбменСервер.Module" id="8d7d1197-6bdf-4ae8-b66c-f455fe19590f.0" configVersion="e01468edca854214b34af455fe19590f00000000"/>
+		<Metadata name="CommonForm.РвНастройкиОбмена" id="b2150ec4-f092-44d7-b8fe-96c5ad33e7b1" configVersion="14e1de33e7b14d83b2150ec4f09244d700000000"/>
+		<Metadata name="CommonForm.РвНастройкиОбмена.Form" id="b2150ec4-f092-44d7-b8fe-96c5ad33e7b1.0" configVersion="96c5ad33e7b14d83b2150ec4f09244d700000000"/>
+		<Metadata name="CommonCommand.РвОткрытьНастройки" id="c8a4a2d7-2e54-47b4-a6fb-21a55207743d" configVersion="21a55207743d47b4c8a4a2d72e5447b400000000"/>
+		<Metadata name="CommonCommand.РвОткрытьНастройки.CommandModule" id="c8a4a2d7-2e54-47b4-a6fb-21a55207743d.2" configVersion="a6fb21a5520747b4c8a4a2d72e5447b400000000"/>
+		<Metadata name="Subsystem.РвИнтеграция" id="d9c727ad-5a3b-4e93-a0bd-5a8c4bdf3447" configVersion="5a8c4bdf34474e93d9c727ad5a3b4e9300000000"/>
+		<Metadata name="Subsystem.РвИнтеграция.CommandInterface" id="d9c727ad-5a3b-4e93-a0bd-5a8c4bdf3447.1" configVersion="a0bd5a8c4bdf4e93d9c727ad5a3b4e9300000000"/>
+	</ConfigVersions>
+</ConfigDumpInfo>

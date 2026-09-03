@@ -143,3 +143,67 @@ async def test_connector_snapshot_keeps_clinic_total_when_branch_is_unmapped() -
         "source_key": "unknown-guid",
         "source_label": "Служебное подразделение",
     }]
+
+
+@pytest.mark.asyncio
+async def test_connector_accepts_anonymous_patient_markers() -> None:
+    repository = FakeReportsRepository()
+    service = OfficialReportsService(repository)
+    payload = OneCReportSnapshotRequest.model_validate({
+        "report_type": "patients",
+        "period_from": date(2026, 7, 2),
+        "period_to": date(2026, 7, 2),
+        "metrics": [{
+            "dimension_type": "patient",
+            "dimension_key": "patient-guid-without-name",
+            "dimension_label": "Обезличенный пациент",
+            "metric_code": "patient_seen",
+            "value": 1,
+            "unit": "count",
+            "branch_key": "structural-unit-guid",
+        }],
+        "summary": {"granularity": "day"},
+    })
+
+    await service.ingest_connector_snapshot(
+        tenant_id=uuid4(), connection_id=uuid4(),
+        branch_code_map={"structural-unit-guid": "seifullina"}, payload=payload,
+    )
+
+    assert repository.report.metrics[0].metric_code == "patient_seen"
+    assert repository.report.metrics[0].dimension_label == "Обезличенный пациент"
+
+
+@pytest.mark.asyncio
+async def test_connector_ingests_a_batch_of_daily_snapshots() -> None:
+    repository = FakeReportsRepository()
+    service = OfficialReportsService(repository)
+    snapshots = [
+        OneCReportSnapshotRequest.model_validate({
+            "report_type": report_type,
+            "period_from": date(2026, 7, 2),
+            "period_to": date(2026, 7, 2),
+            "metrics": [{
+                "dimension_type": "clinic",
+                "dimension_key": "clinic",
+                "dimension_label": "Вся клиника",
+                "metric_code": metric_code,
+                "value": value,
+            }],
+            "summary": {"granularity": "day"},
+        })
+        for report_type, metric_code, value in [
+            ("service_revenue", "revenue_accrual", 100),
+            ("cash_receipts", "revenue_payment", 80),
+        ]
+    ]
+
+    response = await service.ingest_connector_snapshots(
+        tenant_id=uuid4(), connection_id=uuid4(), branch_code_map={},
+        snapshots=snapshots,
+    )
+
+    assert response.total == 2
+    assert [item.report_type for item in response.items] == [
+        "service_revenue", "cash_receipts",
+    ]

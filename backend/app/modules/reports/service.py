@@ -15,6 +15,7 @@ from app.modules.reports.repository import OfficialReportsRepository
 from app.modules.reports.schemas import (
     OfficialReportListResponse,
     OfficialReportResponse,
+    OneCReportSnapshotBatchResponse,
     OneCReportSnapshotRequest,
 )
 
@@ -31,6 +32,7 @@ REPORT_METRIC_CODES = {
     "patients": {
         "patients_total", "patients_primary", "patient_visits",
         "patient_report_revenue", "patient_report_paid",
+        "patient_seen", "patient_primary_seen",
     },
     "appointments": {
         "appointments_total", "appointments_primary", "appointments_completed",
@@ -243,6 +245,25 @@ class OfficialReportsService:
             metrics=metrics,
         )
         return self._response(report)
+
+    async def ingest_connector_snapshots(
+        self,
+        *,
+        tenant_id: UUID,
+        connection_id: UUID,
+        branch_code_map: dict[str, str],
+        snapshots: list[OneCReportSnapshotRequest],
+    ) -> OneCReportSnapshotBatchResponse:
+        items = [
+            await self.ingest_connector_snapshot(
+                tenant_id=tenant_id,
+                connection_id=connection_id,
+                branch_code_map=branch_code_map,
+                payload=snapshot,
+            )
+            for snapshot in snapshots
+        ]
+        return OneCReportSnapshotBatchResponse(items=items, total=len(items))
 
     @staticmethod
     def _require_owner(user: User) -> None:
