@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.modules.contacts.google_sheets import get_google_sheets_client
 from app.modules.contacts.repository import ContactRepository
 from app.modules.contacts.service import ContactRegistry
 from app.modules.auth.models import User, UserRole
@@ -317,7 +318,9 @@ class WhatsAppService:
             )
         if not simulated:
             await ContactRegistry(
-                ContactRepository(self.session), self._data_secret()
+                ContactRepository(self.session),
+                self._data_secret(),
+                sheets_client=get_google_sheets_client(self.settings),
             ).register_inbound(
                 tenant_id=tenant_id,
                 phone=contact_id,
@@ -431,7 +434,9 @@ class WhatsAppService:
             return
         if direction == "in":
             await ContactRegistry(
-                ContactRepository(self.session), self._data_secret()
+                ContactRepository(self.session),
+                self._data_secret(),
+                sheets_client=get_google_sheets_client(self.settings),
             ).register_inbound(
                 tenant_id=tenant_id,
                 phone=contact_id,

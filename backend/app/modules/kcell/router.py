@@ -12,6 +12,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
 from app.core.errors import AppError
 from app.core.security import mask_phone, phone_hash
+from app.modules.contacts.google_sheets import get_google_sheets_client
 from app.modules.contacts.repository import ContactRepository
 from app.modules.contacts.service import ContactRegistry
 from app.modules.ai.call_quality.defaults import ensure_default_rule_set
@@ -81,7 +82,9 @@ async def receive_kcell_callback(
         direction = str(values["type"])
         if direction.casefold() in {"in", "incoming", "inbound", "входящий"}:
             await ContactRegistry(
-                ContactRepository(session), settings.whatsapp_data_key.get_secret_value()
+                ContactRepository(session),
+                settings.whatsapp_data_key.get_secret_value(),
+                sheets_client=get_google_sheets_client(settings),
             ).register_inbound(
                 tenant_id=tenant.id,
                 phone=str(values["phone"]),

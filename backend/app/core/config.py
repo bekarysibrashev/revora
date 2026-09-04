@@ -122,6 +122,13 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_poll_timeout_seconds: int = Field(default=25, ge=5, le=50)
 
+    # Google Sheets sync for «new inquiries» (новые обращения). Off (a silent
+    # no-op) unless both are set: the clinic owns the sheet and shares it with
+    # this service account, Revora never creates or owns the spreadsheet.
+    google_sheets_service_account_json: SecretStr = SecretStr("")
+    google_sheets_new_contacts_spreadsheet_id: str = ""
+    google_sheets_new_contacts_sheet_name: str = "Отчет КЦ"
+
     # Отдельный секрет для /platform/* (создание новых клиник) — не JWT, не
     # per-tenant роль. Видит только оператор платформы. Та же логика защиты
     # от дефолтного значения в проде, что и у остальных секретов ниже.

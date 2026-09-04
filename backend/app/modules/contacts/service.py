@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, date, datetime
 from math import ceil
 from uuid import UUID, uuid4
@@ -6,16 +7,26 @@ from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.security import mask_phone, normalize_phone_e164, phone_hash, phone_hash_candidates
 from app.modules.auth.models import User, UserRole
+from app.modules.contacts.google_sheets import GoogleSheetsClient, build_new_contact_row
 from app.modules.contacts.models import ContactIdentity
 from app.modules.contacts.repository import ContactRepository
 from app.modules.contacts.schemas import NewContactItem, NewContactListResponse, NewContactSummary
 from app.modules.whatsapp.security import WhatsAppDataProtectionError, decrypt_contact, encrypt_contact
 
 
+logger = logging.getLogger(__name__)
+
+
 class ContactRegistry:
-    def __init__(self, repository: ContactRepository, data_secret: str = "") -> None:
+    def __init__(
+        self,
+        repository: ContactRepository,
+        data_secret: str = "",
+        sheets_client: GoogleSheetsClient | None = None,
+    ) -> None:
         self.repository = repository
         self.data_secret = data_secret
+        self.sheets_client = sheets_client
 
     async def register_inbound(
         self, *, tenant_id: UUID, phone: str, source: str, occurred_at: datetime
@@ -50,6 +61,7 @@ class ContactRegistry:
             )
             inserted = await self.repository.add_if_missing(item)
             if inserted is not None:
+                await self._sync_new_contact_to_sheet(inserted, phone=phone, source=source)
                 return inserted
             # A Kcell call and WhatsApp message can arrive simultaneously. The
             # unique key serializes them without rolling back the webhook.
@@ -74,6 +86,25 @@ class ContactRegistry:
             return encrypt_contact(normalize_phone_e164(phone), self.data_secret)
         except (ValueError, WhatsAppDataProtectionError):
             return None
+
+    async def _sync_new_contact_to_sheet(
+        self, item: ContactIdentity, *, phone: str, source: str
+    ) -> None:
+        """Best-effort: a Google Sheets outage must never break the webhook."""
+
+        if self.sheets_client is None:
+            return
+        try:
+            phone_e164 = normalize_phone_e164(phone)
+        except ValueError:
+            phone_e164 = None
+        row = build_new_contact_row(
+            phone_e164=phone_e164, source=source, first_inbound_at=item.first_inbound_at
+        )
+        try:
+            await self.sheets_client.append_row(row)
+        except Exception:
+            logger.warning("Google Sheets sync failed for a new contact", exc_info=True)
 
 
 class ContactService:
