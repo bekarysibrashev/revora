@@ -1,6 +1,6 @@
 """Aggregate sales and appointment facts."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -9,7 +9,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.finance.models import RevenueFact
-from app.modules.reports.repository import OfficialReportsRepository
+from app.modules.reports.repository import CoverageInfo, OfficialReportsRepository
 from app.modules.sales.models import Appointment, Lead
 from app.shared.timezone import clinic_day_end_exclusive, clinic_day_start
 
@@ -29,6 +29,7 @@ class SalesTotals:
     patients_repeat: int
     paid_revenue: Decimal
     data_as_of: datetime | None
+    coverage: dict[str, CoverageInfo] = field(default_factory=dict)
 
 
 class SalesRepository:
@@ -121,7 +122,7 @@ class SalesRepository:
                 RevenueFact.patient_id.in_(scoped_patient_ids)
             )
         revenue_row = (await self.session.execute(revenue_statement)).one()
-        official_values, official_as_of = await OfficialReportsRepository(
+        official_values, official_as_of, official_coverage = await OfficialReportsRepository(
             self.session
         ).exact_values(
             tenant_id,
@@ -167,6 +168,7 @@ class SalesRepository:
             patients_repeat=max(0, patients_total - patients_primary),
             paid_revenue=official_values.get("revenue_payment", Decimal(revenue_row[0])),
             data_as_of=max(timestamps) if timestamps else None,
+            coverage=official_coverage,
         )
 
     @staticmethod

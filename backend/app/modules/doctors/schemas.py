@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.modules.reports.schemas import CoverageInfoResponse
+
 
 class DoctorPerformance(BaseModel):
     doctor_id: UUID
@@ -24,3 +26,4 @@ class DoctorsOverviewResponse(BaseModel):
     date_to: date
     branch_ids: list[UUID] | None
     data_as_of: datetime | None
+    coverage: CoverageInfoResponse | None = None

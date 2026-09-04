@@ -7,6 +7,21 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+class CoverageInfoResponse(BaseModel):
+    """Mirrors reports.repository.CoverageInfo for API responses: how much
+    of a requested date range a metric's value is actually backed by."""
+
+    requested_from: date
+    requested_to: date
+    covered_from: date | None
+    covered_to: date | None
+    covered_months: list[str] = Field(default_factory=list)
+    missing_months: list[str] = Field(default_factory=list)
+    coverage_ratio: float = 0.0
+    is_partial: bool = False
+    is_exact: bool = False
+
+
 class OfficialReportResponse(BaseModel):
     id: UUID
     report_type: str

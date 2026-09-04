@@ -1,11 +1,11 @@
 """Persistence and period lookup for official and daily 1C metrics."""
 
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,6 +21,31 @@ class ReportMetricValue:
     branch_id: UUID | None = None
 
 
+@dataclass(frozen=True)
+class CoverageInfo:
+    """Honest description of how much of a requested date range is backed by
+    real 1C data for one metric, so a partial answer is never presented as a
+    complete one and never silently collapses to zero.
+
+    A calendar month counts as "covered" only when every one of its days
+    within the requested range has its own daily snapshot for the report
+    type that metric belongs to (or the whole requested range matches an
+    uploaded control-total period exactly, in which case is_exact=True and
+    the range is covered by definition). Coverage is never computed by
+    averaging or interpolating -- only real, present rows count.
+    """
+
+    requested_from: date
+    requested_to: date
+    covered_from: date | None
+    covered_to: date | None
+    covered_months: list[str] = field(default_factory=list)
+    missing_months: list[str] = field(default_factory=list)
+    coverage_ratio: float = 0.0
+    is_partial: bool = False
+    is_exact: bool = False
+
+
 REPORT_TYPE_BY_METRIC = {
     "revenue_payment": "cash_receipts",
     "cash_inflow": "cash_receipts",
@@ -32,8 +57,10 @@ REPORT_TYPE_BY_METRIC = {
     "purchases_paid_all_entities": "purchases",
     "purchases_accrual": "purchases",
     "purchases_paid": "purchases",
+    "operating_expenses": "purchases",
     "patients_total": "patients",
     "patients_primary": "patients",
+    "patients_new": "patients",
     "patient_visits": "patients",
     "patient_report_revenue": "patients",
     "patient_report_paid": "patients",
@@ -46,7 +73,68 @@ REPORT_TYPE_BY_METRIC = {
     "appointments_no_show": "appointments",
     "appointment_report_revenue": "appointments",
     "appointment_report_paid": "appointments",
+    # payroll_accrual / payroll_paid / payroll_due are deliberately absent:
+    # the 1C extension only ever sends payroll as a whole-month control
+    # total (see tools/revora_1c_extension README), so there is no daily
+    # granularity to fall back to for a partial range -- and there must
+    # never be, since payroll cannot be prorated across days.
 }
+
+# Metrics whose daily rows are already a running, self-summing quantity
+# (money, counts of events). Excluded here are the two patient metrics,
+# which need DISTINCT-by-GUID counting across covered days instead of a
+# plain SUM (a patient seen on two different covered days must count once).
+_DISTINCT_PATIENT_METRICS = {
+    "patients_total": "patient_seen",
+    "patients_primary": "patient_primary_seen",
+}
+
+
+def month_windows(date_from: date, date_to: date) -> list[tuple[str, date, date]]:
+    """Split [date_from, date_to] into per-calendar-month windows, each
+    clipped to the requested range. E.g. 2026-05-15..2026-07-10 yields
+    [("2026-05", 05-15, 05-31), ("2026-06", 06-01, 06-30), ("2026-07", 07-01, 07-10)].
+    """
+    windows: list[tuple[str, date, date]] = []
+    cursor = date_from.replace(day=1)
+    while cursor <= date_to:
+        if cursor.month == 12:
+            next_month = cursor.replace(year=cursor.year + 1, month=1, day=1)
+        else:
+            next_month = cursor.replace(month=cursor.month + 1, day=1)
+        month_end = next_month - timedelta(days=1)
+        window_start = max(cursor, date_from)
+        window_end = min(month_end, date_to)
+        windows.append((f"{cursor.year:04d}-{cursor.month:02d}", window_start, window_end))
+        cursor = next_month
+    return windows
+
+
+def _build_coverage(
+    date_from: date,
+    date_to: date,
+    windows: list[tuple[str, date, date]],
+    covered_windows: list[tuple[str, date, date]],
+    is_exact: bool = False,
+) -> CoverageInfo:
+    covered_keys = {key for key, _, _ in covered_windows}
+    missing_keys = [key for key, _, _ in windows if key not in covered_keys]
+    total_days = (date_to - date_from).days + 1
+    covered_days = sum((end - start).days + 1 for _, start, end in covered_windows)
+    covered_from = min((start for _, start, _ in covered_windows), default=None)
+    covered_to = max((end for _, _, end in covered_windows), default=None)
+    ratio = round(covered_days / total_days, 4) if total_days else 0.0
+    return CoverageInfo(
+        requested_from=date_from,
+        requested_to=date_to,
+        covered_from=date_from if is_exact else covered_from,
+        covered_to=date_to if is_exact else covered_to,
+        covered_months=sorted(covered_keys) if not is_exact else [key for key, _, _ in windows],
+        missing_months=[] if is_exact else sorted(missing_keys),
+        coverage_ratio=1.0 if is_exact else ratio,
+        is_partial=(not is_exact) and bool(covered_keys) and bool(missing_keys),
+        is_exact=is_exact,
+    )
 
 
 class OfficialReportsRepository:
@@ -130,19 +218,24 @@ class OfficialReportsRepository:
     async def exact_values(
         self, tenant_id: UUID, date_from: date, date_to: date,
         metric_codes: set[str], branch_ids: list[UUID] | None,
-    ) -> tuple[dict[str, Decimal], datetime | None]:
-        scope_conditions = []
-        if branch_ids is None:
-            scope_conditions.extend([
-                OfficialReportMetric.dimension_type == "clinic",
-                OfficialReportMetric.branch_id.is_(None),
-            ])
-        else:
-            scope_conditions.extend([
-                OfficialReportMetric.dimension_type == "branch",
-                OfficialReportMetric.branch_id.in_(branch_ids),
-            ])
+    ) -> tuple[dict[str, Decimal], datetime | None, dict[str, CoverageInfo]]:
+        """Resolve official 1C values for `metric_codes` over [date_from, date_to].
 
+        Priority order, per metric:
+        1. An uploaded control-total report whose period matches the
+           requested range exactly -> authoritative, is_exact coverage.
+        2. Otherwise, sum whatever complete calendar months of daily
+           snapshots exist inside the range (never a partial month, never
+           an interpolated/averaged figure) and report exactly which
+           months were used and which were not via CoverageInfo.
+
+        A metric with zero covered months is simply absent from the
+        returned values dict (coverage_ratio=0, covered_months=[]) --
+        callers already fall back to Revora's own computed total for an
+        absent metric, and now also have the coverage detail to tell a
+        genuine "nothing to show" apart from a partial figure.
+        """
+        scope_conditions = self._scope_conditions(branch_ids)
         base_conditions = [
             OfficialReportMetric.tenant_id == tenant_id,
             OfficialReportImport.tenant_id == tenant_id,
@@ -150,100 +243,67 @@ class OfficialReportsRepository:
             *scope_conditions,
         ]
 
-        async def grouped_values(*period_conditions) -> tuple[dict[str, Decimal], datetime | None]:
-            rows = (await self.session.execute(
-                select(
-                    OfficialReportMetric.metric_code,
-                    func.sum(OfficialReportMetric.value),
-                    func.max(OfficialReportImport.created_at),
-                )
-                .join(OfficialReportImport, OfficialReportImport.id == OfficialReportMetric.report_id)
-                .where(
-                    *base_conditions,
-                    OfficialReportMetric.metric_code.in_(metric_codes),
-                    *period_conditions,
-                )
-                .group_by(OfficialReportMetric.metric_code)
-            )).all()
-            values = {str(row[0]): Decimal(row[1]) for row in rows}
-            timestamps = [row[2] for row in rows if row[2] is not None]
-            return values, max(timestamps) if timestamps else None
-
-        exact, exact_as_of = await grouped_values(
+        exact, exact_as_of = await self._grouped_values(
+            base_conditions, metric_codes,
             OfficialReportImport.period_from == date_from,
             OfficialReportImport.period_to == date_to,
         )
+        windows = month_windows(date_from, date_to)
         if exact:
-            return exact, exact_as_of
+            coverage = {
+                code: _build_coverage(date_from, date_to, windows, windows, is_exact=True)
+                for code in exact
+            }
+            return exact, exact_as_of, coverage
 
-        covered_report_types = await self._daily_coverage(tenant_id, date_from, date_to)
+        report_types_needed = {
+            REPORT_TYPE_BY_METRIC.get(code) for code in metric_codes
+        } - {None}
+        coverage_by_report_type = await self._month_coverage(
+            tenant_id, report_types_needed, windows
+        )
 
-        additive_codes = metric_codes - {"patients_total", "patients_primary"}
-        daily_values: dict[str, Decimal] = {}
+        values: dict[str, Decimal] = {}
         timestamps: list[datetime] = []
-        if additive_codes:
-            rows = (await self.session.execute(
-                select(
-                    OfficialReportMetric.metric_code,
-                    func.sum(OfficialReportMetric.value),
-                    func.max(OfficialReportImport.created_at),
-                )
-                .join(OfficialReportImport, OfficialReportImport.id == OfficialReportMetric.report_id)
-                .where(
-                    *base_conditions,
-                    OfficialReportMetric.metric_code.in_(additive_codes),
-                    OfficialReportImport.period_from == OfficialReportImport.period_to,
-                    OfficialReportImport.period_from >= date_from,
-                    OfficialReportImport.period_to <= date_to,
-                )
-                .group_by(OfficialReportMetric.metric_code)
-            )).all()
-            for row in rows:
-                code = str(row[0])
-                if REPORT_TYPE_BY_METRIC.get(code) not in covered_report_types:
-                    continue
-                daily_values[code] = Decimal(row[1])
-                if row[2] is not None:
-                    timestamps.append(row[2])
+        coverage: dict[str, CoverageInfo] = {}
+        additive_codes = metric_codes - set(_DISTINCT_PATIENT_METRICS)
 
-        for result_code, marker_code in {
-            "patients_total": "patient_seen",
-            "patients_primary": "patient_primary_seen",
-        }.items():
+        for code in additive_codes:
+            report_type = REPORT_TYPE_BY_METRIC.get(code)
+            covered_windows = coverage_by_report_type.get(report_type, [])
+            coverage[code] = _build_coverage(date_from, date_to, windows, covered_windows)
+            if not covered_windows:
+                continue
+            value, ts = await self._sum_daily_metric(
+                base_conditions, code, covered_windows
+            )
+            if value is not None:
+                values[code] = value
+                if ts is not None:
+                    timestamps.append(ts)
+
+        for result_code, marker_code in _DISTINCT_PATIENT_METRICS.items():
             if result_code not in metric_codes:
                 continue
-            if REPORT_TYPE_BY_METRIC[result_code] not in covered_report_types:
+            report_type = REPORT_TYPE_BY_METRIC[result_code]
+            covered_windows = coverage_by_report_type.get(report_type, [])
+            coverage[result_code] = _build_coverage(date_from, date_to, windows, covered_windows)
+            if not covered_windows:
                 continue
-            marker_conditions = [
-                OfficialReportMetric.tenant_id == tenant_id,
-                OfficialReportImport.tenant_id == tenant_id,
-                OfficialReportImport.is_active.is_(True),
-                OfficialReportImport.period_from == OfficialReportImport.period_to,
-                OfficialReportImport.period_from >= date_from,
-                OfficialReportImport.period_to <= date_to,
-                OfficialReportMetric.metric_code == marker_code,
-                OfficialReportMetric.dimension_type == "patient",
-            ]
-            if branch_ids is not None:
-                marker_conditions.append(OfficialReportMetric.branch_id.in_(branch_ids))
-            marker_row = (await self.session.execute(
-                select(
-                    func.count(func.distinct(OfficialReportMetric.dimension_key)),
-                    func.max(OfficialReportImport.created_at),
-                )
-                .join(OfficialReportImport, OfficialReportImport.id == OfficialReportMetric.report_id)
-                .where(*marker_conditions)
-            )).one()
-            if marker_row[0]:
-                daily_values[result_code] = Decimal(marker_row[0])
-            if marker_row[1] is not None:
-                timestamps.append(marker_row[1])
-        return daily_values, max(timestamps) if timestamps else None
+            count, ts = await self._distinct_marker_count(
+                tenant_id, marker_code, covered_windows, branch_ids
+            )
+            if count:
+                values[result_code] = Decimal(count)
+            if ts is not None:
+                timestamps.append(ts)
+
+        return values, (max(timestamps) if timestamps else None), coverage
 
     async def exact_dimension_metrics(
         self, tenant_id: UUID, date_from: date, date_to: date,
         metric_code: str, dimension_type: str, branch_ids: list[UUID] | None,
-    ) -> tuple[list[ReportMetricValue], datetime | None]:
+    ) -> tuple[list[ReportMetricValue], datetime | None, CoverageInfo]:
         base_conditions = [
             OfficialReportMetric.tenant_id == tenant_id,
             OfficialReportMetric.metric_code == metric_code,
@@ -280,38 +340,158 @@ class OfficialReportsRepository:
             timestamps = [row[3] for row in rows if row[3] is not None]
             return metrics, max(timestamps) if timestamps else None
 
+        windows = month_windows(date_from, date_to)
         exact, exact_as_of = await grouped_metrics(
             OfficialReportImport.period_from == date_from,
             OfficialReportImport.period_to == date_to,
         )
         if exact:
-            return exact, exact_as_of
-        if REPORT_TYPE_BY_METRIC.get(metric_code) not in await self._daily_coverage(
-            tenant_id, date_from, date_to
-        ):
-            return [], None
-        return await grouped_metrics(
-            OfficialReportImport.period_from == OfficialReportImport.period_to,
-            OfficialReportImport.period_from >= date_from,
-            OfficialReportImport.period_to <= date_to,
-        )
+            return exact, exact_as_of, _build_coverage(date_from, date_to, windows, windows, is_exact=True)
 
-    async def _daily_coverage(
-        self, tenant_id: UUID, date_from: date, date_to: date
-    ) -> set[str]:
-        expected_days = (date_to - date_from).days + 1
+        report_type = REPORT_TYPE_BY_METRIC.get(metric_code)
+        coverage_by_report_type = await self._month_coverage(tenant_id, {report_type} - {None}, windows)
+        covered_windows = coverage_by_report_type.get(report_type, [])
+        coverage = _build_coverage(date_from, date_to, windows, covered_windows)
+        if not covered_windows:
+            return [], None, coverage
+
+        window_condition = or_(*[
+            and_(
+                OfficialReportImport.period_from >= start,
+                OfficialReportImport.period_to <= end,
+            )
+            for _, start, end in covered_windows
+        ])
+        metrics, as_of = await grouped_metrics(
+            OfficialReportImport.period_from == OfficialReportImport.period_to,
+            window_condition,
+        )
+        return metrics, as_of, coverage
+
+    async def _grouped_values(
+        self, base_conditions: list, metric_codes: set[str], *period_conditions,
+    ) -> tuple[dict[str, Decimal], datetime | None]:
         rows = (await self.session.execute(
             select(
-                OfficialReportImport.report_type,
-                func.count(func.distinct(OfficialReportImport.period_from)),
+                OfficialReportMetric.metric_code,
+                func.sum(OfficialReportMetric.value),
+                func.max(OfficialReportImport.created_at),
             )
+            .join(OfficialReportImport, OfficialReportImport.id == OfficialReportMetric.report_id)
+            .where(
+                *base_conditions,
+                OfficialReportMetric.metric_code.in_(metric_codes),
+                *period_conditions,
+            )
+            .group_by(OfficialReportMetric.metric_code)
+        )).all()
+        values = {str(row[0]): Decimal(row[1]) for row in rows}
+        timestamps = [row[2] for row in rows if row[2] is not None]
+        return values, max(timestamps) if timestamps else None
+
+    async def _sum_daily_metric(
+        self, base_conditions: list, code: str,
+        covered_windows: list[tuple[str, date, date]],
+    ) -> tuple[Decimal | None, datetime | None]:
+        window_condition = or_(*[
+            and_(
+                OfficialReportImport.period_from >= start,
+                OfficialReportImport.period_to <= end,
+            )
+            for _, start, end in covered_windows
+        ])
+        row = (await self.session.execute(
+            select(
+                func.sum(OfficialReportMetric.value),
+                func.max(OfficialReportImport.created_at),
+            )
+            .join(OfficialReportImport, OfficialReportImport.id == OfficialReportMetric.report_id)
+            .where(
+                *base_conditions,
+                OfficialReportMetric.metric_code == code,
+                OfficialReportImport.period_from == OfficialReportImport.period_to,
+                window_condition,
+            )
+        )).one()
+        value = Decimal(row[0]) if row[0] is not None else None
+        return value, row[1]
+
+    async def _distinct_marker_count(
+        self, tenant_id: UUID, marker_code: str,
+        covered_windows: list[tuple[str, date, date]], branch_ids: list[UUID] | None,
+    ) -> tuple[int, datetime | None]:
+        window_condition = or_(*[
+            and_(
+                OfficialReportImport.period_from >= start,
+                OfficialReportImport.period_to <= end,
+            )
+            for _, start, end in covered_windows
+        ])
+        marker_conditions = [
+            OfficialReportMetric.tenant_id == tenant_id,
+            OfficialReportImport.tenant_id == tenant_id,
+            OfficialReportImport.is_active.is_(True),
+            OfficialReportImport.period_from == OfficialReportImport.period_to,
+            window_condition,
+            OfficialReportMetric.metric_code == marker_code,
+            OfficialReportMetric.dimension_type == "patient",
+        ]
+        if branch_ids is not None:
+            marker_conditions.append(OfficialReportMetric.branch_id.in_(branch_ids))
+        row = (await self.session.execute(
+            select(
+                func.count(func.distinct(OfficialReportMetric.dimension_key)),
+                func.max(OfficialReportImport.created_at),
+            )
+            .join(OfficialReportImport, OfficialReportImport.id == OfficialReportMetric.report_id)
+            .where(*marker_conditions)
+        )).one()
+        return int(row[0] or 0), row[1]
+
+    async def _month_coverage(
+        self, tenant_id: UUID, report_types: set[str],
+        windows: list[tuple[str, date, date]],
+    ) -> dict[str, list[tuple[str, date, date]]]:
+        """For each report_type, which month-windows have every one of
+        their days present as a daily (period_from == period_to) import."""
+        result: dict[str, list[tuple[str, date, date]]] = {}
+        if not report_types or not windows:
+            return result
+        range_start = windows[0][1]
+        range_end = windows[-1][2]
+        rows = (await self.session.execute(
+            select(OfficialReportImport.report_type, OfficialReportImport.period_from)
             .where(
                 OfficialReportImport.tenant_id == tenant_id,
                 OfficialReportImport.is_active.is_(True),
+                OfficialReportImport.report_type.in_(report_types),
                 OfficialReportImport.period_from == OfficialReportImport.period_to,
-                OfficialReportImport.period_from >= date_from,
-                OfficialReportImport.period_to <= date_to,
+                OfficialReportImport.period_from >= range_start,
+                OfficialReportImport.period_to <= range_end,
             )
-            .group_by(OfficialReportImport.report_type)
         )).all()
-        return {str(row[0]) for row in rows if int(row[1]) == expected_days}
+        present_days: dict[str, set[date]] = {}
+        for report_type, day in rows:
+            present_days.setdefault(str(report_type), set()).add(day)
+        for report_type in report_types:
+            days = present_days.get(report_type, set())
+            covered: list[tuple[str, date, date]] = []
+            for month_key, start, end in windows:
+                expected = (end - start).days + 1
+                have = sum(1 for day in days if start <= day <= end)
+                if have == expected:
+                    covered.append((month_key, start, end))
+            result[report_type] = covered
+        return result
+
+    @staticmethod
+    def _scope_conditions(branch_ids: list[UUID] | None) -> list:
+        if branch_ids is None:
+            return [
+                OfficialReportMetric.dimension_type == "clinic",
+                OfficialReportMetric.branch_id.is_(None),
+            ]
+        return [
+            OfficialReportMetric.dimension_type == "branch",
+            OfficialReportMetric.branch_id.in_(branch_ids),
+        ]

@@ -108,7 +108,7 @@
 @media(max-width:1200px){.ceo-kpi-grid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:800px){.date-filter-wrap{align-items:stretch;flex-direction:column}.ceo-hero{grid-template-columns:1fr}.ceo-kpi-grid{grid-template-columns:1fr 1fr}.call-filters.compact{grid-template-columns:1fr}.coming-roadmap{grid-template-columns:1fr}.marketing-chart .recharts-yAxis{display:none}}
 @media(max-width:520px){.ceo-kpi-grid{grid-template-columns:1fr}.ceo-hero-stats{grid-template-columns:1fr}.date-presets{width:100%}.date-presets button{flex:1}.ds-coming-soon{padding:30px 18px}}
-.official-reports-table{margin-top:18px}
+.coverage-banner{margin-bottom:14px;padding:12px 16px;border-radius:10px;font-size:13px;line-height:1.5}.coverage-banner strong{font-weight:800}.coverage-banner-partial{background:#fbf3e2;color:#7a5a12;border:1px solid #efdcae}.coverage-banner-unavailable{background:#f4ecec;color:#8a3f38;border:1px solid #e7cdca}.official-reports-table{margin-top:18px}
 .contact-metrics{margin-bottom:18px}
 .contact-list-actions{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:18px;padding:14px;border-radius:10px;background:var(--canvas)}
 .contact-list-actions label{display:grid;gap:5px;min-width:190px;color:var(--muted);font-size:12px;font-weight:750;text-transform:uppercase;letter-spacing:.04em}

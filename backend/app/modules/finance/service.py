@@ -1,18 +1,24 @@
 """Role-aware financial analytics use cases."""
 
+from dataclasses import asdict
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
 from app.core.errors import AppError
 from app.modules.auth.models import User, UserRole
-from app.modules.finance.repository import FinanceRepository
+from app.modules.finance.repository import CashFlowTotals, FinanceRepository, PnlTotals
 from app.modules.finance.schemas import (
     AnalyticsMeta,
     CashFlowResponse,
+    CoverageInfoResponse,
     FinanceSummaryResponse,
     PnlResponse,
 )
+
+
+def _coverage_response(totals: "PnlTotals | CashFlowTotals") -> dict[str, CoverageInfoResponse]:
+    return {code: CoverageInfoResponse(**asdict(info)) for code, info in totals.coverage.items()}
 
 
 class FinanceService:
@@ -61,6 +67,7 @@ class FinanceService:
                 data_as_of=totals.data_as_of,
                 official_metric_codes=sorted(totals.official_metrics),
                 is_reconciled=bool(totals.official_metrics),
+                coverage=_coverage_response(totals),
             ),
         )
 
@@ -84,6 +91,7 @@ class FinanceService:
                 data_as_of=totals.data_as_of,
                 official_metric_codes=sorted(totals.official_metrics),
                 is_reconciled=bool(totals.official_metrics),
+                coverage=_coverage_response(totals),
             ),
         )
 
@@ -110,6 +118,7 @@ class FinanceService:
                     set(pnl.meta.official_metric_codes) | set(cashflow.meta.official_metric_codes)
                 ),
                 is_reconciled=pnl.meta.is_reconciled or cashflow.meta.is_reconciled,
+                coverage={**pnl.meta.coverage, **cashflow.meta.coverage},
             ),
         )
 

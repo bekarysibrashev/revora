@@ -28,3 +28,36 @@ export function DataState({ loading, error, children }: { loading: boolean; erro
 export function AsOf({ value }: { value?: string | null }) { return <p className="as-of">Данные актуальны на: {value ? new Date(value).toLocaleString("ru-RU") : "нет загруженных данных"}</p>; }
 export function money(value: string | number | null | undefined) { return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "KZT", maximumFractionDigits: 0 }).format(Number(value || 0)); }
 export function percent(value: string | number | null | undefined) { return `${(Number(value || 0) * 100).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`; }
+
+export type CoverageInfo = {
+  requested_from: string;
+  requested_to: string;
+  covered_from: string | null;
+  covered_to: string | null;
+  covered_months: string[];
+  missing_months: string[];
+  coverage_ratio: number;
+  is_partial: boolean;
+  is_exact: boolean;
+};
+
+const MONTH_LABELS_RU = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"];
+function monthLabel(key: string) { const [year, month] = key.split("-"); const index = Number(month) - 1; return `${MONTH_LABELS_RU[index] || month} ${year}`; }
+
+// Renders a warning whenever a date range is not fully backed by real 1С data,
+// so a partial or missing total is never mistaken for a complete one (never a
+// silent 0 or a partial sum presented as if it covered the whole period).
+export function CoverageBanner({ coverage, label }: { coverage?: CoverageInfo | null; label?: string }) {
+  if (!coverage || coverage.is_exact) return null;
+  const prefix = label ? `${label}: ` : "";
+  if (!coverage.covered_months.length) {
+    return <div className="coverage-banner coverage-banner-unavailable"><strong>{prefix}нет данных за выбранный период.</strong> Отправьте снимки 1С за этот диапазон, чтобы увидеть показатели.</div>;
+  }
+  if (!coverage.is_partial) return null;
+  return (
+    <div className="coverage-banner coverage-banner-partial">
+      <strong>{prefix}показаны данные только за {coverage.covered_months.map(monthLabel).join(", ")}.</strong>
+      {" "}Нет данных за {coverage.missing_months.map(monthLabel).join(", ")} — сумма посчитана только по доступным месяцам ({Math.round(coverage.coverage_ratio * 100)}% периода).
+    </div>
+  );
+}

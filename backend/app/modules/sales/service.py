@@ -1,5 +1,6 @@
 """Role-aware sales analytics."""
 
+from dataclasses import asdict
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
@@ -7,7 +8,7 @@ from uuid import UUID
 from app.core.errors import AppError
 from app.modules.auth.models import User, UserRole
 from app.modules.sales.repository import SalesRepository
-from app.modules.sales.schemas import SalesMeta, SalesOverviewResponse
+from app.modules.sales.schemas import CoverageInfoResponse, SalesMeta, SalesOverviewResponse
 
 
 class SalesService:
@@ -34,11 +35,14 @@ class SalesService:
             if totals.appointments_total
             else Decimal("0")
         )
+        coverage: dict[str, CoverageInfoResponse] = {
+            code: CoverageInfoResponse(**asdict(info)) for code, info in totals.coverage.items()
+        }
         return SalesOverviewResponse(
             **{
                 key: value
                 for key, value in totals.__dict__.items()
-                if key != "data_as_of"
+                if key not in {"data_as_of", "coverage"}
             },
             lead_conversion_rate=lead_rate,
             appointment_completion_rate=appointment_rate,
@@ -47,6 +51,7 @@ class SalesService:
                 date_to=date_to,
                 branch_ids=branch_ids,
                 data_as_of=totals.data_as_of,
+                coverage=coverage,
             ),
         )
 

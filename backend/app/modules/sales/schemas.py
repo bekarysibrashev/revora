@@ -4,7 +4,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from app.modules.reports.schemas import CoverageInfoResponse
 
 
 class SalesMeta(BaseModel):
@@ -12,6 +14,7 @@ class SalesMeta(BaseModel):
     date_to: date
     branch_ids: list[UUID] | None
     data_as_of: datetime | None
+    coverage: dict[str, CoverageInfoResponse] = Field(default_factory=dict)
 
 
 class SalesOverviewResponse(BaseModel):

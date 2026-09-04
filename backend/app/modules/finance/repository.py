@@ -16,7 +16,7 @@ from app.modules.finance.models import (
     PayrollFact,
     RevenueFact,
 )
-from app.modules.reports.repository import OfficialReportsRepository
+from app.modules.reports.repository import CoverageInfo, OfficialReportsRepository
 from app.shared.timezone import clinic_day_end_exclusive, clinic_day_start
 
 ZERO = Decimal("0")
@@ -32,6 +32,7 @@ class PnlTotals:
     payroll_accrual: Decimal
     data_as_of: datetime | None
     official_metrics: frozenset[str] = field(default_factory=frozenset)
+    coverage: dict[str, CoverageInfo] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class CashFlowTotals:
     data_as_of: datetime | None
     official_metrics: frozenset[str] = field(default_factory=frozenset)
     cashflow_is_complete: bool = False
+    coverage: dict[str, CoverageInfo] = field(default_factory=dict)
 
 
 class FinanceRepository:
@@ -125,7 +127,7 @@ class FinanceRepository:
         if branch_id:
             payroll_statement = payroll_statement.where(PayrollFact.branch_id == branch_id)
         payroll = (await self.session.execute(payroll_statement)).one()
-        official_values, official_as_of = await OfficialReportsRepository(
+        official_values, official_as_of, official_coverage = await OfficialReportsRepository(
             self.session
         ).exact_values(
             tenant_id,
@@ -148,6 +150,7 @@ class FinanceRepository:
             payroll_accrual=official_values.get("payroll_accrual", Decimal(payroll[0])),
             data_as_of=max(timestamps) if timestamps else None,
             official_metrics=frozenset(official_values),
+            coverage=official_coverage,
         )
 
     async def cashflow_totals(
@@ -192,7 +195,7 @@ class FinanceRepository:
         expense_paid = (await self.session.execute(expense_paid_statement)).one()
         payroll_paid = (await self.session.execute(payroll_paid_statement)).one()
 
-        official_values, official_as_of = await OfficialReportsRepository(
+        official_values, official_as_of, official_coverage = await OfficialReportsRepository(
             self.session
         ).exact_values(
             tenant_id,
@@ -255,6 +258,7 @@ class FinanceRepository:
             data_as_of=max(timestamps) if timestamps else None,
             official_metrics=frozenset(official_values),
             cashflow_is_complete=False,
+            coverage=official_coverage,
         )
 
     @staticmethod

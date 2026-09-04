@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.modules.reports.schemas import CoverageInfoResponse
+
 
 class AnalyticsMeta(BaseModel):
     date_from: date
@@ -14,6 +16,7 @@ class AnalyticsMeta(BaseModel):
     data_as_of: datetime | None
     official_metric_codes: list[str] = Field(default_factory=list)
     is_reconciled: bool = False
+    coverage: dict[str, CoverageInfoResponse] = Field(default_factory=dict)
 
 
 class PnlResponse(BaseModel):

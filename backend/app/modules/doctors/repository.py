@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.doctors.models import Doctor, DoctorRating
 from app.modules.finance.models import RevenueFact
-from app.modules.reports.repository import OfficialReportsRepository
+from app.modules.reports.repository import CoverageInfo, OfficialReportsRepository
 from app.modules.sales.models import Appointment
 
 
@@ -37,7 +37,7 @@ class DoctorsRepository:
         date_from: date,
         date_to: date,
         branch_ids: list[UUID] | None,
-    ) -> list[DoctorTotals]:
+    ) -> tuple[list[DoctorTotals], CoverageInfo]:
         appointments = (
             select(
                 Appointment.doctor_id.label("doctor_id"),
@@ -133,7 +133,7 @@ class DoctorsRepository:
             )
             for row in rows
         ]
-        official_metrics, official_as_of = await OfficialReportsRepository(
+        official_metrics, official_as_of, official_coverage = await OfficialReportsRepository(
             self.session
         ).exact_dimension_metrics(
             tenant_id,
@@ -177,7 +177,7 @@ class DoctorsRepository:
         return sorted(
             totals,
             key=lambda item: (-item.revenue_payment, item.full_name.casefold()),
-        )
+        ), official_coverage
 
     @staticmethod
     def _start(value: date) -> datetime:

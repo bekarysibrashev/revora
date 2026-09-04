@@ -10,6 +10,7 @@ from app.modules.doctors.repository import DoctorTotals
 from app.modules.doctors.service import DoctorsService
 from app.modules.marketing.repository import MarketingTotals
 from app.modules.marketing.service import MarketingService
+from app.modules.reports.repository import CoverageInfo
 from app.modules.sales.repository import SalesTotals
 from app.modules.sales.service import SalesService
 
@@ -70,7 +71,7 @@ async def test_sales_manager_is_scoped_to_self_and_branch() -> None:
 
 class FakeDoctorsRepository:
     async def overview(self, tenant_id, date_from, date_to, branch_ids):
-        return [
+        totals = [
             DoctorTotals(
                 doctor_id=uuid4(),
                 full_name="Doctor One",
@@ -83,6 +84,18 @@ class FakeDoctorsRepository:
                 data_as_of=datetime(2026, 7, 20, tzinfo=UTC),
             )
         ]
+        coverage = CoverageInfo(
+            requested_from=date_from,
+            requested_to=date_to,
+            covered_from=date_from,
+            covered_to=date_to,
+            covered_months=["2026-07"],
+            missing_months=[],
+            coverage_ratio=1.0,
+            is_partial=False,
+            is_exact=True,
+        )
+        return totals, coverage
 
 
 @pytest.mark.asyncio
@@ -93,6 +106,8 @@ async def test_doctors_overview_calculates_completion_rate() -> None:
 
     assert response.total == 1
     assert response.items[0].completion_rate == Decimal("0.8")
+    assert response.coverage is not None
+    assert response.coverage.is_exact is True
 
 
 class FakeMarketingRepository:

@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
@@ -5,7 +6,11 @@ from uuid import UUID
 from app.core.errors import AppError
 from app.modules.auth.models import User, UserRole
 from app.modules.doctors.repository import DoctorsRepository
-from app.modules.doctors.schemas import DoctorPerformance, DoctorsOverviewResponse
+from app.modules.doctors.schemas import (
+    CoverageInfoResponse,
+    DoctorPerformance,
+    DoctorsOverviewResponse,
+)
 
 
 class DoctorsService:
@@ -20,7 +25,9 @@ class DoctorsService:
         if date_from > date_to:
             raise AppError("INVALID_DATE_RANGE", "date_from must not be after date_to", 422)
         branch_ids = self._branch_scope(user, branch_id)
-        totals = await self.repository.overview(user.tenant_id, date_from, date_to, branch_ids)
+        totals, coverage = await self.repository.overview(
+            user.tenant_id, date_from, date_to, branch_ids
+        )
         items = [
             DoctorPerformance(
                 doctor_id=item.doctor_id,
@@ -47,6 +54,7 @@ class DoctorsService:
             date_to=date_to,
             branch_ids=branch_ids,
             data_as_of=max(timestamps) if timestamps else None,
+            coverage=CoverageInfoResponse(**asdict(coverage)),
         )
 
     @staticmethod
