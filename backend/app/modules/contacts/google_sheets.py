@@ -17,6 +17,7 @@ import json
 import logging
 import time
 from datetime import datetime
+import re
 from functools import lru_cache
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -55,6 +56,12 @@ SOURCE_CHANNEL_LABELS = {"kcell": "Входящий звонок", "whatsapp": "
 
 AUTO_ENTRY_NOTE = "Занесено автоматически Revora"
 
+# Background color applied to a row Revora appended, so staff can tell it
+# apart from rows they entered by hand at a glance.
+NEW_ROW_HIGHLIGHT_COLOR = "#b5f199"
+
+_UPDATED_RANGE_ROW = re.compile(r"![A-Za-z]+(\d+):")
+
 
 class GoogleSheetsSyncError(RuntimeError):
     """A row could not be appended. Callers should log this and continue."""
@@ -79,12 +86,23 @@ def build_new_contact_row(
 
     phone_digits = phone_e164.lstrip("+") if phone_e164 else ""
     row = {name: "" for name in NEW_CONTACT_COLUMNS}
-    row["Дата"] = first_inbound_at.date().isoformat()
+    # DD.MM.YYYY -- matches the format already used throughout the clinic's
+    # sheet (e.g. "01.01.2026"), so a sync'd row sorts and reads like the rest
+    # instead of ending up as an ISO-format outlier.
+    row["Дата"] = first_inbound_at.strftime("%d.%m.%Y")
     row["Месяц"] = RUSSIAN_MONTHS[first_inbound_at.month]
     row["Телефон"] = phone_digits
     row["Канал Связи"] = SOURCE_CHANNEL_LABELS.get(source, source)
     row["Дополнительные комментарии"] = AUTO_ENTRY_NOTE
     return [row[name] for name in NEW_CONTACT_COLUMNS]
+
+
+def _hex_to_color(hex_color: str) -> dict[str, float]:
+    """Convert "#rrggbb" to the {red,green,blue} fractions the Sheets API wants."""
+
+    value = hex_color.lstrip("#")
+    red, green, blue = (int(value[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    return {"red": red, "green": green, "blue": blue}
 
 
 class GoogleSheetsClient:
@@ -119,6 +137,7 @@ class GoogleSheetsClient:
         self._sheet_name = sheet_name
         self._cached_token: str | None = None
         self._cached_token_expires_at: float = 0.0
+        self._sheet_id: int | None = None
 
     async def _access_token(self, client: httpx.AsyncClient) -> str:
         now = time.time()
@@ -156,7 +175,15 @@ class GoogleSheetsClient:
         return self._cached_token
 
     async def append_row(self, values: list[object]) -> None:
-        """Append one row to the configured tab. Raises on any failure."""
+        """Append one row to the configured tab. Raises on a failed append.
+
+        The appended row is then highlighted with ``NEW_ROW_HIGHLIGHT_COLOR``
+        so staff can see at a glance which rows Revora added on its own. That
+        highlight step is best-effort: the row's data already landed by the
+        time it runs, so a formatting failure is logged, never raised --
+        callers should not be told the sync failed when the row is actually
+        there, just unhighlighted.
+        """
 
         range_ = f"{self._sheet_name}!A1"
         url = (
@@ -171,9 +198,84 @@ class GoogleSheetsClient:
                 headers={"Authorization": f"Bearer {token}"},
                 json={"values": [values]},
             )
+            if response.status_code >= 400:
+                raise GoogleSheetsSyncError(
+                    f"Google Sheets append failed: {response.status_code} {response.text[:300]}"
+                )
+            try:
+                await self._highlight_appended_row(client, token, response.json(), len(values))
+            except Exception:
+                logger.warning(
+                    "Could not highlight the auto-added Google Sheets row", exc_info=True
+                )
+
+    async def _resolve_sheet_id(self, client: httpx.AsyncClient, token: str) -> int:
+        """Look up (and cache) the numeric sheetId behind self._sheet_name.
+
+        The append/append-values API addresses tabs by name, but formatting
+        (batchUpdate/repeatCell) needs the tab's numeric id instead.
+        """
+
+        if self._sheet_id is not None:
+            return self._sheet_id
+        response = await client.get(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{self._spreadsheet_id}",
+            params={"fields": "sheets.properties(sheetId,title)"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
         if response.status_code >= 400:
             raise GoogleSheetsSyncError(
-                f"Google Sheets append failed: {response.status_code} {response.text[:300]}"
+                f"could not look up sheet id for {self._sheet_name!r}: "
+                f"{response.status_code} {response.text[:200]}"
+            )
+        for sheet in response.json().get("sheets", []):
+            properties = sheet.get("properties", {})
+            if properties.get("title") == self._sheet_name:
+                self._sheet_id = properties["sheetId"]
+                return self._sheet_id
+        raise GoogleSheetsSyncError(f"sheet tab {self._sheet_name!r} was not found in the spreadsheet")
+
+    async def _highlight_appended_row(
+        self,
+        client: httpx.AsyncClient,
+        token: str,
+        append_payload: dict,
+        column_count: int,
+    ) -> None:
+        updated_range = append_payload.get("updates", {}).get("updatedRange", "")
+        match = _UPDATED_RANGE_ROW.search(updated_range)
+        if not match:
+            return
+        row_index = int(match.group(1)) - 1
+        sheet_id = await self._resolve_sheet_id(client, token)
+        response = await client.post(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{self._spreadsheet_id}:batchUpdate",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "requests": [
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": row_index,
+                                "endRowIndex": row_index + 1,
+                                "startColumnIndex": 0,
+                                "endColumnIndex": column_count,
+                            },
+                            "cell": {
+                                "userEnteredFormat": {
+                                    "backgroundColor": _hex_to_color(NEW_ROW_HIGHLIGHT_COLOR)
+                                }
+                            },
+                            "fields": "userEnteredFormat.backgroundColor",
+                        }
+                    }
+                ]
+            },
+        )
+        if response.status_code >= 400:
+            raise GoogleSheetsSyncError(
+                f"Google Sheets highlight failed: {response.status_code} {response.text[:300]}"
             )
 
 

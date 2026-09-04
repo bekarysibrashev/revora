@@ -30,7 +30,7 @@ def test_row_matches_the_clinic_sheet_column_order_and_leaves_judgment_columns_b
     )
 
     assert row == [
-        "2026-03-04",  # Дата
+        "04.03.2026",  # Дата
         "Март",  # Месяц
         "",  # ФИО
         "77012345678",  # Телефон
@@ -111,7 +111,7 @@ def test_credentials_json_must_include_the_service_account_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_append_row_exchanges_a_token_then_posts_the_values() -> None:
+async def test_append_row_exchanges_a_token_then_posts_the_values_and_highlights_the_row() -> None:
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -119,8 +119,28 @@ async def test_append_row_exchanges_a_token_then_posts_the_values() -> None:
         if request.url.path == "/token":
             return httpx.Response(200, json={"access_token": "fake-token", "expires_in": 3600})
         assert request.headers["authorization"] == "Bearer fake-token"
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"sheets": [{"properties": {"sheetId": 42, "title": "Отчет КЦ"}}]}
+            )
+        if request.url.path.endswith(":batchUpdate"):
+            body = json.loads(request.content)
+            cell = body["requests"][0]["repeatCell"]
+            assert cell["range"] == {
+                "sheetId": 42,
+                "startRowIndex": 56,
+                "endRowIndex": 57,
+                "startColumnIndex": 0,
+                "endColumnIndex": 2,
+            }
+            assert cell["cell"]["userEnteredFormat"]["backgroundColor"] == pytest.approx(
+                {"red": 181 / 255, "green": 241 / 255, "blue": 153 / 255}
+            )
+            return httpx.Response(200, json={})
         assert request.url.params["valueInputOption"] == "USER_ENTERED"
-        return httpx.Response(200, json={"updates": {"updatedRows": 1}})
+        return httpx.Response(
+            200, json={"updates": {"updatedRange": "'Отчет КЦ'!A57:B57", "updatedRows": 1}}
+        )
 
     client = GoogleSheetsClient(
         credentials_json=_service_account_json(),
@@ -129,23 +149,33 @@ async def test_append_row_exchanges_a_token_then_posts_the_values() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    await client.append_row(["2026-03-04", "Март"])
+    await client.append_row(["04.03.2026", "Март"])
 
-    assert len(calls) == 2
+    assert len(calls) == 4
     assert calls[0].url.path == "/token"
     assert "spreadsheets/sheet-1/values" in str(calls[1].url)
+    assert calls[2].method == "GET"
+    assert calls[3].url.path.endswith(":batchUpdate")
 
 
 @pytest.mark.asyncio
-async def test_append_row_reuses_the_cached_token_on_a_second_call() -> None:
+async def test_append_row_reuses_the_cached_token_and_sheet_id_on_a_second_call() -> None:
     token_requests = 0
+    metadata_requests = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal token_requests
+        nonlocal token_requests, metadata_requests
         if request.url.path == "/token":
             token_requests += 1
             return httpx.Response(200, json={"access_token": "fake-token", "expires_in": 3600})
-        return httpx.Response(200, json={})
+        if request.method == "GET":
+            metadata_requests += 1
+            return httpx.Response(
+                200, json={"sheets": [{"properties": {"sheetId": 42, "title": "Отчет КЦ"}}]}
+            )
+        if request.url.path.endswith(":batchUpdate"):
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={"updates": {"updatedRange": "'Отчет КЦ'!A2:A2"}})
 
     client = GoogleSheetsClient(
         credentials_json=_service_account_json(),
@@ -158,6 +188,7 @@ async def test_append_row_reuses_the_cached_token_on_a_second_call() -> None:
     await client.append_row(["row two"])
 
     assert token_requests == 1
+    assert metadata_requests == 1
 
 
 @pytest.mark.asyncio
@@ -176,6 +207,30 @@ async def test_append_row_raises_on_a_google_error_response() -> None:
 
     with pytest.raises(GoogleSheetsSyncError):
         await client.append_row(["row"])
+
+
+@pytest.mark.asyncio
+async def test_append_row_does_not_raise_when_highlighting_the_row_fails() -> None:
+    """The row itself is already saved by the time highlighting runs -- a
+    broken formatting call must never be reported back as a sync failure."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/token":
+            return httpx.Response(200, json={"access_token": "fake-token", "expires_in": 3600})
+        if request.method == "GET":
+            return httpx.Response(500, text="sheets metadata is unavailable")
+        return httpx.Response(
+            200, json={"updates": {"updatedRange": "'Отчет КЦ'!A2:A2", "updatedRows": 1}}
+        )
+
+    client = GoogleSheetsClient(
+        credentials_json=_service_account_json(),
+        spreadsheet_id="sheet-1",
+        sheet_name="Отчет КЦ",
+        transport=httpx.MockTransport(handler),
+    )
+
+    await client.append_row(["row"])
 
 
 # ---------------------------------------------------------------------------
