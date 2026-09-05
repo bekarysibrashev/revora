@@ -115,6 +115,28 @@ class IntegrationRepository:
         )
         return str(codes[0]) if len(codes) == 1 else None
 
+    async def match_one_c_branch_code(
+        self, tenant_id: UUID, unit_label: str
+    ) -> str | None:
+        """Resolve one 1C structural-unit label without relying on legacy raw OData rows."""
+
+        normalized_unit = self._normalize_branch_name(unit_label)
+        branches = list((await self.session.scalars(
+            select(Branch).where(
+                Branch.tenant_id == tenant_id,
+                Branch.is_active.is_(True),
+            )
+        )).all())
+        matches = [
+            branch for branch in branches
+            if self._branch_matches_unit(
+                normalized_unit,
+                branch_name=self._normalize_branch_name(branch.name),
+                branch_code=self._normalize_branch_name(branch.code),
+            )
+        ]
+        return str(matches[0].code) if len(matches) == 1 else None
+
     async def one_c_branch_code_map(
         self, tenant_id: UUID, connection_id: UUID
     ) -> dict[str, str]:

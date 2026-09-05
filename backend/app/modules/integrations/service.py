@@ -28,6 +28,9 @@ from app.modules.integrations.schemas import (
     MappingProfileListResponse,
     MappingProfileResponse,
     OneCConnectorTokenResponse,
+    OneCOperationalBatchRequest,
+    OneCOperationalBatchResponse,
+    OneCOperationalRecordError,
 )
 from app.modules.integrations.tabular_adapter import InvalidTabularFile, UnsupportedTabularFile
 
@@ -116,6 +119,72 @@ class IntegrationService:
         self, tenant_id: UUID, connection_id: UUID
     ) -> dict[str, str]:
         return await self.repository.one_c_branch_code_map(tenant_id, connection_id)
+
+    async def ingest_one_c_operational_batch(
+        self,
+        *,
+        tenant_id: UUID,
+        connection_id: UUID,
+        branch_code_map: dict[str, str],
+        payload: OneCOperationalBatchRequest,
+    ) -> OneCOperationalBatchResponse:
+        """Upsert a bounded, normalized batch from the local 1C extension.
+
+        Stable 1C GUIDs are canonical external ids, so retrying a batch is
+        naturally idempotent.  Expected row-level validation errors are
+        returned to the connector; unexpected database failures still abort
+        the request and transaction instead of pretending that data arrived.
+        """
+
+        upserted = 0
+        errors: list[OneCOperationalRecordError] = []
+        normalized_map = {key.casefold(): value for key, value in branch_code_map.items()}
+
+        for index, record in enumerate(payload.records):
+            data = dict(record.data)
+            external_id = str(data.get("external_id") or "").strip() or None
+            branch_key = str(data.pop("branch_key", "") or "").strip().casefold()
+            branch_label = str(data.pop("branch_label", "") or "").strip()
+            if branch_key:
+                branch_code = normalized_map.get(branch_key)
+                if branch_code is None and branch_label:
+                    branch_code = await self.repository.match_one_c_branch_code(
+                        tenant_id, branch_label
+                    )
+                if branch_code is None:
+                    branch_code = await self.repository.single_active_branch_code(tenant_id)
+                if branch_code is not None:
+                    data["branch_code"] = branch_code
+
+            try:
+                await self.canonical_writer.write(
+                    tenant_id=tenant_id,
+                    target_entity=record.target_entity,
+                    data=data,
+                )
+            except CanonicalWriteError as exc:
+                errors.append(OneCOperationalRecordError(
+                    index=index,
+                    target_entity=record.target_entity,
+                    external_id=external_id,
+                    message=str(exc)[:1000],
+                ))
+                continue
+            upserted += 1
+
+        await self.repository.mark_connection_synced(
+            await self.repository.get_connection(tenant_id, connection_id),
+            entity="operational_batch",
+            synced_at=datetime.now(UTC),
+        )
+        return OneCOperationalBatchResponse(
+            batch_id=payload.batch_id,
+            received=len(payload.records),
+            upserted=upserted,
+            rejected=len(errors),
+            cursor=payload.cursor,
+            errors=errors,
+        )
 
     async def create_mapping_profile(
         self, user: User, connection_id: UUID, definition: MappingDefinition

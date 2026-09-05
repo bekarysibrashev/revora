@@ -134,3 +134,45 @@ class OneCConnectorTokenResponse(BaseModel):
 
     connection_id: UUID
     token: str
+
+
+OneCOperationalTarget = Literal[
+    "patient",
+    "doctor",
+    "service_direction",
+    "appointment",
+]
+
+
+class OneCOperationalRecordInput(BaseModel):
+    """One already-normalized operational row produced by the 1C extension.
+
+    The target allowlist is intentionally small.  The connector cannot choose
+    arbitrary database tables, and CanonicalWriter validates every field that
+    is materialized into the tenant-scoped canonical model.
+    """
+
+    target_entity: OneCOperationalTarget
+    data: dict[str, object]
+
+
+class OneCOperationalBatchRequest(BaseModel):
+    batch_id: str = Field(min_length=1, max_length=120)
+    records: list[OneCOperationalRecordInput] = Field(min_length=1, max_length=500)
+    cursor: str | None = Field(default=None, max_length=300)
+
+
+class OneCOperationalRecordError(BaseModel):
+    index: int
+    target_entity: OneCOperationalTarget
+    external_id: str | None = None
+    message: str
+
+
+class OneCOperationalBatchResponse(BaseModel):
+    batch_id: str
+    received: int
+    upserted: int
+    rejected: int
+    cursor: str | None = None
+    errors: list[OneCOperationalRecordError] = Field(default_factory=list)

@@ -18,6 +18,8 @@ from app.modules.integrations.schemas import (
     MappingProfileListResponse,
     MappingProfileResponse,
     OneCConnectorTokenResponse,
+    OneCOperationalBatchRequest,
+    OneCOperationalBatchResponse,
 )
 from app.modules.integrations.service import IntegrationService
 from app.modules.integrations.tabular_adapter import TabularFileAdapter
@@ -84,6 +86,28 @@ async def push_one_c_report_snapshots_batch(
         connection_id=connection.id,
         branch_code_map=branch_code_map,
         snapshots=payload.snapshots,
+    )
+
+
+@router.post("/1c/operational-records/batch", response_model=OneCOperationalBatchResponse)
+async def push_one_c_operational_batch(
+    payload: OneCOperationalBatchRequest,
+    service: IntegrationServiceDependency,
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(connector_bearer)
+    ],
+) -> OneCOperationalBatchResponse:
+    if credentials is None:
+        raise AppError("CONNECTOR_TOKEN_REQUIRED", "Connector token is required", 401)
+    parts, connection = await service.authenticate_one_c_connector(credentials.credentials)
+    branch_code_map = await service.one_c_connector_branch_code_map(
+        parts.tenant_id, connection.id
+    )
+    return await service.ingest_one_c_operational_batch(
+        tenant_id=parts.tenant_id,
+        connection_id=connection.id,
+        branch_code_map=branch_code_map,
+        payload=payload,
     )
 
 

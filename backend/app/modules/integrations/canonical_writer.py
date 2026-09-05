@@ -66,12 +66,20 @@ class CanonicalWriter:
             "phone_e164_encrypted": None,
             "phone_hash": phone_hash.lower() if phone_hash else (self._phone_hash(phone) if phone else None),
             "lead_source": self._optional_string(data, "lead_source"),
+            "branch_id": await self._optional_branch_id(tenant_id, data),
+            "first_visit_at": self._datetime(data, "first_visit_at") if data.get("first_visit_at") else None,
+            "last_visit_at": self._datetime(data, "last_visit_at") if data.get("last_visit_at") else None,
+            "visit_count": self._integer(data, "visit_count") if data.get("visit_count") is not None else 0,
+            "is_active": bool(data.get("is_active", True)),
         }
         return await self._upsert(
             Patient,
             values,
             ["tenant_id", "external_id"],
-            ["full_name", "phone_hash", "lead_source"],
+            [
+                "full_name", "phone_hash", "lead_source", "branch_id",
+                "first_visit_at", "last_visit_at", "visit_count", "is_active",
+            ],
         )
 
     async def _write_doctor(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
