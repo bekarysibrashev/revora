@@ -1,7 +1,9 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from app.modules.integrations.canonical_writer import CanonicalWriter
+import pytest
+
+from app.modules.integrations.canonical_writer import CanonicalWriteError, CanonicalWriter
 
 
 def test_nearest_appointment_selects_branch_for_unmapped_revenue() -> None:
@@ -34,3 +36,13 @@ def test_equal_distance_between_branches_is_not_guessed() -> None:
     )
 
     assert result is None
+
+
+def test_integer_accepts_integral_1c_json_numbers() -> None:
+    assert CanonicalWriter._integer({"visit_count": 12}, "visit_count") == 12
+    assert CanonicalWriter._integer({"visit_count": "12.0"}, "visit_count") == 12
+
+
+def test_integer_rejects_fractional_values() -> None:
+    with pytest.raises(CanonicalWriteError, match="must be an integer"):
+        CanonicalWriter._integer({"visit_count": "12.5"}, "visit_count")

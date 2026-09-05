@@ -671,6 +671,17 @@ class CanonicalWriter:
             raise CanonicalWriteError(f"{field} must be a decimal") from exc
 
     @staticmethod
+    def _integer(data: dict[str, object], field: str) -> int:
+        value = data.get(field)
+        try:
+            decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
+        except Exception as exc:
+            raise CanonicalWriteError(f"{field} must be an integer") from exc
+        if decimal_value != decimal_value.to_integral_value():
+            raise CanonicalWriteError(f"{field} must be an integer")
+        return int(decimal_value)
+
+    @staticmethod
     def _date(data: dict[str, object], field: str) -> date:
         value = data.get(field)
         if isinstance(value, datetime):
