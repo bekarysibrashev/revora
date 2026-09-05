@@ -1,7 +1,6 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import {
@@ -15,6 +14,7 @@ import {
   Metric,
   PageHeader,
   queryString,
+  useFilters,
 } from "@/shared/ui";
 
 const datasetNames: Record<string, string> = {
@@ -31,8 +31,8 @@ const datasetNames: Record<string, string> = {
 };
 
 export default function AnalyticsPage() {
-  const search = useSearchParams();
-  const query = queryString(search);
+  const { filters } = useFilters();
+  const query = queryString(filters);
   const [tab, setTab] = useState<"quality" | "metrics">("quality");
   const quality = useQuery({
     queryKey: ["analytics-quality", query],

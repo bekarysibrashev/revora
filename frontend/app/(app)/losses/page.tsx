@@ -1,7 +1,6 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import {
@@ -17,11 +16,12 @@ import {
   PageHeader,
   money,
   queryString,
+  useFilters,
 } from "@/shared/ui";
 
 export default function LossesPage() {
-  const search = useSearchParams();
-  const query = queryString(search);
+  const { filters } = useFilters();
+  const query = queryString(filters);
   const client = useQueryClient();
   const data = useQuery({
     queryKey: ["loss-map", query],

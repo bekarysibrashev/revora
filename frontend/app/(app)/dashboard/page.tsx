@@ -1,10 +1,9 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/shared/api-client";
-import { AsOf, CoverageBanner, CoverageInfo, DataState, DateFilters, PageHeader, money, percent, queryString } from "@/shared/ui";
+import { AsOf, CoverageBanner, CoverageInfo, DataState, DateFilters, PageHeader, money, percent, queryString, useFilters } from "@/shared/ui";
 
 type Dashboard = { finance:{revenue_accrual:string;revenue_payment:string;total_expenses:string;net_profit:string;net_cash_flow:string;closing_balance:string|null;cashflow_is_complete:boolean;meta:{data_as_of:string|null;official_metric_codes:string[];is_reconciled:boolean;coverage:Record<string,CoverageInfo>}};sales:{leads_total:number;leads_won:number;lead_conversion_rate:string;appointments_total:number;appointments_completed:number;appointments_cancelled:number;appointments_no_show:number;appointments_transferred:number;patients_total:number;patients_primary:number;patients_repeat:number;patients_inactive:number;treatment_plan_created:number;treatment_plan_accepted:number;treatment_plan_paid:string|null;inquiry_to_treatment_rate:string|null;consultation_to_plan_rate:string|null;plan_to_payment_rate:string|null;appointment_completion_rate:string;paid_revenue:string;meta:{data_as_of:string|null;coverage:Record<string,CoverageInfo>}};top_doctors:{doctor_id:string;full_name:string;specialty:string|null;appointments_completed:number;completion_rate:string;revenue_accrual:string;revenue_payment:string}[];marketing:{total_spend:string;total_attributed_revenue:string;roas:string|null;romi:string|null};new_contacts:{total:number;from_kcell:number;from_whatsapp:number;existing_patients_contacted:number;data_as_of:string|null};cac:string|null;cost_of_first_patient:string|null };
 type Pnl = { revenue_accrual:string;revenue_payment:string;total_expenses:string;payroll_accrual:string;gross_profit:string;ebitda:string;net_profit:string;expense_classification_rate:string;profit_is_complete:boolean;profit_label:string;meta:{data_as_of:string|null;official_metric_codes:string[];is_reconciled:boolean} };
@@ -30,12 +29,12 @@ function Kpi({label,value,source,note,missing=false,missingNote,tone}:{label:str
 function SectionTitle({title,subtitle}:{title:string;subtitle:string}) { return <div className="section-title"><div><h2>{title}</h2><p>{subtitle}</p></div></div>; }
 
 export default function DashboardPage() {
-  const search=useSearchParams(); const query=queryString(search); const previous=previousQuery(query);
+  const {filters}=useFilters(); const query=queryString(filters); const previous=previousQuery(query);
   const dashboard=useQuery({queryKey:["dashboard",query],queryFn:()=>api<Dashboard>(`/dashboard/ceo?${query}`)});
   const previousDashboard=useQuery({queryKey:["dashboard-previous",previous],queryFn:()=>api<Dashboard>(`/dashboard/ceo?${previous}`)});
   const pnl=useQuery({queryKey:["dashboard-pnl",query],queryFn:()=>api<Pnl>(`/finance/pnl?${query}`)});
   const meta=useQuery({queryKey:["dashboard-meta",query],queryFn:()=>api<Meta>(`/marketing/meta/overview?${query}`),retry:false});
-  const insights=useQuery({queryKey:["insights",search.get("branch_id")],queryFn:()=>api<Insights>(`/dashboard/insights${search.get("branch_id")?`?branch_id=${search.get("branch_id")}`:""}`)});
+  const insights=useQuery({queryKey:["insights",filters.branch_id],queryFn:()=>api<Insights>(`/dashboard/insights${filters.branch_id?`?branch_id=${filters.branch_id}`:""}`)});
 
   return <>
     <PageHeader title="Обзор клиники" subtitle="Dashboard CEO · все ключевые показатели из ТЗ" action={<DateFilters/>}/>

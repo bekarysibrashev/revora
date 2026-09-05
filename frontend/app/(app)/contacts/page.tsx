@@ -1,10 +1,9 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { api, apiBinary } from "@/shared/api-client";
-import { DataState, DateFilters, PageHeader, queryString } from "@/shared/ui";
+import { DataState, DateFilters, PageHeader, queryString, useFilters } from "@/shared/ui";
 
 type Source = "" | "kcell" | "whatsapp";
 type ContactItem = {
@@ -34,12 +33,12 @@ type ContactResponse = {
 const sourceLabel = { kcell: "Kcell", whatsapp: "WhatsApp" };
 
 export default function ContactsPage() {
-  const search = useSearchParams();
+  const { filters } = useFilters();
   const [source, setSource] = useState<Source>("");
   const [page, setPage] = useState(1);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
-  const baseQuery = queryString(search);
+  const baseQuery = queryString(filters);
   const params = new URLSearchParams(baseQuery);
   params.set("page", String(page));
   params.set("page_size", "50");

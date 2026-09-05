@@ -1,9 +1,8 @@
 "use client";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
 import { api } from "@/shared/api-client";
-import { PageHeader } from "@/shared/ui";
+import { PageHeader, useFilters } from "@/shared/ui";
 
 type Source={tool:string;label:string;date_from:string;date_to:string;branch_id:string|null;data_as_of:string|null};
 type Message={id:string;role:"user"|"assistant";content:string;sources:Source[];tool_calls:string[];model:string|null;created_at:string};
@@ -12,15 +11,15 @@ type Turn={user_message:Message;assistant_message:Message};
 const suggestions=["Почему изменилась прибыль за последние 30 дней?","Как сейчас работает воронка продаж?","Какие врачи показывают лучший результат?","Окупается ли маркетинг?"];
 
 export default function AnalystPage(){
-  const client=useQueryClient(),search=useSearchParams(),bottom=useRef<HTMLDivElement>(null);
+  const client=useQueryClient(),{filters}=useFilters(),bottom=useRef<HTMLDivElement>(null);
   const [active,setActive]=useState<string|null>(null),[text,setText]=useState(""),[error,setError]=useState("");
   const sessions=useQuery({queryKey:["analyst-sessions"],queryFn:()=>api<{items:Session[]}>("/ai/analyst/sessions")});
   const messages=useQuery({queryKey:["analyst-messages",active],queryFn:()=>api<{items:Message[]}>(`/ai/analyst/sessions/${active}/messages`),enabled:!!active});
   useEffect(()=>{if(!active&&sessions.data?.items.length)setActive(sessions.data.items[0].id)},[active,sessions.data]);
   useEffect(()=>{bottom.current?.scrollIntoView({behavior:"smooth"})},[messages.data]);
-  const create=useMutation({mutationFn:()=>api<Session>("/ai/analyst/sessions",{method:"POST",body:JSON.stringify({title:"Новый анализ",branch_id:search.get("branch_id")||null})}),onSuccess:item=>{client.invalidateQueries({queryKey:["analyst-sessions"]});setActive(item.id);setText("")},onError:e=>setError(e instanceof Error?e.message:"Не удалось создать диалог")});
+  const create=useMutation({mutationFn:()=>api<Session>("/ai/analyst/sessions",{method:"POST",body:JSON.stringify({title:"Новый анализ",branch_id:filters.branch_id||null})}),onSuccess:item=>{client.invalidateQueries({queryKey:["analyst-sessions"]});setActive(item.id);setText("")},onError:e=>setError(e instanceof Error?e.message:"Не удалось создать диалог")});
   const send=useMutation({mutationFn:({sessionId,content}:{sessionId:string;content:string})=>api<Turn>(`/ai/analyst/sessions/${sessionId}/messages`,{method:"POST",body:JSON.stringify({content})}),onSuccess:()=>{setText("");setError("");client.invalidateQueries({queryKey:["analyst-messages",active]});client.invalidateQueries({queryKey:["analyst-sessions"]})},onError:e=>setError(e instanceof Error?e.message:"AI-аналитик временно недоступен")});
-  async function submit(e:FormEvent){e.preventDefault();const content=text.trim();if(!content||send.isPending)return;let sessionId=active;if(!sessionId){try{const item=await api<Session>("/ai/analyst/sessions",{method:"POST",body:JSON.stringify({title:content.slice(0,80),branch_id:search.get("branch_id")||null})});sessionId=item.id;setActive(item.id)}catch(e){setError(e instanceof Error?e.message:"Не удалось создать диалог");return}}send.mutate({sessionId,content})}
+  async function submit(e:FormEvent){e.preventDefault();const content=text.trim();if(!content||send.isPending)return;let sessionId=active;if(!sessionId){try{const item=await api<Session>("/ai/analyst/sessions",{method:"POST",body:JSON.stringify({title:content.slice(0,80),branch_id:filters.branch_id||null})});sessionId=item.id;setActive(item.id)}catch(e){setError(e instanceof Error?e.message:"Не удалось создать диалог");return}}send.mutate({sessionId,content})}
   function chooseSuggestion(value:string){setText(value)}
   return <><PageHeader title="ИИ-аналитик" subtitle="Задавайте вопросы по 1С, продажам, финансам, врачам и маркетингу — ответы строятся только по проверяемым данным Revora" action={<button className="primary" onClick={()=>create.mutate()} disabled={create.isPending}>{create.isPending?<><span className="spinner" aria-hidden="true"/>Создаём…</>:"Новый анализ"}</button>}/>
     <div className="analyst-layout"><aside className="analyst-sessions"><div className="analyst-side-title"><strong>История</strong><span>{sessions.data?.items.length||0}</span></div>{sessions.isLoading&&<div className="skeleton-block"><div className="skeleton skeleton-line" /><div className="skeleton skeleton-line medium" /></div>}{sessions.data?.items.map(item=><button key={item.id} className={active===item.id?"active":""} onClick={()=>setActive(item.id)}><strong>{item.title}</strong><small>{new Date(item.last_message_at||item.created_at).toLocaleDateString("ru-RU")}</small></button>)}{!sessions.isLoading&&!sessions.data?.items.length&&<p>Диалогов пока нет</p>}</aside>

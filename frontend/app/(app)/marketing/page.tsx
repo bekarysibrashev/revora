@@ -13,6 +13,7 @@ import {
   PageHeader,
   money,
   queryString,
+  useFilters,
 } from "@/shared/ui";
 
 type Overview = {
@@ -179,7 +180,8 @@ export default function MarketingPage() {
   const search = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  const query = queryString(search);
+  const { filters } = useFilters();
+  const query = queryString(filters);
   const selectedAccount = search.get("meta_account_id") || "";
   const metaQuery = new URLSearchParams(query);
   if (selectedAccount) metaQuery.set("account_id", selectedAccount);

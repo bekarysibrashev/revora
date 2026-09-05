@@ -2,10 +2,11 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Role, useAuth } from "@/modules/auth";
 import { api } from "@/shared/api-client";
+import { FiltersProvider, useFilters } from "@/shared/ui";
 
 type Branch = { id: string; name: string; code: string; is_active: boolean };
 type DataQuality = {
@@ -78,11 +79,11 @@ function NavLink({
   );
 }
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
+function AppShell({ children }: { children: React.ReactNode }) {
   const { user, ready, logout } = useAuth();
   const router = useRouter();
   const path = usePathname();
-  const search = useSearchParams();
+  const { filters, setBranch } = useFilters();
   const [open, setOpen] = useState(false);
   const branches = useQuery({
     queryKey: ["branches"],
@@ -140,9 +141,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   function chooseBranch(value: string) {
-    const params = new URLSearchParams(search.toString());
-    value ? params.set("branch_id", value) : params.delete("branch_id");
-    router.push(`${path}?${params.toString()}`);
+    setBranch(value);
   }
 
   return (
@@ -227,7 +226,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {branches.data && branches.data.items.filter((branch) => branch.is_active).length > 1 && (
             <select
               aria-label="Филиал"
-              value={search.get("branch_id") || ""}
+              value={filters.branch_id}
               onChange={(event) => chooseBranch(event.target.value)}
             >
               <option value="">Все филиалы</option>
@@ -268,6 +267,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <main className="content">{children}</main>
       </section>
     </div>
+  );
+}
+
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <FiltersProvider>
+      <AppShell>{children}</AppShell>
+    </FiltersProvider>
   );
 }
 

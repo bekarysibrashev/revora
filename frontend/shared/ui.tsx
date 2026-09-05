@@ -1,12 +1,188 @@
 "use client";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ReactNode } from "react";
+import { ReactNode, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 export function PageHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) { return <div className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>; }
-function defaultStart(days = 90) { const value = new Date(); value.setDate(value.getDate() - (days - 1)); return value.toISOString().slice(0,10); }
-export function DateFilters() { const router = useRouter(); const path = usePathname(); const search = useSearchParams(); const end = new Date().toISOString().slice(0, 10); const start = defaultStart(); function update(values:Record<string,string>) { const p = new URLSearchParams(search.toString()); Object.entries(values).forEach(([key,value])=>p.set(key,value)); router.push(`${path}?${p}`); } function preset(days:number) { update({date_from:defaultStart(days),date_to:end}); } return <div className="date-filter-wrap"><div className="date-presets"><button onClick={()=>preset(7)}>7 дней</button><button onClick={()=>preset(30)}>30 дней</button><button onClick={()=>preset(90)}>90 дней</button></div><div className="filters"><label>С<input type="date" value={search.get("date_from") || start} onChange={e => update({date_from:e.target.value})} /></label><label>По<input type="date" value={search.get("date_to") || end} onChange={e => update({date_to:e.target.value})} /></label></div></div>; }
-export function queryString(search: URLSearchParams | ReadonlyURLSearchParams) { const today = new Date(); const p = new URLSearchParams(); p.set("date_from", search.get("date_from") || defaultStart()); p.set("date_to", search.get("date_to") || today.toISOString().slice(0,10)); if (search.get("branch_id")) p.set("branch_id", search.get("branch_id")!); return p.toString(); }
-type ReadonlyURLSearchParams = { get(name: string): string | null };
+
+export type Filters = { date_from: string; date_to: string; branch_id: string };
+
+const FILTERS_STORAGE_KEY = "revora.filters.v1";
+
+function todayIso() { return new Date().toISOString().slice(0, 10); }
+function isoDate(value: Date) { return value.toISOString().slice(0, 10); }
+function daysAgoIso(days: number) { const value = new Date(); value.setDate(value.getDate() - (days - 1)); return isoDate(value); }
+function startOfMonth(value: Date) { return new Date(value.getFullYear(), value.getMonth(), 1); }
+function endOfMonth(value: Date) { return new Date(value.getFullYear(), value.getMonth() + 1, 0); }
+function defaultFilters(): Filters { return { date_from: daysAgoIso(90), date_to: todayIso(), branch_id: "" }; }
+
+function loadFilters(): Filters {
+  if (typeof window === "undefined") return defaultFilters();
+  try {
+    const raw = window.localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (!raw) return defaultFilters();
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.date_from === "string" && typeof parsed.date_to === "string") {
+      return { date_from: parsed.date_from, date_to: parsed.date_to, branch_id: typeof parsed.branch_id === "string" ? parsed.branch_id : "" };
+    }
+  } catch {}
+  return defaultFilters();
+}
+
+type FiltersContextValue = { filters: Filters; setRange: (dateFrom: string, dateTo: string) => void; setBranch: (branchId: string) => void };
+const FiltersContext = createContext<FiltersContextValue | null>(null);
+
+// Keeps the selected period and branch in one place (persisted to localStorage)
+// so switching tabs never silently resets the filters the person just set.
+export function FiltersProvider({ children }: { children: ReactNode }) {
+  const [filters, setFilters] = useState<Filters>(() => loadFilters());
+  useEffect(() => {
+    try { window.localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters)); } catch {}
+  }, [filters]);
+  const value = useMemo<FiltersContextValue>(() => ({
+    filters,
+    setRange: (dateFrom, dateTo) => setFilters((prev) => ({ ...prev, date_from: dateFrom, date_to: dateTo })),
+    setBranch: (branchId) => setFilters((prev) => ({ ...prev, branch_id: branchId })),
+  }), [filters]);
+  return <FiltersContext.Provider value={value}>{children}</FiltersContext.Provider>;
+}
+
+export function useFilters() {
+  const ctx = useContext(FiltersContext);
+  if (!ctx) throw new Error("useFilters() must be used within a FiltersProvider");
+  return ctx;
+}
+
+type Preset = { key: string; label: string; range: () => { date_from: string; date_to: string } };
+
+const PRESETS: Preset[] = [
+  { key: "today", label: "Сегодня", range: () => ({ date_from: todayIso(), date_to: todayIso() }) },
+  { key: "yesterday", label: "Вчера", range: () => { const d = new Date(); d.setDate(d.getDate() - 1); return { date_from: isoDate(d), date_to: isoDate(d) }; } },
+  { key: "7", label: "Последние 7 дней", range: () => ({ date_from: daysAgoIso(7), date_to: todayIso() }) },
+  { key: "30", label: "Последние 30 дней", range: () => ({ date_from: daysAgoIso(30), date_to: todayIso() }) },
+  { key: "90", label: "Последние 90 дней", range: () => ({ date_from: daysAgoIso(90), date_to: todayIso() }) },
+  { key: "this_month", label: "Этот месяц", range: () => ({ date_from: isoDate(startOfMonth(new Date())), date_to: todayIso() }) },
+  { key: "last_month", label: "Прошлый месяц", range: () => { const d = new Date(); d.setMonth(d.getMonth() - 1); return { date_from: isoDate(startOfMonth(d)), date_to: isoDate(endOfMonth(d)) }; } },
+  { key: "year", label: "Этот год", range: () => ({ date_from: `${new Date().getFullYear()}-01-01`, date_to: todayIso() }) },
+];
+
+const MONTHS_SHORT_RU = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+function formatShort(value: string) { const parts = value.split("-"); const month = Number(parts[1]) - 1; return `${Number(parts[2])} ${MONTHS_SHORT_RU[month] || parts[1]}`; }
+
+function rangeLabel(filters: Filters, activeKey?: string) {
+  const preset = activeKey && PRESETS.find((p) => p.key === activeKey);
+  if (preset) return preset.label;
+  if (filters.date_from === filters.date_to) return formatShort(filters.date_from);
+  const fromYear = filters.date_from.slice(0, 4);
+  const toYear = filters.date_to.slice(0, 4);
+  const from = formatShort(filters.date_from);
+  const to = fromYear === toYear ? formatShort(filters.date_to) : `${formatShort(filters.date_to)} ${toYear}`;
+  return `${from} – ${to}`;
+}
+
+function CalendarIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M7 2.5v3M17 2.5v3M4 9h16M5.5 4.5h13A1.5 1.5 0 0 1 20 6v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19V6a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function ChevronIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// A single trigger button that opens a popover with quick presets plus a custom
+// range, replacing the old always-visible preset row + two bare date inputs.
+// The selected range lives in FiltersContext, so it now persists as the person
+// moves between tabs instead of resetting on every navigation.
+export function DateFilters() {
+  const { filters, setRange } = useFilters();
+  const [open, setOpen] = useState(false);
+  const [draftFrom, setDraftFrom] = useState(filters.date_from);
+  const [draftTo, setDraftTo] = useState(filters.date_to);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setDraftFrom(filters.date_from);
+    setDraftTo(filters.date_to);
+  }, [filters.date_from, filters.date_to]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) setOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const activeKey = useMemo(() => {
+    const match = PRESETS.find((p) => { const r = p.range(); return r.date_from === filters.date_from && r.date_to === filters.date_to; });
+    return match?.key;
+  }, [filters.date_from, filters.date_to]);
+
+  function applyPreset(preset: Preset) {
+    const r = preset.range();
+    setRange(r.date_from, r.date_to);
+    setOpen(false);
+  }
+
+  function applyCustom() {
+    if (!draftFrom || !draftTo) return;
+    const from = draftFrom <= draftTo ? draftFrom : draftTo;
+    const to = draftFrom <= draftTo ? draftTo : draftFrom;
+    setRange(from, to);
+    setOpen(false);
+  }
+
+  return (
+    <div className="date-range" ref={wrapRef}>
+      <button type="button" className={`date-range-trigger${open ? " open" : ""}`} onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="dialog">
+        <CalendarIcon />
+        <span>{rangeLabel(filters, activeKey)}</span>
+        <span className="chevron"><ChevronIcon /></span>
+      </button>
+      {open && (
+        <div className="date-range-pop" role="dialog" aria-label="Выбор периода">
+          <div className="date-range-presets">
+            {PRESETS.map((preset) => (
+              <button type="button" key={preset.key} className={activeKey === preset.key ? "active" : ""} onClick={() => applyPreset(preset)}>
+                {preset.label}
+                {activeKey === preset.key && <i aria-hidden="true">✓</i>}
+              </button>
+            ))}
+          </div>
+          <div className="date-range-custom">
+            <p>Произвольный период</p>
+            <div className="date-range-custom-inputs">
+              <label>С<input type="date" value={draftFrom} max={draftTo || undefined} onChange={(e) => setDraftFrom(e.target.value)} /></label>
+              <label>По<input type="date" value={draftTo} min={draftFrom || undefined} onChange={(e) => setDraftTo(e.target.value)} /></label>
+            </div>
+            <button type="button" className="date-range-apply" onClick={applyCustom}>Применить</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function queryString(filters: Filters) {
+  const p = new URLSearchParams();
+  p.set("date_from", filters.date_from);
+  p.set("date_to", filters.date_to);
+  if (filters.branch_id) p.set("branch_id", filters.branch_id);
+  return p.toString();
+}
+
 export function Metric({ label, value, note, tone }: { label: string; value: string; note?: string; tone?: "good" | "bad" }) { return <article className="metric"><p>{label}</p><strong className={tone || ""}>{value}</strong>{note && <small>{note}</small>}</article>; }
 export function DataState({ loading, error, children }: { loading: boolean; error: unknown; children: ReactNode }) {
   if (loading) return (
