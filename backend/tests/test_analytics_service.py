@@ -73,8 +73,8 @@ async def test_quality_exposes_only_active_issues_and_score() -> None:
         make_user(), date(2026, 7, 1), date(2026, 7, 31), None
     )
 
-    assert response.summary.score == 92
-    assert response.summary.status == "good"
+    assert response.summary.score == 80
+    assert response.summary.status == "warning"
     assert response.summary.critical_issues == 1
     assert response.summary.ready_datasets == 7
     assert response.summary.total_datasets == 8

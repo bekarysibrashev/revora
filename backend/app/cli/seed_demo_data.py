@@ -295,6 +295,7 @@ async def seed_operational_data(
                 assigned_user_id=assigned_user_id,
                 external_id=f"seed-lead-{branch.code}-{p_index}",
                 source=source, status="won" if is_won else RNG.choice(["lost", "new", "qualified"]),
+                last_contact_at=datetime.combine(created_day, datetime.min.time(), tzinfo=UTC),
             )
             lead.created_at = datetime.combine(created_day, datetime.min.time(), tzinfo=UTC)
             session.add(lead)

@@ -5,7 +5,7 @@ from decimal import Decimal
 from hashlib import sha256
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -72,7 +72,7 @@ class CanonicalWriter:
             "visit_count": self._integer(data, "visit_count") if data.get("visit_count") is not None else 0,
             "is_active": bool(data.get("is_active", True)),
         }
-        return await self._upsert(
+        patient_id = await self._upsert(
             Patient,
             values,
             ["tenant_id", "external_id"],
@@ -81,6 +81,20 @@ class CanonicalWriter:
                 "first_visit_at", "last_visit_at", "visit_count", "is_active",
             ],
         )
+        if values["phone_hash"] and values["is_active"]:
+            await self.session.execute(
+                update(Lead)
+                .where(
+                    Lead.tenant_id == tenant_id,
+                    Lead.external_id == values["phone_hash"],
+                )
+                .values(
+                    patient_id=patient_id,
+                    branch_id=values["branch_id"],
+                    status="won",
+                )
+            )
+        return patient_id
 
     async def _write_doctor(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
         values = {
@@ -112,6 +126,7 @@ class CanonicalWriter:
         )
 
     async def _write_lead(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
+        created_at = self._datetime(data, "created_at") if data.get("created_at") else datetime.now(UTC)
         values = {
             "tenant_id": tenant_id,
             "branch_id": await self._branch_id(tenant_id, data),
@@ -124,13 +139,21 @@ class CanonicalWriter:
             "external_id": self._string(data, "external_id"),
             "source": self._string(data, "source"),
             "status": self._string(data, "status"),
-            "created_at": self._datetime(data, "created_at") if data.get("created_at") else datetime.now(UTC),
+            "created_at": created_at,
+            "last_contact_at": (
+                self._datetime(data, "last_contact_at")
+                if data.get("last_contact_at")
+                else created_at
+            ),
         }
         return await self._upsert(
             Lead,
             values,
             ["tenant_id", "external_id"],
-            ["branch_id", "patient_id", "assigned_user_id", "source", "status"],
+            [
+                "branch_id", "patient_id", "assigned_user_id", "source", "status",
+                "last_contact_at",
+            ],
         )
 
     async def _write_appointment(self, tenant_id: UUID, data: dict[str, object]) -> UUID:

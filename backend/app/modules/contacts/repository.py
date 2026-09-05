@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.contacts.models import ContactIdentity
 from app.modules.kcell.models import KcellWebhookReceipt
-from app.modules.sales.models import Call, Patient
+from app.modules.sales.models import Call, Lead, Patient
 from app.modules.whatsapp.models import WhatsAppConversation, WhatsAppMessage
 from app.shared.timezone import clinic_day_end_exclusive, clinic_day_start
 
@@ -79,6 +79,47 @@ class ContactRepository:
             index_elements=["tenant_id", "phone_hash"]
         ).returning(ContactIdentity)
         return (await self.session.execute(statement)).scalar_one_or_none()
+
+    async def sync_lead(
+        self,
+        *,
+        tenant_id: UUID,
+        phone_hash: str,
+        classification: str,
+        source: str,
+        occurred_at: datetime,
+    ) -> None:
+        """Materialize a prospect from a real inbound contact.
+
+        Known 1C patients are deliberately excluded. The normalized phone
+        hash is the stable cross-channel key, so a Kcell call and WhatsApp
+        message for the same person update one lead instead of duplicating it.
+        """
+        if classification in {"existing_1c_patient", "unknown_patient"}:
+            return
+        lead = await self.session.scalar(
+            select(Lead).where(
+                Lead.tenant_id == tenant_id,
+                Lead.external_id == phone_hash,
+            )
+        )
+        if lead is None:
+            self.session.add(Lead(
+                tenant_id=tenant_id,
+                branch_id=None,
+                patient_id=None,
+                assigned_user_id=None,
+                external_id=phone_hash,
+                source=source,
+                status="new",
+                last_contact_at=occurred_at,
+            ))
+            return
+        if lead.status == "won":
+            return
+        lead.last_contact_at = max(lead.last_contact_at, occurred_at)
+        if lead.status == "lost":
+            lead.status = "new"
 
     async def historical_kcell_inbounds(
         self, tenant_id: UUID, date_from: date, date_to: date

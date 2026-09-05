@@ -136,15 +136,15 @@ class AnalyticsRepository:
             OfficialReportImport.period_from <= date_to,
             OfficialReportImport.period_to >= date_from,
         )
-        # operating_expenses/insurance_payments are not sent by the 1C
-        # extension (source not confirmed for this configuration -- see
-        # tools/revora_1c_extension/README.md); purchases_accrual is the one
-        # expense category 1C actually sends, so it is what this dataset
-        # reflects. It stays honestly empty until a real expense breakdown
-        # is confirmed and wired.
-        expense_query = _official_metric_query("purchases").where(
-            OfficialReportImport.period_from <= date_to,
-            OfficialReportImport.period_to >= date_from,
+        # Operational Stream B writes posted 1C expense documents directly to
+        # ExpenseFact.  Readiness must follow that real destination instead of
+        # the old purchases control-total snapshot.
+        expense_query = select(
+            func.count(ExpenseFact.id), func.max(ExpenseFact.updated_at)
+        ).where(
+            ExpenseFact.tenant_id == tenant_id,
+            ExpenseFact.occurred_on >= date_from,
+            ExpenseFact.occurred_on <= date_to,
         )
         cashflow_query = _official_metric_query("cash_receipts").where(
             OfficialReportImport.period_from <= date_to,

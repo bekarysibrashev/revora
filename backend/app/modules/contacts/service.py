@@ -101,6 +101,13 @@ class ContactRegistry:
                 )
                 if classification == "new_contact":
                     await self._sync_new_contact_to_sheet(inserted, phone=phone, source=source)
+                await self._sync_lead(
+                    tenant_id=tenant_id,
+                    phone_hash=digest,
+                    classification=classification,
+                    source=source,
+                    occurred_at=occurred_at,
+                )
                 return InboundRegistration(identity=inserted, classification=classification)
             # A Kcell call and WhatsApp message can arrive simultaneously. The
             # unique key serializes them without rolling back either webhook --
@@ -121,7 +128,33 @@ class ContactRegistry:
         classification = classify_inquiry(
             phone_valid=True, is_repeat=True, was_known_patient=item.was_known_patient
         )
+        await self._sync_lead(
+            tenant_id=tenant_id,
+            phone_hash=digest,
+            classification=classification,
+            source=source,
+            occurred_at=occurred_at,
+        )
         return InboundRegistration(identity=item, classification=classification)
+
+    async def _sync_lead(
+        self,
+        *,
+        tenant_id: UUID,
+        phone_hash: str,
+        classification: InquiryClassification,
+        source: str,
+        occurred_at: datetime,
+    ) -> None:
+        sync = getattr(self.repository, "sync_lead", None)
+        if sync is not None:
+            await sync(
+                tenant_id=tenant_id,
+                phone_hash=phone_hash,
+                classification=classification,
+                source=source,
+                occurred_at=occurred_at,
+            )
 
     def _encrypt_phone(self, phone: str) -> str | None:
         if not self.data_secret:

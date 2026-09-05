@@ -3,9 +3,10 @@
 # "Давно не посещавшие" threshold: a patient still marked active in 1C who
 # has not visited in this many days counts as inactive/at-risk.
 INACTIVE_PATIENT_DAYS = 60
+LOST_LEAD_DAYS = 14
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -58,11 +59,22 @@ class SalesRepository:
         branch_ids: list[UUID] | None,
         assigned_user_id: UUID | None,
     ) -> SalesTotals:
+        stale_lead_cutoff = datetime.now(UTC) - timedelta(days=LOST_LEAD_DAYS)
         lead_statement = select(
             func.count(Lead.id),
-            func.sum(case((Lead.status == "new", 1), else_=0)),
+            func.sum(case(
+                ((Lead.status == "new") & (Lead.last_contact_at >= stale_lead_cutoff), 1),
+                else_=0,
+            )),
             func.sum(case((Lead.status.in_(["won", "converted"]), 1), else_=0)),
-            func.sum(case((Lead.status == "lost", 1), else_=0)),
+            func.sum(case(
+                (
+                    (Lead.status == "lost")
+                    | ((Lead.status == "new") & (Lead.last_contact_at < stale_lead_cutoff)),
+                    1,
+                ),
+                else_=0,
+            )),
             func.max(Lead.updated_at),
         ).where(
             Lead.tenant_id == tenant_id,

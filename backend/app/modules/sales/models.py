@@ -34,15 +34,24 @@ class Patient(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
 
 
 class Lead(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    """A prospect identified from an inbound Kcell call or WhatsApp message
+    that is not yet a known 1C patient (see contacts.repository.sync_lead).
+    branch_id is nullable because Kcell/WhatsApp inbounds carry no branch --
+    it is backfilled from the matching Patient row once the lead is won.
+    last_contact_at drives the 14-day derived "lost" cutoff in
+    SalesRepository; it is a real column, not inferred from updated_at, so a
+    lead touch is never ambiguous with an unrelated column update.
+    """
     __tablename__ = "leads"
     __table_args__ = (UniqueConstraint("tenant_id", "external_id"),)
     tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
-    branch_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("branches.id"), index=True)
+    branch_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("branches.id"), index=True)
     patient_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("patients.id"))
     assigned_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), index=True)
     external_id: Mapped[str] = mapped_column(String(150))
     source: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(50), index=True)
+    last_contact_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):

@@ -152,14 +152,19 @@ class AnalyticsService:
             for item in issues
             if item.count > 0
         ]
-        required = {"patients", "doctors", "appointments", "revenue", "expenses"}
-        empty_required = sum(
-            1 for item in datasets if item.key in required and item.record_count == 0
+        # A dataset that is part of the active clinic pipeline must affect the
+        # headline score.  Previously leads and cashflow were displayed as
+        # missing while the page still claimed 100% readiness.
+        applicable_datasets = [
+            item for item in datasets if item.status != "not_connected"
+        ]
+        empty_applicable = sum(
+            1 for item in applicable_datasets if item.record_count == 0
         )
         critical = sum(1 for item in issue_models if item.severity == "critical")
         warnings = sum(1 for item in issue_models if item.severity == "warning")
-        score = max(0, 100 - empty_required * 12 - critical * 8 - warnings * 4)
-        if empty_required == len(required):
+        score = max(0, 100 - empty_applicable * 12 - critical * 8 - warnings * 4)
+        if applicable_datasets and empty_applicable == len(applicable_datasets):
             status = "critical"
         elif score >= 85:
             status = "good"
@@ -167,9 +172,6 @@ class AnalyticsService:
             status = "warning"
         else:
             status = "critical"
-        applicable_datasets = [
-            item for item in datasets if item.status != "not_connected"
-        ]
         return DataQualityResponse(
             summary=DataQualitySummary(
                 score=score,

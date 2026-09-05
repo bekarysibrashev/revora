@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -46,3 +47,26 @@ def test_integer_accepts_integral_1c_json_numbers() -> None:
 def test_integer_rejects_fractional_values() -> None:
     with pytest.raises(CanonicalWriteError, match="must be an integer"):
         CanonicalWriter._integer({"visit_count": "12.5"}, "visit_count")
+
+
+@pytest.mark.asyncio
+async def test_patient_phone_hash_converts_matching_lead_to_won() -> None:
+    session = AsyncMock()
+    writer = CanonicalWriter(session)
+    patient_id = uuid4()
+    branch_id = uuid4()
+    writer._upsert = AsyncMock(return_value=patient_id)
+    writer._optional_branch_id = AsyncMock(return_value=branch_id)
+
+    result = await writer._write_patient(
+        uuid4(),
+        {
+            "external_id": "patient-guid",
+            "phone_hash": "a" * 64,
+            "is_active": True,
+        },
+    )
+
+    assert result == patient_id
+    statement = session.execute.await_args.args[0]
+    assert "UPDATE leads" in str(statement)

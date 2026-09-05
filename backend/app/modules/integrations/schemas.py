@@ -141,6 +141,7 @@ OneCOperationalTarget = Literal[
     "doctor",
     "service_direction",
     "appointment",
+    "expense_fact",
 ]
 
 

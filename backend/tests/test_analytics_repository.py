@@ -69,10 +69,7 @@ async def test_dataset_snapshots_reads_official_report_tables_not_legacy_facts()
 
 @pytest.mark.asyncio
 async def test_dataset_snapshots_queries_use_official_report_tables_not_legacy_facts() -> None:
-    """The compiled SQL for revenue/cashflow/expenses/appointments/doctors
-    must reference official_report_imports/official_report_metrics, and must
-    NOT reference the dead legacy fact tables -- this is what actually makes
-    the readiness widget honest again."""
+    """Readiness follows each dataset's current ingestion destination."""
     session = AsyncMock()
     compiled: list[str] = []
 
@@ -91,9 +88,11 @@ async def test_dataset_snapshots_queries_use_official_report_tables_not_legacy_f
     doctors_sql, appointments_sql, revenue_sql, expenses_sql, cashflow_sql = (
         compiled[1], compiled[2], compiled[4], compiled[5], compiled[6]
     )
-    legacy_tables = ("revenue_facts", "expense_facts", "cash_flow_facts", "FROM appointments", "FROM doctors")
-    for sql in (doctors_sql, appointments_sql, revenue_sql, expenses_sql, cashflow_sql):
+    legacy_tables = ("revenue_facts", "cash_flow_facts", "FROM appointments", "FROM doctors")
+    for sql in (doctors_sql, appointments_sql, revenue_sql, cashflow_sql):
         assert "official_report_metrics" in sql
         assert "official_report_imports" in sql
         for legacy in legacy_tables:
             assert legacy not in sql
+    assert "FROM expense_facts" in expenses_sql
+    assert "official_report_metrics" not in expenses_sql

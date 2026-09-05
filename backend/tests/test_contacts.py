@@ -49,6 +49,15 @@ class FakeContactRepository:
         return item
 
 
+class LeadRecordingRepository(FakeContactRepository):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.lead_syncs: list[dict] = []
+
+    async def sync_lead(self, **kwargs) -> None:
+        self.lead_syncs.append(kwargs)
+
+
 @pytest.mark.asyncio
 async def test_registry_deduplicates_channels_and_keeps_first_source() -> None:
     repository = FakeContactRepository()
@@ -92,6 +101,32 @@ async def test_registry_classifies_a_number_absent_from_1c_as_new_contact() -> N
 
     assert result.identity is not None and result.identity.was_known_patient is False
     assert result.classification == "new_contact"
+
+
+@pytest.mark.asyncio
+async def test_registry_projects_new_and_repeat_contacts_into_one_lead_key() -> None:
+    repository = LeadRecordingRepository(patient=False)
+    registry = ContactRegistry(repository)
+    tenant_id = uuid4()
+    first = datetime(2026, 8, 27, 9, tzinfo=UTC)
+
+    await registry.register_inbound(
+        tenant_id=tenant_id, phone="87012345678", source="kcell", occurred_at=first
+    )
+    await registry.register_inbound(
+        tenant_id=tenant_id,
+        phone="+7 701 234 56 78",
+        source="whatsapp",
+        occurred_at=first + timedelta(hours=1),
+    )
+
+    assert [item["classification"] for item in repository.lead_syncs] == [
+        "new_contact",
+        "repeat_contact",
+    ]
+    assert {item["phone_hash"] for item in repository.lead_syncs} == {
+        phone_hash("87012345678")
+    }
 
 
 @pytest.mark.asyncio

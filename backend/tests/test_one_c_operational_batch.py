@@ -106,3 +106,22 @@ def test_operational_batch_rejects_arbitrary_target() -> None:
                 "data": {"external_id": "x"},
             }],
         })
+
+
+def test_operational_batch_allows_normalized_one_c_expense_fact() -> None:
+    payload = OneCOperationalBatchRequest.model_validate({
+        "batch_id": "expenses-1",
+        "records": [{
+            "target_entity": "expense_fact",
+            "data": {
+                "external_id": "expense-guid",
+                "occurred_on": "2026-06-01",
+                "amount": "125000.50",
+                "paid_amount": "125000.50",
+                "currency": "KZT",
+                "category_name": "Аренда",
+            },
+        }],
+    })
+
+    assert payload.records[0].target_entity == "expense_fact"
