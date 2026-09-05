@@ -6,7 +6,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { api } from "@/shared/api-client";
 import { AsOf, CoverageBanner, CoverageInfo, DataState, DateFilters, PageHeader, money, percent, queryString } from "@/shared/ui";
 
-type Dashboard = { finance:{revenue_accrual:string;revenue_payment:string;total_expenses:string;net_profit:string;net_cash_flow:string;closing_balance:string|null;cashflow_is_complete:boolean;meta:{data_as_of:string|null;official_metric_codes:string[];is_reconciled:boolean;coverage:Record<string,CoverageInfo>}};sales:{leads_total:number;leads_won:number;lead_conversion_rate:string;appointments_total:number;appointments_completed:number;appointments_cancelled:number;appointments_no_show:number;patients_total:number;patients_primary:number;patients_repeat:number;appointment_completion_rate:string;paid_revenue:string;meta:{data_as_of:string|null;coverage:Record<string,CoverageInfo>}};top_doctors:{doctor_id:string;full_name:string;specialty:string|null;appointments_completed:number;completion_rate:string;revenue_accrual:string;revenue_payment:string}[];marketing:{total_spend:string;total_attributed_revenue:string;roas:string|null};new_contacts:{total:number;from_kcell:number;from_whatsapp:number;existing_patients_contacted:number;data_as_of:string|null} };
+type Dashboard = { finance:{revenue_accrual:string;revenue_payment:string;total_expenses:string;net_profit:string;net_cash_flow:string;closing_balance:string|null;cashflow_is_complete:boolean;meta:{data_as_of:string|null;official_metric_codes:string[];is_reconciled:boolean;coverage:Record<string,CoverageInfo>}};sales:{leads_total:number;leads_won:number;lead_conversion_rate:string;appointments_total:number;appointments_completed:number;appointments_cancelled:number;appointments_no_show:number;appointments_transferred:number;patients_total:number;patients_primary:number;patients_repeat:number;patients_inactive:number;treatment_plan_created:number;treatment_plan_accepted:number;treatment_plan_paid:string|null;inquiry_to_treatment_rate:string|null;consultation_to_plan_rate:string|null;plan_to_payment_rate:string|null;appointment_completion_rate:string;paid_revenue:string;meta:{data_as_of:string|null;coverage:Record<string,CoverageInfo>}};top_doctors:{doctor_id:string;full_name:string;specialty:string|null;appointments_completed:number;completion_rate:string;revenue_accrual:string;revenue_payment:string}[];marketing:{total_spend:string;total_attributed_revenue:string;roas:string|null;romi:string|null};new_contacts:{total:number;from_kcell:number;from_whatsapp:number;existing_patients_contacted:number;data_as_of:string|null};cac:string|null;cost_of_first_patient:string|null };
 type Pnl = { revenue_accrual:string;revenue_payment:string;total_expenses:string;payroll_accrual:string;gross_profit:string;ebitda:string;net_profit:string;expense_classification_rate:string;profit_is_complete:boolean;profit_label:string;meta:{data_as_of:string|null;official_metric_codes:string[];is_reconciled:boolean} };
 type Meta = { total_spend:string;currency:string|null;leads:number;conversations_started:number;cost_per_lead:string|null;data_as_of:string|null };
 type Insights = {items:{id:string;severity:string;title:string;description:string}[]};
@@ -91,27 +91,28 @@ export default function DashboardPage() {
             <Kpi label="Первичные пациенты" value={String(dashboard.data.sales.patients_primary)} source="1С" missing={!hasSales}/>
             <Kpi label="Повторные пациенты" value={String(dashboard.data.sales.patients_repeat)} source="1С" missing={!hasSales}/>
             <Kpi label="Новые номера" value={String(dashboard.data.new_contacts.total)} source="Kcell + WhatsApp + сверка 1С" note={`${dashboard.data.new_contacts.from_kcell} звонки · ${dashboard.data.new_contacts.from_whatsapp} WhatsApp`}/>
-            <Kpi label="Обращение → лечение" source="1С" missing/>
-            <Kpi label="Консультация → план" source="1С" missing/>
-            <Kpi label="План → оплата" source="1С" missing/>
+            <Kpi label="Давно не посещавшие" value={String(dashboard.data.sales.patients_inactive)} source="1С" missing={!hasSales} missingNote="Нет данных о датах визитов из 1С" note="Активные пациенты без визита 60+ дней"/>
+            <Kpi label="Обращение → лечение" value={dashboard.data.sales.inquiry_to_treatment_rate===null?undefined:percent(Number(dashboard.data.sales.inquiry_to_treatment_rate))} source="Расчёт" missing={dashboard.data.sales.inquiry_to_treatment_rate===null} missingNote="Нет заявок за выбранный период"/>
+            <Kpi label="Консультация → план" value={dashboard.data.sales.consultation_to_plan_rate===null?undefined:percent(Number(dashboard.data.sales.consultation_to_plan_rate))} source="1С" missing={dashboard.data.sales.consultation_to_plan_rate===null} missingNote="Нет завершённых приёмов за период"/>
+            <Kpi label="План → оплата" value={dashboard.data.sales.plan_to_payment_rate===null?undefined:percent(Number(dashboard.data.sales.plan_to_payment_rate))} source="1С" missing={dashboard.data.sales.plan_to_payment_rate===null} missingNote="1С ещё не передаёт данные об оплате плана лечения"/>
           </section>
 
           <SectionTitle title="Маркетинг" subtitle="Заявки Meta и новые номера из Kcell и WhatsApp"/>
           <section className="ceo-kpi-grid">
             <Kpi label="Лиды и новые номера" value={String(metaLeads)} source="Meta + Kcell + WhatsApp" note={`${meta.data?.leads||0} Meta · ${dashboard.data.new_contacts.total} впервые обратились`}/>
             <Kpi label="CPL" value={cpl===null?"—":new Intl.NumberFormat("ru-RU",{style:"currency",currency:meta.data?.currency||"USD",maximumFractionDigits:2}).format(cpl)} source="Расчёт"/>
-            <Kpi label="CAC" source="1С + Meta" missing/>
+            <Kpi label="CAC" value={dashboard.data.cac===null?undefined:money(Number(dashboard.data.cac))} source="1С + Meta" missing={dashboard.data.cac===null} missingNote="Нет подтверждённых 1С первичных пациентов за период"/>
             <Kpi label="ROAS" value={dashboard.data.marketing.roas?`${Number(dashboard.data.marketing.roas).toFixed(2)}×`:undefined} source="Атрибуция" missing={!dashboard.data.marketing.roas}/>
-            <Kpi label="ROMI" source="1С + Meta" missing/>
-            <Kpi label="Стоимость первичного пациента" source="1С + Meta" missing/>
+            <Kpi label="ROMI" value={dashboard.data.marketing.romi===null?undefined:percent(Number(dashboard.data.marketing.romi))} source="1С + Meta" missing={dashboard.data.marketing.romi===null} missingNote="Нет расходов на рекламу за период"/>
+            <Kpi label="Стоимость первичного пациента" value={dashboard.data.cost_of_first_patient===null?undefined:money(Number(dashboard.data.cost_of_first_patient))} source="1С + Meta" missing={dashboard.data.cost_of_first_patient===null} missingNote="Нет подтверждённых 1С первичных пациентов за период" note="Совпадает с CAC — тот же показатель под другим названием"/>
           </section>
 
           <SectionTitle title="Операционная эффективность" subtitle="Загрузка клиники и потери расписания"/>
           <section className="ceo-kpi-grid">
-            <Kpi label="Загрузка врачей" source="1С" missing/>
-            <Kpi label="Загрузка кабинетов" source="1С" missing/>
+            <Kpi label="Загрузка врачей" source="1С" missing missingNote="1С не передаёт данные о расписании и вместимости врача"/>
+            <Kpi label="Загрузка кабинетов" source="1С" missing missingNote="1С не передаёт данные о загрузке кабинетов/помещений"/>
             <Kpi label="Отмены" value={String(dashboard.data.sales.appointments_cancelled)} source="1С" missing={!hasSales}/>
-            <Kpi label="Переносы" source="1С" missing/>
+            <Kpi label="Переносы" value={String(dashboard.data.sales.appointments_transferred)} source="1С" missing={!hasSales}/>
             <Kpi label="Неявки" value={String(dashboard.data.sales.appointments_no_show)} source="1С" missing={!hasSales}/>
           </section>
 

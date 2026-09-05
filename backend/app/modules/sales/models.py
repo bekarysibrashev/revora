@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,18 @@ class Patient(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     phone_e164_encrypted: Mapped[str | None] = mapped_column(Text)
     phone_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     lead_source: Mapped[str | None] = mapped_column(String(100))
+    # Populated by the 1C extension's patient_phone_identity snapshot metric
+    # (see reports/service.py::_upsert_patient_identities). branch_id is the
+    # branch the 1C patient record belongs to; first/last_visit_at and
+    # visit_count come straight from 1C, never recomputed locally; is_active
+    # mirrors 1C's own deleted/inactive flag for the patient record.
+    branch_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("branches.id", ondelete="SET NULL"), index=True
+    )
+    first_visit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_visit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    visit_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
 
 class Lead(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):

@@ -6,10 +6,12 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.modules.reports.models import OfficialReportImport, OfficialReportMetric
+from app.modules.sales.models import Patient
 from app.modules.tenancy.models import Branch
 
 
@@ -49,6 +51,11 @@ class CoverageInfo:
 REPORT_TYPE_BY_METRIC = {
     "revenue_payment": "cash_receipts",
     "cash_inflow": "cash_receipts",
+    # Task 2: cash-receipts breakdown the "Фактически поступившие деньги"
+    # report already carries alongside plain inflow -- returns to patients
+    # and insurance-company settlements.
+    "refunds": "cash_receipts",
+    "insurance_payments": "cash_receipts",
     "services_count": "service_revenue",
     "revenue_accrual": "service_revenue",
     "revenue_before_discount": "service_revenue",
@@ -73,6 +80,18 @@ REPORT_TYPE_BY_METRIC = {
     "appointments_no_show": "appointments",
     "appointment_report_revenue": "appointments",
     "appointment_report_paid": "appointments",
+    # Task 2: appointment-level operational metrics from the same
+    # "Статистика предварительной записи" report already used for
+    # appointments_total/completed/cancelled/no_show.
+    "appointments_transferred": "appointments",
+    "doctor_load": "appointments",
+    "room_load": "appointments",
+    # Task 2: treatment-plan funnel (consultation -> plan -> payment).
+    # Grouped under "patients" (patient journey), not a new report_type --
+    # best-effort source, see tools/revora_1c_extension/РвОбменСервер.bsl.
+    "treatment_plan_created": "patients",
+    "treatment_plan_accepted": "patients",
+    "treatment_plan_paid": "patients",
     # payroll_accrual / payroll_paid / payroll_due are deliberately absent:
     # the 1C extension only ever sends payroll as a whole-month control
     # total (see tools/revora_1c_extension README), so there is no daily
@@ -137,6 +156,76 @@ def _build_coverage(
     )
 
 
+def _parse_snapshot_date(value: object) -> datetime | None:
+    """Parses a 1C snapshot date field ("YYYY-MM-DD", ISO datetime, or
+    already a date/datetime) into a tz-aware datetime at UTC midnight.
+    Returns None for anything missing or unparsable -- a bad date must
+    never crash ingestion, it just means that one field stays unknown."""
+    from datetime import timezone as _timezone
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=_timezone.utc)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=_timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    for parser in (
+        lambda v: datetime.strptime(v, "%Y-%m-%d"),
+        lambda v: datetime.fromisoformat(v.replace("Z", "+00:00")),
+    ):
+        try:
+            parsed = parser(text)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=_timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _positive_int(value: object) -> int:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return result if result > 0 else 0
+
+
+def _build_patient_identity_row(tenant_id: UUID, metric: dict) -> dict | None:
+    """Pure transform from one patient_phone_identity metric row into the
+    values dict upsert_patient_identities writes to the patients table.
+    Kept free of any DB/session dependency so the parsing and validation
+    rules (bad phone_hash, missing external_id, deleted-patient flag, date
+    parsing) are directly unit-testable without a live database. Returns
+    None when the row cannot be identified by a stable external_id at all --
+    everything else degrades gracefully instead of dropping the patient.
+    """
+    if metric.get("metric_code") != "patient_phone_identity":
+        return None
+    external_id = str(metric.get("dimension_key") or "").strip()
+    if not external_id or external_id == "empty":
+        return None
+    details = metric.get("details") or {}
+    phone_hash = str(details.get("phone_hash") or "").strip() or None
+    if phone_hash is not None and len(phone_hash) != 64:
+        # Not a well-formed SHA-256 hex digest -- never trust it for
+        # matching; keep the patient row, drop only the bad hash.
+        phone_hash = None
+    full_name = str(details.get("full_name") or metric.get("dimension_label") or "").strip() or None
+    return {
+        "tenant_id": tenant_id,
+        "external_id": external_id,
+        "full_name": full_name,
+        "phone_hash": phone_hash,
+        "branch_id": metric.get("branch_id"),
+        "first_visit_at": _parse_snapshot_date(details.get("first_visit_at")),
+        "last_visit_at": _parse_snapshot_date(details.get("last_visit_at")),
+        "visit_count": _positive_int(details.get("visit_count")),
+        "is_active": bool(details.get("active", True)),
+    }
+
+
 class OfficialReportsRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -190,6 +279,46 @@ class OfficialReportsRepository:
         self.session.add(report)
         await self.session.flush()
         return report
+
+    async def upsert_patient_identities(self, tenant_id: UUID, metrics: list[dict]) -> int:
+        """Materialize patient_phone_identity metric rows into the patients
+        table so ContactRegistry can match inbound calls/WhatsApp against
+        real 1C patients by phone_hash. The raw metric rows already landed
+        in official_report_metrics via replace_active (that's the audited,
+        idempotent ledger); this is a derived, upsert-only projection keyed
+        on the same stable external_id 1C sends every time -- resending an
+        unchanged snapshot just rewrites the same values, never duplicates.
+
+        Never receives or stores a plaintext phone number: only phone_hash
+        (already SHA-256'd by the 1C extension) ever reaches this table.
+        A row missing phone_hash, dimension_key or a parseable date is
+        skipped rather than aborting the whole batch -- one bad record must
+        not block every other patient in the same snapshot. Two different
+        patients legitimately sharing one phone_hash (a shared household or
+        family number) are both kept as distinct rows -- the uniqueness
+        constraint is (tenant_id, external_id), never phone_hash.
+        """
+        upserted = 0
+        for metric in metrics:
+            values = _build_patient_identity_row(tenant_id, metric)
+            if values is None:
+                continue
+            statement = pg_insert(Patient).values(**values)
+            statement = statement.on_conflict_do_update(
+                index_elements=["tenant_id", "external_id"],
+                set_={
+                    "full_name": statement.excluded.full_name,
+                    "phone_hash": statement.excluded.phone_hash,
+                    "branch_id": statement.excluded.branch_id,
+                    "first_visit_at": statement.excluded.first_visit_at,
+                    "last_visit_at": statement.excluded.last_visit_at,
+                    "visit_count": statement.excluded.visit_count,
+                    "is_active": statement.excluded.is_active,
+                },
+            )
+            await self.session.execute(statement)
+            upserted += 1
+        return upserted
 
     async def activate_existing(self, report: OfficialReportImport) -> OfficialReportImport:
         await self.session.execute(

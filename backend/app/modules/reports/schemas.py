@@ -22,6 +22,29 @@ class CoverageInfoResponse(BaseModel):
     is_exact: bool = False
 
 
+class CardStatusResponse(BaseModel):
+    """Mirrors reports.card_status.CardStatus for API responses -- the
+    contract every "official 1C figure vs local detail" dashboard card is
+    delivered through: never a bare number, always its status/source/
+    coverage so the frontend can render an honest "Не хватает данных"
+    instead of a silently fabricated value.
+    """
+
+    metric_code: str
+    label: str
+    official_value: Decimal | None
+    detail_value: Decimal | None
+    difference: Decimal | None
+    status: Literal["verified", "mismatch", "partial", "unavailable", "pending"]
+    source_report: str
+    coverage_from: date | None
+    coverage_to: date | None
+    branch: str | None = None
+    reason: str | None = None
+    depends_on: tuple[str, ...] = ()
+    unit: str = "KZT"
+
+
 class OfficialReportResponse(BaseModel):
     id: UUID
     report_type: str

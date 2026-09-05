@@ -16,6 +16,7 @@ class MarketingOverviewResponse(BaseModel):
     total_spend: Decimal
     total_attributed_revenue: Decimal
     roas: Decimal | None
+    romi: Decimal | None = None
     sources: list[MarketingSourcePerformance]
     date_from: date
     date_to: date

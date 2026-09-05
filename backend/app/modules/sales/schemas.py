@@ -32,4 +32,12 @@ class SalesOverviewResponse(BaseModel):
     patients_repeat: int
     appointment_completion_rate: Decimal
     paid_revenue: Decimal
+    appointments_transferred: int = 0
+    treatment_plan_created: int = 0
+    treatment_plan_accepted: int = 0
+    treatment_plan_paid: Decimal | None = None
+    patients_inactive: int = 0
+    inquiry_to_treatment_rate: Decimal | None = None
+    consultation_to_plan_rate: Decimal | None = None
+    plan_to_payment_rate: Decimal | None = None
     meta: SalesMeta

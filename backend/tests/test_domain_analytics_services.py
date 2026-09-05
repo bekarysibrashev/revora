@@ -50,6 +50,11 @@ class FakeSalesRepository:
             patients_primary=2,
             patients_repeat=4,
             paid_revenue=Decimal("500000"),
+            appointments_transferred=1,
+            treatment_plan_created=3,
+            treatment_plan_accepted=2,
+            treatment_plan_paid=None,
+            patients_inactive=5,
             data_as_of=datetime(2026, 7, 20, tzinfo=UTC),
         )
 
@@ -67,6 +72,19 @@ async def test_sales_manager_is_scoped_to_self_and_branch() -> None:
     assert repository.scope == ([branch_id], user.id)
     assert response.lead_conversion_rate == Decimal("0.4")
     assert response.appointment_completion_rate == Decimal("0.75")
+    # Task 2: transfers/funnel/inactive-patients pass through untouched --
+    # SalesService does not recompute them, only lead/appointment rates.
+    assert response.appointments_transferred == 1
+    assert response.treatment_plan_created == 3
+    assert response.treatment_plan_accepted == 2
+    assert response.treatment_plan_paid is None
+    assert response.patients_inactive == 5
+    # Task 2 funnel: leads_won/leads_total, treatment_plan_created/
+    # appointments_completed, and treatment_plan_paid/treatment_plan_created
+    # (None here since no 1C plan-payment figure was sent for this period).
+    assert response.inquiry_to_treatment_rate == Decimal("4") / Decimal("10")
+    assert response.consultation_to_plan_rate == Decimal("3") / Decimal("6")
+    assert response.plan_to_payment_rate is None
 
 
 class FakeDoctorsRepository:
@@ -128,6 +146,7 @@ async def test_marketing_overview_calculates_roas() -> None:
     assert response.total_spend == Decimal("150000")
     assert response.total_attributed_revenue == Decimal("400000")
     assert response.roas == Decimal("400000") / Decimal("150000")
+    assert response.romi == (Decimal("400000") - Decimal("150000")) / Decimal("150000")
 
 
 @pytest.mark.asyncio

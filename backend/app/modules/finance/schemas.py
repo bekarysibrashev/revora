@@ -28,11 +28,25 @@ class PnlResponse(BaseModel):
     payroll_accrual: Decimal
     total_expenses: Decimal
     gross_profit: Decimal
+    # Revenue minus classified operating costs (variable + fixed + payroll),
+    # excluding not-yet-categorized expenses -- distinct from net_profit,
+    # which subtracts every recognized expense including uncategorized ones.
+    operating_profit: Decimal
+    # Revora does not track depreciation/amortization, interest or tax as
+    # their own ledgers, so EBITDA is computed equal to operating_profit
+    # (the add-backs are assumed zero) rather than to net_profit, which
+    # would wrongly fold in uncategorized/one-off items. See depends_on
+    # in the /dashboard/cards CardStatus for this metric.
     ebitda: Decimal
     net_profit: Decimal
     expense_classification_rate: Decimal
     profit_is_complete: bool
     profit_label: str
+    # None (never 0) when 1C has not sent this metric for the period.
+    payroll_paid: Decimal | None = None
+    operating_expenses: Decimal | None = None
+    refunds: Decimal | None = None
+    insurance_payments: Decimal | None = None
     meta: AnalyticsMeta
 
 

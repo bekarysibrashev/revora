@@ -26,10 +26,14 @@ class ContactRepository:
         return await self.session.scalar(statement)
 
     async def is_patient(self, tenant_id: UUID, candidates: set[str]) -> bool:
+        # A deleted/inactive 1C patient record must not block a genuine
+        # new_contact classification -- if 1C no longer considers them an
+        # active patient, Revora shouldn't either.
         return bool(await self.session.scalar(
             select(Patient.id).where(
                 Patient.tenant_id == tenant_id,
                 Patient.phone_hash.in_(candidates),
+                Patient.is_active.is_(True),
             ).limit(1)
         ))
 
@@ -123,6 +127,7 @@ class ContactRepository:
             select(Patient.id).where(
                 Patient.tenant_id == tenant_id,
                 Patient.phone_hash == ContactIdentity.phone_hash,
+                Patient.is_active.is_(True),
             )
         )
         is_new = ContactIdentity.was_known_patient.is_(False) & ~patient_exists
@@ -156,6 +161,7 @@ class ContactRepository:
             select(Patient.id).where(
                 Patient.tenant_id == tenant_id,
                 Patient.phone_hash == ContactIdentity.phone_hash,
+                Patient.is_active.is_(True),
             )
         )
         filters = [

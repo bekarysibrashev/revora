@@ -8,6 +8,7 @@ from uuid import UUID
 from app.core.errors import AppError
 from app.modules.auth.models import User, UserRole
 from app.modules.finance.repository import CashFlowTotals, FinanceRepository, PnlTotals
+from app.modules.reports.card_status import is_full_coverage
 from app.modules.finance.schemas import (
     AnalyticsMeta,
     CashFlowResponse,
@@ -35,13 +36,30 @@ class FinanceService:
         )
         gross_profit = totals.revenue_accrual - totals.variable_expenses
         net_profit = totals.revenue_accrual - total_expenses
+        # Operating profit excludes uncategorized expenses (which are, by
+        # definition, not yet attributed to a known cost line) rather than
+        # silently deducting them the way net_profit does.
+        operating_profit = (
+            totals.revenue_accrual
+            - totals.variable_expenses
+            - totals.fixed_expenses
+            - totals.payroll_accrual
+        )
         classified_expenses = totals.variable_expenses + totals.fixed_expenses
         classification_rate = (
             classified_expenses / total_expenses if total_expenses else Decimal("0")
         )
         # Revora does not yet receive dedicated tax, bank-fee and depreciation
         # ledgers. Even a 100% category match therefore cannot certify net profit.
-        profit_is_complete = False
+        # It genuinely can be certified once revenue has full-period 1C
+        # coverage (an exact control total or complete calendar months) and
+        # every expense is classified (nothing left in "uncategorized").
+        revenue_coverage = totals.coverage.get("revenue_accrual")
+        profit_is_complete = (
+            is_full_coverage(revenue_coverage)
+            and totals.uncategorized_expenses == 0
+            and total_expenses > 0
+        )
         return PnlResponse(
             revenue_accrual=totals.revenue_accrual,
             revenue_payment=totals.revenue_payment,
@@ -49,9 +67,14 @@ class FinanceService:
             fixed_expenses=totals.fixed_expenses,
             uncategorized_expenses=totals.uncategorized_expenses,
             payroll_accrual=totals.payroll_accrual,
+            payroll_paid=totals.payroll_paid,
+            operating_expenses=totals.operating_expenses,
+            refunds=totals.refunds,
+            insurance_payments=totals.insurance_payments,
             total_expenses=total_expenses,
             gross_profit=gross_profit,
-            ebitda=net_profit,
+            operating_profit=operating_profit,
+            ebitda=operating_profit,
             net_profit=net_profit,
             expense_classification_rate=classification_rate,
             profit_is_complete=profit_is_complete,

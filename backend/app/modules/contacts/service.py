@@ -1,6 +1,8 @@
 import logging
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from math import ceil
+from typing import Literal
 from uuid import UUID, uuid4
 
 from app.core.config import Settings
@@ -16,6 +18,31 @@ from app.modules.whatsapp.security import WhatsAppDataProtectionError, decrypt_c
 
 logger = logging.getLogger(__name__)
 
+# The four inbound-inquiry outcomes required by the business rule: only a
+# genuinely new patient (never seen in Revora AND absent from 1C) is a real
+# marketing "new contact" -- an existing 1C patient calling in for the first
+# time on this channel is not a new acquisition and must not be logged as
+# one in the "Отчет КЦ" Google Sheet.
+InquiryClassification = Literal[
+    "new_contact", "existing_1c_patient", "repeat_contact", "unknown_patient"
+]
+
+
+def classify_inquiry(*, phone_valid: bool, is_repeat: bool, was_known_patient: bool) -> InquiryClassification:
+    if not phone_valid:
+        return "unknown_patient"
+    if is_repeat:
+        return "repeat_contact"
+    if was_known_patient:
+        return "existing_1c_patient"
+    return "new_contact"
+
+
+@dataclass(frozen=True)
+class InboundRegistration:
+    identity: ContactIdentity | None
+    classification: InquiryClassification
+
 
 class ContactRegistry:
     def __init__(
@@ -30,20 +57,28 @@ class ContactRegistry:
 
     async def register_inbound(
         self, *, tenant_id: UUID, phone: str, source: str, occurred_at: datetime
-    ) -> ContactIdentity | None:
+    ) -> InboundRegistration:
+        """Classifies one inbound call/WhatsApp message per the required
+        four-way rule (new_contact / existing_1c_patient / repeat_contact /
+        unknown_patient) and records it. Only a genuine new_contact is ever
+        synced to the "Отчет КЦ" Google Sheet -- an existing 1C patient
+        reaching out on this channel for the first time is not a new
+        acquisition, and a repeat contact was already synced the first time.
+        """
         if source not in {"kcell", "whatsapp"}:
             raise ValueError("unsupported contact source")
         try:
             digest = phone_hash(phone)
             candidates = phone_hash_candidates(phone)
         except ValueError:
-            return None
+            return InboundRegistration(identity=None, classification="unknown_patient")
         occurred_at = occurred_at if occurred_at.tzinfo else occurred_at.replace(tzinfo=UTC)
         item = await self.repository.identity(tenant_id, digest, lock=True)
         if item is None:
             prior_at, prior_source = await self.repository.prior_inbound(tenant_id, candidates)
             first_at = min(filter(None, (prior_at, occurred_at)))
             first_source = prior_source if prior_at and prior_at <= occurred_at else source
+            was_known_patient = await self.repository.is_patient(tenant_id, candidates)
             item = ContactIdentity(
                 id=uuid4(),
                 tenant_id=tenant_id,
@@ -57,14 +92,20 @@ class ContactRegistry:
                 inbound_count=1,
                 call_count=1 if source == "kcell" else 0,
                 message_count=1 if source == "whatsapp" else 0,
-                was_known_patient=await self.repository.is_patient(tenant_id, candidates),
+                was_known_patient=was_known_patient,
             )
             inserted = await self.repository.add_if_missing(item)
             if inserted is not None:
-                await self._sync_new_contact_to_sheet(inserted, phone=phone, source=source)
-                return inserted
+                classification = classify_inquiry(
+                    phone_valid=True, is_repeat=False, was_known_patient=was_known_patient
+                )
+                if classification == "new_contact":
+                    await self._sync_new_contact_to_sheet(inserted, phone=phone, source=source)
+                return InboundRegistration(identity=inserted, classification=classification)
             # A Kcell call and WhatsApp message can arrive simultaneously. The
-            # unique key serializes them without rolling back the webhook.
+            # unique key serializes them without rolling back either webhook --
+            # the request that lost the race just falls through to the repeat
+            # path below and updates counters on the row the winner created.
             item = await self.repository.identity(tenant_id, digest, lock=True)
             if item is None:
                 raise RuntimeError("contact identity conflict could not be resolved")
@@ -77,7 +118,10 @@ class ContactRegistry:
         item.inbound_count += 1
         item.call_count += int(source == "kcell")
         item.message_count += int(source == "whatsapp")
-        return item
+        classification = classify_inquiry(
+            phone_valid=True, is_repeat=True, was_known_patient=item.was_known_patient
+        )
+        return InboundRegistration(identity=item, classification=classification)
 
     def _encrypt_phone(self, phone: str) -> str | None:
         if not self.data_secret:

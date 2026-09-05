@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -16,6 +17,8 @@ class DashboardCeoResponse(BaseModel):
     top_doctors: list[DoctorPerformance]
     marketing: MarketingOverviewResponse
     new_contacts: NewContactSummary
+    cac: Decimal | None = None
+    cost_of_first_patient: Decimal | None = None
     date_from: date
     date_to: date
     branch_id: UUID | None

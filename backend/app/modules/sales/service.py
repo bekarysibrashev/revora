@@ -38,6 +38,24 @@ class SalesService:
         coverage: dict[str, CoverageInfoResponse] = {
             code: CoverageInfoResponse(**asdict(info)) for code, info in totals.coverage.items()
         }
+        # Task 2: обращение -> лечение -> план -> оплата funnel. Each stage
+        # is None (never a fabricated 0%) whenever its denominator is 0, so
+        # an empty period reads as "no data" rather than a false "0%".
+        inquiry_to_treatment_rate = (
+            Decimal(totals.leads_won) / Decimal(totals.leads_total)
+            if totals.leads_total
+            else None
+        )
+        consultation_to_plan_rate = (
+            Decimal(totals.treatment_plan_created) / Decimal(totals.appointments_completed)
+            if totals.appointments_completed
+            else None
+        )
+        plan_to_payment_rate = (
+            totals.treatment_plan_paid / Decimal(totals.treatment_plan_created)
+            if totals.treatment_plan_paid is not None and totals.treatment_plan_created
+            else None
+        )
         return SalesOverviewResponse(
             **{
                 key: value
@@ -46,6 +64,9 @@ class SalesService:
             },
             lead_conversion_rate=lead_rate,
             appointment_completion_rate=appointment_rate,
+            inquiry_to_treatment_rate=inquiry_to_treatment_rate,
+            consultation_to_plan_rate=consultation_to_plan_rate,
+            plan_to_payment_rate=plan_to_payment_rate,
             meta=SalesMeta(
                 date_from=date_from,
                 date_to=date_to,

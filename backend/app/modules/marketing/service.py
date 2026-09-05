@@ -71,6 +71,10 @@ class MarketingService:
             total_spend=total_spend,
             total_attributed_revenue=total_revenue,
             roas=total_revenue / total_spend if total_spend else None,
+            # ROMI (return on marketing investment): profit from attributed
+            # revenue net of spend, relative to spend. None (not -100%) when
+            # there was no spend to divide by.
+            romi=(total_revenue - total_spend) / total_spend if total_spend else None,
             sources=items,
             date_from=date_from,
             date_to=date_to,

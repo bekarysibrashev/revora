@@ -33,6 +33,12 @@ class PnlTotals:
     data_as_of: datetime | None
     official_metrics: frozenset[str] = field(default_factory=frozenset)
     coverage: dict[str, CoverageInfo] = field(default_factory=dict)
+    # Task 2: only ever set from a real official 1C figure -- None (never 0)
+    # means the clinic's 1C base has not sent that metric for this period.
+    payroll_paid: Decimal | None = None
+    operating_expenses: Decimal | None = None
+    refunds: Decimal | None = None
+    insurance_payments: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -133,7 +139,10 @@ class FinanceRepository:
             tenant_id,
             date_from,
             date_to,
-            {"revenue_accrual", "revenue_payment", "payroll_accrual"},
+            {
+                "revenue_accrual", "revenue_payment", "payroll_accrual",
+                "payroll_paid", "operating_expenses", "refunds", "insurance_payments",
+            },
             [branch_id] if branch_id else None,
         )
         timestamps = [
@@ -151,6 +160,13 @@ class FinanceRepository:
             data_as_of=max(timestamps) if timestamps else None,
             official_metrics=frozenset(official_values),
             coverage=official_coverage,
+            # These four have no local canonical-table fallback -- 1C is the
+            # only possible source, so a metric absent from official_values
+            # stays None (unavailable), never silently 0.
+            payroll_paid=official_values.get("payroll_paid"),
+            operating_expenses=official_values.get("operating_expenses"),
+            refunds=official_values.get("refunds"),
+            insurance_payments=official_values.get("insurance_payments"),
         )
 
     async def cashflow_totals(

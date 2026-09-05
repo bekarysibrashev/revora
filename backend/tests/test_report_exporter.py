@@ -27,6 +27,7 @@ def pnl():
         payroll_accrual=Decimal("250000"),
         total_expenses=Decimal("550000"),
         gross_profit=Decimal("800000"),
+        operating_profit=Decimal("450000"),
         ebitda=Decimal("450000"),
         net_profit=Decimal("450000"),
         expense_classification_rate=Decimal("0.9091"),

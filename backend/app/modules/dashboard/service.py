@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from uuid import UUID
 
 from app.core.errors import AppError
@@ -46,12 +47,25 @@ class DashboardService:
             )
             if item
         ]
+        # Task 2: CAC ("Стоимость первичного пациента" is the same figure
+        # under its other common label in dental-clinic reporting, not a
+        # second formula) -- needs marketing spend and a 1C-confirmed
+        # primary-patient count together, so it is computed here rather
+        # than inside either module alone. None (never a fabricated 0)
+        # when there were no confirmed primary patients to divide by.
+        cac = (
+            marketing.total_spend / Decimal(sales.patients_primary)
+            if sales.patients_primary
+            else None
+        )
         return DashboardCeoResponse(
             finance=finance,
             sales=sales,
             top_doctors=doctors.items[:5],
             marketing=marketing,
             new_contacts=new_contacts,
+            cac=cac,
+            cost_of_first_patient=cac,
             date_from=date_from,
             date_to=date_to,
             branch_id=branch_id,

@@ -21,23 +21,41 @@ from app.modules.reports.schemas import (
 
 MAX_REPORT_SIZE = 50 * 1024 * 1024
 REPORT_METRIC_CODES = {
-    "cash_receipts": {"revenue_payment", "cash_inflow"},
+    "cash_receipts": {
+        "revenue_payment", "cash_inflow",
+        # Task 2: cash-receipts breakdown already present in the "Фактически
+        # поступившие деньги" report alongside plain inflow.
+        "refunds", "insurance_payments",
+    },
     "service_revenue": {"services_count", "revenue_accrual", "revenue_before_discount"},
     "payroll": {"payroll_accrual", "payroll_paid", "payroll_due"},
     "doctor_revenue": {"doctor_revenue_payment"},
     "purchases": {
         "purchases_accrual_all_entities", "purchases_paid_all_entities",
         "purchases_accrual", "purchases_paid",
+        # Task 2: the clinic's own recognized-expense total from the
+        # "Затраты" report, distinct from purchases_accrual (which is
+        # purchase documents, not every recognized operating expense).
+        "operating_expenses",
     },
     "patients": {
         "patients_total", "patients_primary", "patient_visits",
         "patient_report_revenue", "patient_report_paid",
         "patient_seen", "patient_primary_seen",
+        # Task 1: per-patient identity (external_id + phone_hash + branch +
+        # visit history), materialized into the patients table below --
+        # never plaintext phone, see reports/repository.py::upsert_patient_identities.
+        "patient_phone_identity",
+        # Task 2: consultation -> treatment plan -> payment funnel.
+        "treatment_plan_created", "treatment_plan_accepted", "treatment_plan_paid",
     },
     "appointments": {
         "appointments_total", "appointments_primary", "appointments_completed",
         "appointments_cancelled", "appointments_no_show",
         "appointment_report_revenue", "appointment_report_paid",
+        # Task 2: operational efficiency -- reschedules and, where the
+        # clinic's 1C base can report it, doctor/room utilization.
+        "appointments_transferred", "doctor_load", "room_load",
     },
 }
 
@@ -244,6 +262,8 @@ class OfficialReportsService:
             summary=summary,
             metrics=metrics,
         )
+        if payload.report_type == "patients":
+            await self.repository.upsert_patient_identities(tenant_id, metrics)
         return self._response(report)
 
     async def ingest_connector_snapshots(

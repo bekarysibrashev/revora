@@ -1,7 +1,11 @@
 """Aggregate sales and appointment facts."""
 
+# "Давно не посещавшие" threshold: a patient still marked active in 1C who
+# has not visited in this many days counts as inactive/at-risk.
+INACTIVE_PATIENT_DAYS = 60
+
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -10,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.finance.models import RevenueFact
 from app.modules.reports.repository import CoverageInfo, OfficialReportsRepository
-from app.modules.sales.models import Appointment, Lead
+from app.modules.sales.models import Appointment, Lead, Patient, TreatmentPlan
 from app.shared.timezone import clinic_day_end_exclusive, clinic_day_start
 
 
@@ -30,6 +34,16 @@ class SalesTotals:
     paid_revenue: Decimal
     data_as_of: datetime | None
     coverage: dict[str, CoverageInfo] = field(default_factory=dict)
+    # Task 2: transfers, treatment-plan funnel, and "давно не посещавшие"
+    # inactive patients -- appointments_transferred/treatment_plan_* prefer
+    # the official 1C figure and fall back to the local canonical count
+    # (paid stays None, never a fabricated 0, when 1C hasn't sent it: there
+    # is no local ledger for treatment-plan payments to fall back to).
+    appointments_transferred: int = 0
+    treatment_plan_created: int = 0
+    treatment_plan_accepted: int = 0
+    treatment_plan_paid: Decimal | None = None
+    patients_inactive: int = 0
 
 
 class SalesRepository:
@@ -91,6 +105,10 @@ class SalesRepository:
                 )
             ),
             func.max(Appointment.updated_at),
+            # Task 2: rescheduled ("перенос") appointments -- see the BSL
+            # extension's status normalisation. Local-only until 1C sends
+            # appointments_transferred, at which point that value wins.
+            func.sum(case((Appointment.status == "transferred", 1), else_=0)),
         ).where(
             Appointment.tenant_id == tenant_id,
             Appointment.status != "deleted",
@@ -122,6 +140,59 @@ class SalesRepository:
                 RevenueFact.patient_id.in_(scoped_patient_ids)
             )
         revenue_row = (await self.session.execute(revenue_statement)).one()
+        treatment_plan_created_statement = select(
+            func.count(TreatmentPlan.id),
+        ).where(
+            TreatmentPlan.tenant_id == tenant_id,
+            TreatmentPlan.created_at >= self._start(date_from),
+            TreatmentPlan.created_at < self._end(date_to),
+        )
+        treatment_plan_accepted_statement = select(
+            func.count(TreatmentPlan.id),
+        ).where(
+            TreatmentPlan.tenant_id == tenant_id,
+            TreatmentPlan.accepted_at.is_not(None),
+            TreatmentPlan.accepted_at >= self._start(date_from),
+            TreatmentPlan.accepted_at < self._end(date_to),
+        )
+        if branch_ids is not None:
+            # TreatmentPlan has no branch_id of its own -- scope through the
+            # patient it belongs to, same as assigned_user_id scoping above.
+            plan_patient_ids = select(Patient.id).where(
+                Patient.tenant_id == tenant_id, Patient.branch_id.in_(branch_ids)
+            )
+            treatment_plan_created_statement = treatment_plan_created_statement.where(
+                TreatmentPlan.patient_id.in_(plan_patient_ids)
+            )
+            treatment_plan_accepted_statement = treatment_plan_accepted_statement.where(
+                TreatmentPlan.patient_id.in_(plan_patient_ids)
+            )
+        treatment_plan_created_row = (
+            await self.session.execute(treatment_plan_created_statement)
+        ).one()
+        treatment_plan_accepted_row = (
+            await self.session.execute(treatment_plan_accepted_statement)
+        ).one()
+
+        # "Давно не посещавшие" -- patients still marked active in 1C whose
+        # last recorded visit is older than the threshold, as of date_to.
+        # This is a point-in-time roster, not a date-range flow metric, so
+        # it deliberately ignores date_from.
+        inactivity_cutoff = self._start(date_to) - timedelta(days=INACTIVE_PATIENT_DAYS)
+        inactive_patients_statement = select(func.count(Patient.id)).where(
+            Patient.tenant_id == tenant_id,
+            Patient.is_active.is_(True),
+            Patient.last_visit_at.is_not(None),
+            Patient.last_visit_at < inactivity_cutoff,
+        )
+        if branch_ids is not None:
+            inactive_patients_statement = inactive_patients_statement.where(
+                Patient.branch_id.in_(branch_ids)
+            )
+        inactive_patients_row = (
+            await self.session.execute(inactive_patients_statement)
+        ).one()
+
         official_values, official_as_of, official_coverage = await OfficialReportsRepository(
             self.session
         ).exact_values(
@@ -132,6 +203,8 @@ class SalesRepository:
                 "appointments_total", "appointments_completed",
                 "appointments_cancelled", "appointments_no_show",
                 "patients_total", "patients_primary", "revenue_payment",
+                "appointments_transferred", "treatment_plan_created",
+                "treatment_plan_accepted", "treatment_plan_paid",
             },
             branch_ids,
         )
@@ -167,6 +240,21 @@ class SalesRepository:
             patients_primary=patients_primary,
             patients_repeat=max(0, patients_total - patients_primary),
             paid_revenue=official_values.get("revenue_payment", Decimal(revenue_row[0])),
+            appointments_transferred=int(
+                official_values.get("appointments_transferred", appointment_row[7] or 0)
+            ),
+            treatment_plan_created=int(
+                official_values.get(
+                    "treatment_plan_created", treatment_plan_created_row[0] or 0
+                )
+            ),
+            treatment_plan_accepted=int(
+                official_values.get(
+                    "treatment_plan_accepted", treatment_plan_accepted_row[0] or 0
+                )
+            ),
+            treatment_plan_paid=official_values.get("treatment_plan_paid"),
+            patients_inactive=int(inactive_patients_row[0] or 0),
             data_as_of=max(timestamps) if timestamps else None,
             coverage=official_coverage,
         )
