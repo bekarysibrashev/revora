@@ -133,9 +133,8 @@ class DoctorsRepository:
             )
             for row in rows
         ]
-        official_metrics, official_as_of, official_coverage = await OfficialReportsRepository(
-            self.session
-        ).exact_dimension_metrics(
+        official_repository = OfficialReportsRepository(self.session)
+        payment_metrics, payment_as_of, payment_coverage = await official_repository.exact_dimension_metrics(
             tenant_id,
             date_from,
             date_to,
@@ -143,41 +142,74 @@ class DoctorsRepository:
             "doctor",
             branch_ids,
         )
+        accrual_metrics, accrual_as_of, accrual_coverage = await official_repository.exact_dimension_metrics(
+            tenant_id,
+            date_from,
+            date_to,
+            "doctor_revenue_accrual",
+            "doctor",
+            branch_ids,
+        )
         by_name: dict[str, list[int]] = {}
         for index, item in enumerate(totals):
             by_name.setdefault(self._normalize_name(item.full_name), []).append(index)
-        for metric in official_metrics:
-            matches = by_name.get(self._normalize_name(metric.dimension_label), [])
+
+        def merge_official_metric(
+            metric: object, *, field_name: str, metric_as_of: datetime | None
+        ) -> None:
+            dimension_label = str(getattr(metric, "dimension_label"))
+            matches = by_name.get(self._normalize_name(dimension_label), [])
+            metric_value = Decimal(getattr(metric, "value"))
             if len(matches) == 1:
                 index = matches[0]
                 current = totals[index]
                 timestamps = [
-                    value for value in (current.data_as_of, official_as_of) if value
+                    value for value in (current.data_as_of, metric_as_of) if value
                 ]
                 totals[index] = replace(
                     current,
-                    revenue_payment=Decimal(metric.value),
-                    data_as_of=max(timestamps) if timestamps else None,
+                    **{
+                        field_name: metric_value,
+                        "data_as_of": max(timestamps) if timestamps else None,
+                    },
                 )
-                continue
-            totals.append(DoctorTotals(
+                return
+
+            # A finance report can contain a doctor who is no longer present
+            # in the current employee roster. Preserve that real row rather
+            # than dropping money merely because the directory changed.
+            item = DoctorTotals(
                 doctor_id=uuid5(
                     NAMESPACE_URL,
-                    f"revora:1c-doctor:{tenant_id}:{metric.dimension_key}",
+                    f"revora:1c-doctor:{tenant_id}:{getattr(metric, 'dimension_key')}",
                 ),
-                full_name=metric.dimension_label,
+                full_name=dimension_label,
                 specialty=None,
                 appointments_total=0,
                 appointments_completed=0,
-                revenue_accrual=Decimal("0"),
-                revenue_payment=Decimal(metric.value),
+                revenue_accrual=metric_value if field_name == "revenue_accrual" else Decimal("0"),
+                revenue_payment=metric_value if field_name == "revenue_payment" else Decimal("0"),
                 average_rating=None,
-                data_as_of=official_as_of,
-            ))
+                data_as_of=metric_as_of,
+            )
+            totals.append(item)
+            by_name.setdefault(self._normalize_name(item.full_name), []).append(len(totals) - 1)
+
+        for metric in payment_metrics:
+            merge_official_metric(
+                metric, field_name="revenue_payment", metric_as_of=payment_as_of
+            )
+        for metric in accrual_metrics:
+            merge_official_metric(
+                metric, field_name="revenue_accrual", metric_as_of=accrual_as_of
+            )
+        coverage = payment_coverage
+        if not payment_metrics and accrual_metrics:
+            coverage = accrual_coverage
         return sorted(
             totals,
             key=lambda item: (-item.revenue_payment, item.full_name.casefold()),
-        ), official_coverage
+        ), coverage
 
     @staticmethod
     def _start(value: date) -> datetime:

@@ -59,6 +59,7 @@ REPORT_TYPE_BY_METRIC = {
     "services_count": "service_revenue",
     "revenue_accrual": "service_revenue",
     "revenue_before_discount": "service_revenue",
+    "doctor_revenue_accrual": "service_revenue",
     "doctor_revenue_payment": "doctor_revenue",
     "purchases_accrual_all_entities": "purchases",
     "purchases_paid_all_entities": "purchases",

@@ -27,7 +27,15 @@ REPORT_METRIC_CODES = {
         # поступившие деньги" report alongside plain inflow.
         "refunds", "insurance_payments",
     },
-    "service_revenue": {"services_count", "revenue_accrual", "revenue_before_discount"},
+    "service_revenue": {
+        "services_count",
+        "revenue_accrual",
+        "revenue_before_discount",
+        # Same 1C sales register and period as revenue_accrual, grouped by
+        # doctor.  It is emitted only when its detail total reconciles with
+        # the official clinic control total.
+        "doctor_revenue_accrual",
+    },
     "payroll": {"payroll_accrual", "payroll_paid", "payroll_due"},
     "doctor_revenue": {"doctor_revenue_payment"},
     "purchases": {

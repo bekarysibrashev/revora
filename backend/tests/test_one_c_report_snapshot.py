@@ -98,6 +98,49 @@ async def test_connector_snapshot_resolves_one_c_branch_and_replaces_period() ->
 
 
 @pytest.mark.asyncio
+async def test_service_revenue_accepts_reconciled_doctor_accrual_breakdown() -> None:
+    repository = FakeReportsRepository()
+    service = OfficialReportsService(repository)
+    payload = OneCReportSnapshotRequest.model_validate({
+        "report_type": "service_revenue",
+        "period_from": "2026-06-01",
+        "period_to": "2026-06-02",
+        "metrics": [
+            {
+                "dimension_type": "clinic",
+                "dimension_key": "clinic",
+                "dimension_label": "Вся клиника",
+                "metric_code": "revenue_accrual",
+                "value": "4943651.20",
+            },
+            {
+                "dimension_type": "doctor",
+                "dimension_key": "doctor-guid",
+                "dimension_label": "Тестовый Врач",
+                "metric_code": "doctor_revenue_accrual",
+                "value": "4943651.20",
+                "branch_key": "STRUCTURAL-UNIT-GUID",
+            },
+        ],
+    })
+
+    await service.ingest_connector_snapshot(
+        tenant_id=uuid4(),
+        connection_id=uuid4(),
+        branch_code_map={"structural-unit-guid": "seifullina"},
+        payload=payload,
+    )
+
+    doctor_metric = next(
+        metric
+        for metric in repository.report.metrics
+        if metric.metric_code == "doctor_revenue_accrual"
+    )
+    assert doctor_metric.dimension_type == "doctor"
+    assert doctor_metric.branch_id == repository.branch.id
+
+
+@pytest.mark.asyncio
 async def test_connector_snapshot_maps_branch_from_snapshot_without_odata() -> None:
     repository = FakeReportsRepository()
     service = OfficialReportsService(repository)
