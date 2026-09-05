@@ -1,0 +1,96 @@
+{
+  "zip_sha256": "aa55f383204b2982c2e08fffec4e7a342fbacc2fbf9389afb3c0fe8f069946a4",
+  "zip_size": 40171,
+  "entries": [
+    {
+      "name": "CommonCommands/РвДиагностика1С.xml",
+      "size": 1768,
+      "sha256": "f0acc2c091d81d1b39f63be86b3c59e9d8e904644076270f5f597377defbe9b5"
+    },
+    {
+      "name": "CommonCommands/РвДиагностика1С/Ext/CommandModule.bsl",
+      "size": 387,
+      "sha256": "2a7f03f3ab7a400aeeac08a9578d1b28f129b44fb267d4c49ca5422a67e06c79"
+    },
+    {
+      "name": "CommonCommands/РвОткрытьНастройки.xml",
+      "size": 1594,
+      "sha256": "3a5a9a899bdf2c9318e97878ef89711e4d4646e672f922c2f89768a1922ecdc7"
+    },
+    {
+      "name": "CommonCommands/РвОткрытьНастройки/Ext/CommandModule.bsl",
+      "size": 377,
+      "sha256": "c6f5bb0de3de75014162ea5b4a302ecc8b498469a377b099a2e9aaee2ed5dadd"
+    },
+    {
+      "name": "CommonForms/РвДиагностика1СФорма.xml",
+      "size": 1740,
+      "sha256": "11989d189c434adaac1084b6dd6d0bb396315356fe445a6c445c4ef082cf5b3d"
+    },
+    {
+      "name": "CommonForms/РвДиагностика1СФорма/Ext/Form.xml",
+      "size": 3228,
+      "sha256": "f05eeec41fc2e56389889091a4cd45af5231e9f31434f98f8e6c0be8f9d0dae0"
+    },
+    {
+      "name": "CommonForms/РвДиагностика1СФорма/Ext/Form/Module.bsl",
+      "size": 7022,
+      "sha256": "9434caff0fd685377deed7aa6a9c7a8af5a51f69b325382a864b1d9be9d4c9c8"
+    },
+    {
+      "name": "CommonForms/РвНастройкиОбмена.xml",
+      "size": 1513,
+      "sha256": "bace92174f8bc3f74e30ee120fa79a8533b26561a57f68fae4e0c9ab5bf11267"
+    },
+    {
+      "name": "CommonForms/РвНастройкиОбмена/Ext/Form.xml",
+      "size": 5358,
+      "sha256": "9f3caa92639c3c7284892f63b1598bdabe4cd484328042dd9981e17ecf51d9db"
+    },
+    {
+      "name": "CommonForms/РвНастройкиОбмена/Ext/Form/Module.bsl",
+      "size": 3944,
+      "sha256": "e6d15a9e62e05ac8b8c40cbf1871e9d1b8148da6f5d560a02cfa3fe3eeebf490"
+    },
+    {
+      "name": "CommonModules/РвОбменСервер.xml",
+      "size": 1717,
+      "sha256": "44fd1e48d82ff188a47504d0b8bac3429ad0061713a7c9b5a6aaa22cc5e525cf"
+    },
+    {
+      "name": "CommonModules/РвОбменСервер/Ext/Module.bsl",
+      "size": 139885,
+      "sha256": "2a395c4be14f8563c1282bb655613859ce42c9bc32fa3e80a95f6d877170cb9a"
+    },
+    {
+      "name": "ConfigDumpInfo.xml",
+      "size": 2824,
+      "sha256": "383f9067576f69350cba73269070dec0a08666d84965b84a88004a937f42457c"
+    },
+    {
+      "name": "Configuration.xml",
+      "size": 4116,
+      "sha256": "17c429344a3a157df2c8445dbad5e128f11e304c6a8c784a85ace14b0701528d"
+    },
+    {
+      "name": "Languages/Русский.xml",
+      "size": 1283,
+      "sha256": "a241571447bdebbc5909a4458bad31ef970e5651002bbb1ee5b26884206e4da0"
+    },
+    {
+      "name": "Roles/РВОсновнаяРоль.xml",
+      "size": 1102,
+      "sha256": "43823e45af5bfe3cf42bc7501896d849e91ca355aff9888bbc5c1f37acbf509f"
+    },
+    {
+      "name": "Subsystems/РвИнтеграция.xml",
+      "size": 1592,
+      "sha256": "dfa5ebe1d4148b691c6e48d83961259456d7b5694be4ba989e5262c80379a099"
+    },
+    {
+      "name": "Subsystems/РвИнтеграция/Ext/CommandInterface.xml",
+      "size": 577,
+      "sha256": "6134fd6662be3ff5bc67bf55a30d327a5fd21607b707ecd13dd95c7db35fbe0f"
+    }
+  ]
+}
