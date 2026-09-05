@@ -16,6 +16,8 @@ class FakeReportsRepository:
         )
         self.extra_branches = extra_branches or []
         self.upserted_patient_identity_calls: list[list[dict]] = []
+        self.reports_by_key: dict = {}
+        self.replace_active_calls = 0
 
     async def branches_by_code(self, tenant_id):
         result = {self.branch.code: self.branch}
@@ -23,10 +25,14 @@ class FakeReportsRepository:
             result[branch.code] = branch
         return result
 
-    async def duplicate(self, *args):
-        return None
+    async def duplicate(self, tenant_id, report_type, period_from, period_to, source_hash):
+        return self.reports_by_key.get((report_type, period_from, period_to, source_hash))
+
+    async def activate_existing(self, report):
+        report.is_active = True
 
     async def replace_active(self, **kwargs):
+        self.replace_active_calls += 1
         self.report = SimpleNamespace(
             id=uuid4(),
             report_type=kwargs["report_type"],
@@ -39,6 +45,9 @@ class FakeReportsRepository:
             is_active=True,
             created_at=datetime.now(UTC),
         )
+        self.reports_by_key[
+            (kwargs["report_type"], kwargs["period_from"], kwargs["period_to"], kwargs["source_hash"])
+        ] = self.report
         return self.report
 
     async def upsert_patient_identities(self, tenant_id, metrics):
@@ -444,3 +453,64 @@ async def test_connector_accepts_the_full_1c_extension_patient_identity_wire_sha
     # what НормализоватьТелефон/ХэшТелефона in the extension always produces.
     assert len(row["details"]["phone_hash"]) == 64
     int(row["details"]["phone_hash"], 16)  # raises ValueError if not hex
+
+
+@pytest.mark.asyncio
+async def test_connector_snapshot_resend_is_deduplicated_by_source_hash() -> None:
+    """Резервная отправка того же контрольного снимка не должна создавать
+    второй активный отчёт — OfficialReportsService.ingest_connector_snapshot
+    должен распознать дубликат по (report_type, period_from, period_to,
+    source_hash) и просто переактивировать существующий отчёт, не вызывая
+    repository.replace_active повторно."""
+    repository = FakeReportsRepository()
+    service = OfficialReportsService(repository)
+    tenant_id = uuid4()
+    connection_id = uuid4()
+
+    def make_payload(value: str) -> OneCReportSnapshotRequest:
+        return OneCReportSnapshotRequest.model_validate({
+            "report_type": "service_revenue",
+            "period_from": "2026-07-01",
+            "period_to": "2026-07-31",
+            "metrics": [{
+                "dimension_type": "clinic",
+                "dimension_key": "clinic",
+                "dimension_label": "Вся клиника",
+                "metric_code": "revenue_accrual",
+                "value": value,
+            }],
+        })
+
+    first_response = await service.ingest_connector_snapshot(
+        tenant_id=tenant_id,
+        connection_id=connection_id,
+        branch_code_map={},
+        payload=make_payload("65994689.65"),
+    )
+    assert first_response.duplicate is False
+    assert repository.replace_active_calls == 1
+    first_report_id = repository.report.id
+
+    # Identical resend (same payload, same source_hash) must be recognized
+    # as a duplicate and must NOT call replace_active a second time.
+    second_response = await service.ingest_connector_snapshot(
+        tenant_id=tenant_id,
+        connection_id=connection_id,
+        branch_code_map={},
+        payload=make_payload("65994689.65"),
+    )
+    assert second_response.duplicate is True
+    assert repository.replace_active_calls == 1
+    assert repository.report.id == first_report_id
+    assert repository.report.is_active is True
+
+    # A payload that actually differs must produce a new source_hash and be
+    # treated as a fresh report, not silently swallowed as a duplicate.
+    third_response = await service.ingest_connector_snapshot(
+        tenant_id=tenant_id,
+        connection_id=connection_id,
+        branch_code_map={},
+        payload=make_payload("70000000.00"),
+    )
+    assert third_response.duplicate is False
+    assert repository.replace_active_calls == 2

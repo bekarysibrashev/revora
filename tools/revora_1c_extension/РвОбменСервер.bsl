@@ -53,7 +53,7 @@
 		ЗначениеМетрикиКлиники(СнимокВыручки, "revenue_accrual"),
 		ЗначениеМетрикиКлиники(СнимокОплат, "revenue_payment"),
 		ЗначениеМетрикиКлиники(СнимокЗарплаты, "payroll_accrual"),
-		"1.2.0-server", СнимокОплат.summary.breakdowns_reconciled, ДневныхСнимков);
+		"1.3.0-server", СнимокОплат.summary.breakdowns_reconciled, ДневныхСнимков);
 
 КонецФункции
 
