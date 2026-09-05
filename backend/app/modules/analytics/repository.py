@@ -23,6 +23,7 @@ from app.modules.marketing.models import (
     MarketingSpendFact,
     MetaCampaignDailyMetric,
 )
+from app.modules.reports.models import OfficialReportImport, OfficialReportMetric
 from app.modules.sales.models import Appointment, Lead, Patient
 from app.modules.tenancy.models import Branch
 
@@ -81,49 +82,73 @@ class AnalyticsRepository:
                 scope="tenant",
             )
         )
+        # The 1C snapshot pipeline (report-snapshot / report-snapshots/batch)
+        # never writes RevenueFact/ExpenseFact/CashFlowFact/Appointment/Doctor
+        # rows -- those are the old OData/PowerShell-connector fact tables.
+        # Real 1C-sourced data lands in official_report_imports /
+        # official_report_metrics (see app.modules.reports). Dataset presence
+        # here is checked against that table so the readiness widget reflects
+        # what actually arrived, not a table the retired connector used to fill.
+        def _official_metric_query(report_type: str, *, distinct_label: bool = False):
+            count_col = (
+                func.count(func.distinct(OfficialReportMetric.dimension_label))
+                if distinct_label
+                else func.count(OfficialReportMetric.id)
+            )
+            return (
+                select(count_col, func.max(OfficialReportMetric.updated_at))
+                .select_from(OfficialReportMetric)
+                .join(
+                    OfficialReportImport,
+                    OfficialReportImport.id == OfficialReportMetric.report_id,
+                )
+                .where(
+                    OfficialReportImport.tenant_id == tenant_id,
+                    OfficialReportImport.is_active.is_(True),
+                    OfficialReportImport.report_type == report_type,
+                )
+            )
+
+        doctors_query = _official_metric_query(
+            "doctor_revenue", distinct_label=True
+        )
+        if branch_id:
+            doctors_query = doctors_query.where(OfficialReportMetric.branch_id == branch_id)
         results.append(
             await self._snapshot(
                 "doctors",
                 "Врачи",
-                select(func.count(Doctor.id), func.max(Doctor.updated_at)).where(
-                    Doctor.tenant_id == tenant_id
-                ),
+                doctors_query,
                 scope="tenant",
             )
         )
 
-        appointment_query = select(
-            func.count(Appointment.id), func.max(Appointment.updated_at)
-        ).where(
-            Appointment.tenant_id == tenant_id,
-            Appointment.starts_at >= period_start,
-            Appointment.starts_at < period_end,
+        appointment_query = _official_metric_query("appointments").where(
+            OfficialReportImport.period_from <= date_to,
+            OfficialReportImport.period_to >= date_from,
         )
         lead_query = select(func.count(Lead.id), func.max(Lead.updated_at)).where(
             Lead.tenant_id == tenant_id,
             Lead.created_at >= period_start,
             Lead.created_at < period_end,
         )
-        revenue_query = select(
-            func.count(RevenueFact.id), func.max(RevenueFact.updated_at)
-        ).where(
-            RevenueFact.tenant_id == tenant_id,
-            RevenueFact.occurred_at >= period_start,
-            RevenueFact.occurred_at < period_end,
+        revenue_query = _official_metric_query("service_revenue").where(
+            OfficialReportImport.period_from <= date_to,
+            OfficialReportImport.period_to >= date_from,
         )
-        expense_query = select(
-            func.count(ExpenseFact.id), func.max(ExpenseFact.updated_at)
-        ).where(
-            ExpenseFact.tenant_id == tenant_id,
-            ExpenseFact.occurred_on >= date_from,
-            ExpenseFact.occurred_on <= date_to,
+        # operating_expenses/insurance_payments are not sent by the 1C
+        # extension (source not confirmed for this configuration -- see
+        # tools/revora_1c_extension/README.md); purchases_accrual is the one
+        # expense category 1C actually sends, so it is what this dataset
+        # reflects. It stays honestly empty until a real expense breakdown
+        # is confirmed and wired.
+        expense_query = _official_metric_query("purchases").where(
+            OfficialReportImport.period_from <= date_to,
+            OfficialReportImport.period_to >= date_from,
         )
-        cashflow_query = select(
-            func.count(CashFlowFact.id), func.max(CashFlowFact.updated_at)
-        ).where(
-            CashFlowFact.tenant_id == tenant_id,
-            CashFlowFact.occurred_at >= period_start,
-            CashFlowFact.occurred_at < period_end,
+        cashflow_query = _official_metric_query("cash_receipts").where(
+            OfficialReportImport.period_from <= date_to,
+            OfficialReportImport.period_to >= date_from,
         )
         # A closing balance is a point-in-time bank/account statement value.
         # It cannot be reconstructed safely from a partial movement window, so
@@ -165,11 +190,11 @@ class AnalyticsRepository:
             )
         )
         if branch_id:
-            appointment_query = appointment_query.where(Appointment.branch_id == branch_id)
+            appointment_query = appointment_query.where(OfficialReportMetric.branch_id == branch_id)
             lead_query = lead_query.where(Lead.branch_id == branch_id)
-            revenue_query = revenue_query.where(RevenueFact.branch_id == branch_id)
-            expense_query = expense_query.where(ExpenseFact.branch_id == branch_id)
-            cashflow_query = cashflow_query.where(CashFlowFact.branch_id == branch_id)
+            revenue_query = revenue_query.where(OfficialReportMetric.branch_id == branch_id)
+            expense_query = expense_query.where(OfficialReportMetric.branch_id == branch_id)
+            cashflow_query = cashflow_query.where(OfficialReportMetric.branch_id == branch_id)
             balance_query = balance_query.where(AccountBalance.branch_id == branch_id)
             marketing_fact_count = marketing_fact_count.where(MarketingSpendFact.branch_id == branch_id)
             marketing_fact_latest = marketing_fact_latest.where(MarketingSpendFact.branch_id == branch_id)
