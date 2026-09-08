@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiBinary } from "@/shared/api-client";
 import { PageHeader } from "@/shared/ui";
+import { KcellAssignments } from "@/modules/admin/components/kcell-assignments";
 
 type Branch = { id:string; name:string; code:string; address:string|null; is_active:boolean };
 type User = { id:string; email:string; full_name:string; role:string; branch_ids:string[]; is_active:boolean };
@@ -21,10 +22,10 @@ const example = JSON.stringify({
 }, null, 2);
 
 export default function AdminPage() {
-  const [tab,setTab]=useState<"data"|"branches"|"users"|"telegram">("data");
+  const [tab,setTab]=useState<"data"|"branches"|"users"|"telegram"|"kcell">("data");
   return <><PageHeader title="Настройки" subtitle="Источники данных, филиалы и доступ сотрудников"/>
-    <div className="tabs"><button className={tab==="data"?"active":""} onClick={()=>setTab("data")}>Импорт данных</button><button className={tab==="branches"?"active":""} onClick={()=>setTab("branches")}>Филиалы</button><button className={tab==="users"?"active":""} onClick={()=>setTab("users")}>Пользователи</button><button className={tab==="telegram"?"active":""} onClick={()=>setTab("telegram")}>Telegram</button></div>
-    {tab==="data"&&<DataImport/>}{tab==="branches"&&<Branches/>}{tab==="users"&&<Users/>}{tab==="telegram"&&<TelegramStaff/>}</>;
+    <div className="tabs"><button className={tab==="data"?"active":""} onClick={()=>setTab("data")}>Импорт данных</button><button className={tab==="branches"?"active":""} onClick={()=>setTab("branches")}>Филиалы</button><button className={tab==="users"?"active":""} onClick={()=>setTab("users")}>Пользователи</button><button className={tab==="telegram"?"active":""} onClick={()=>setTab("telegram")}>Telegram</button><button className={tab==="kcell"?"active":""} onClick={()=>setTab("kcell")}>Kcell</button></div>
+    {tab==="data"&&<DataImport/>}{tab==="branches"&&<Branches/>}{tab==="users"&&<Users/>}{tab==="telegram"&&<TelegramStaff/>}{tab==="kcell"&&<KcellAssignments/>}</>;
 }
 
 function DataImport() {
