@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.modules.reports.models import OfficialReportImport, OfficialReportMetric
-from app.modules.sales.models import Patient
+from app.modules.sales.models import Lead, Patient
 from app.modules.tenancy.models import Branch
 
 
@@ -316,9 +316,27 @@ class OfficialReportsRepository:
                     "visit_count": statement.excluded.visit_count,
                     "is_active": statement.excluded.is_active,
                 },
-            )
-            await self.session.execute(statement)
+            ).returning(Patient.id)
+            patient_id = (await self.session.execute(statement)).scalar_one()
             upserted += 1
+            # A patient can first surface here (a control/daily report
+            # snapshot) instead of through the operational patient_fact
+            # stream (see canonical_writer.py::_write_patient, which applies
+            # the identical rule) -- either path is a real first appearance
+            # in 1C and must win any open lead with this exact phone_hash.
+            if values["phone_hash"] and values["is_active"]:
+                await self.session.execute(
+                    update(Lead)
+                    .where(
+                        Lead.tenant_id == tenant_id,
+                        Lead.external_id == values["phone_hash"],
+                    )
+                    .values(
+                        patient_id=patient_id,
+                        branch_id=values["branch_id"],
+                        status="won",
+                    )
+                )
         return upserted
 
     async def activate_existing(self, report: OfficialReportImport) -> OfficialReportImport:

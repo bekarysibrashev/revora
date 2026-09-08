@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.finance.models import RevenueFact
 from app.modules.losses.models import LossOpportunity
 from app.modules.sales.models import Appointment, Lead
+from app.modules.sales.repository import reconcile_lost_leads
 
 ZERO = Decimal("0")
 
@@ -42,6 +43,11 @@ class LossRepository:
         date_to: date,
         branch_id: UUID | None,
     ) -> list[LossCandidate]:
+        # See sales/repository.py::reconcile_lost_leads -- this is the other
+        # real reader of Lead.status == "lost" (lost_leads_query below), and
+        # without this call it would always see zero rows: nothing else on
+        # this code path ever persists that status.
+        await reconcile_lost_leads(self.session, tenant_id)
         start = self._start(date_from)
         end = self._end(date_to)
 

@@ -144,6 +144,23 @@ export function DateFilters() {
     setOpen(false);
   }
 
+  // A custom "С"/"По" edit used to only ever reach FiltersContext (and thus
+  // every page's react-query key) after a separate click on "Применить".
+  // Until that click, the two inputs visibly showed the new dates while
+  // every card kept rendering the previously committed period -- easy to
+  // read as "the filter didn't work" rather than "not applied yet". Both
+  // fields already hold a complete, valid date at all times (they start
+  // from, and are reset back to, the committed filters), so once either one
+  // actually changes we already have a full, valid custom range: commit it
+  // immediately, still through the same single atomic applyCustom() call
+  // used everywhere else, never a partial from-only/to-only update.
+  useEffect(() => {
+    if (!draftFrom || !draftTo) return;
+    if (draftFrom === filters.date_from && draftTo === filters.date_to) return;
+    applyCustom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftFrom, draftTo]);
+
   return (
     <div className="date-range" ref={wrapRef}>
       <button type="button" className={`date-range-trigger${open ? " open" : ""}`} onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="dialog">

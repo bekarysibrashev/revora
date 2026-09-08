@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.finance.models import RevenueFact
@@ -47,6 +47,33 @@ class SalesTotals:
     patients_inactive: int = 0
 
 
+async def reconcile_lost_leads(session: AsyncSession, tenant_id: UUID) -> int:
+    """Persist the 14-day-silence "lost" transition on the Lead row itself.
+
+    Without this, "lost" only ever existed as a read-time computation here
+    in SalesRepository.overview() (leads_lost below) -- Lead.status stayed
+    "new" forever in the database. That silently broke two things that read
+    the real column: contacts/repository.py::sync_lead's reactivation
+    ("lost" -> "new" on a fresh inbound contact) could never fire because a
+    lead's stored status never actually became "lost" in the first place,
+    and losses/repository.py's own lost-lead query (Lead.status == "lost")
+    always returned nothing. Only ever moves "new" -> "lost"; a lead already
+    "won" or already "lost" is left untouched, so this is safe to call from
+    any read path, any number of times, in any order.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=LOST_LEAD_DAYS)
+    result = await session.execute(
+        update(Lead)
+        .where(
+            Lead.tenant_id == tenant_id,
+            Lead.status == "new",
+            Lead.last_contact_at < cutoff,
+        )
+        .values(status="lost")
+    )
+    return result.rowcount or 0
+
+
 class SalesRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -59,6 +86,7 @@ class SalesRepository:
         branch_ids: list[UUID] | None,
         assigned_user_id: UUID | None,
     ) -> SalesTotals:
+        await reconcile_lost_leads(self.session, tenant_id)
         stale_lead_cutoff = datetime.now(UTC) - timedelta(days=LOST_LEAD_DAYS)
         lead_statement = select(
             func.count(Lead.id),
