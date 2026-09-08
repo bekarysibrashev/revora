@@ -79,8 +79,12 @@ canonical_writer.py::_write_patient / reports/repository.py
 
 - assigned_user_id is resolved from the *first* contact's channel only (a
   later contact on a different channel never overrides who first took the
-  inquiry) via resolve_assignment, using only real, explicit signals -- never
-  approximate/fuzzy full-name matching:
+  inquiry) via resolve_assignment (app.modules.sales.lead_assignment -- the
+  same resolution the live inbound path uses in
+  ContactRepository.sync_lead, so a Kcell extension or WhatsApp
+  conversation is never interpreted two different ways depending on
+  whether the contact came in live or through this backfill), using only
+  real, explicit signals -- never approximate/fuzzy full-name matching:
 
     * Kcell: looked up in kcell_extension_assignments, an explicit,
       administrator-maintained mapping from Call.external_user (Kcell's own
@@ -148,7 +152,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionFactory
 from app.modules.auth.repository import AuthRepository
-from app.modules.kcell.models import KcellExtensionAssignment
+from app.modules.sales.lead_assignment import (
+    load_kcell_assignment_map,
+    load_whatsapp_current_assignment,
+    resolve_assignment,
+)
 from app.modules.sales.models import Call, Lead, Patient
 from app.modules.sales.repository import LOST_LEAD_DAYS
 from app.modules.tenancy.models import Tenant
@@ -259,30 +267,13 @@ def resolve_lead_outcome(
     return "new", None, None
 
 
-def resolve_assignment(
-    *,
-    first_source: str,
-    first_external_user: str | None,
-    kcell_assignment_by_extension: dict[str, UUID | None],
-    whatsapp_current_assigned_user_id: UUID | None,
-) -> tuple[UUID | None, str]:
-    """Pure decision: (assigned_user_id, assignment_status) for a backfilled
-    Lead, from the first contact's channel only. assignment_status is one of
-    "assigned", "unresolved", "ambiguous", "not_applicable" -- tracked
-    purely for backfill statistics, never persisted.
-    """
-    if first_source == "kcell":
-        if first_external_user is None:
-            return None, "unresolved"
-        if first_external_user not in kcell_assignment_by_extension:
-            return None, "unresolved"
-        mapped = kcell_assignment_by_extension[first_external_user]
-        return (mapped, "assigned") if mapped is not None else (None, "ambiguous")
-    if first_source == "whatsapp":
-        if whatsapp_current_assigned_user_id is not None:
-            return whatsapp_current_assigned_user_id, "assigned"
-        return None, "unresolved"
-    return None, "not_applicable"
+# resolve_assignment is imported from app.modules.sales.lead_assignment (not
+# defined here) so its exact decision rule -- Kcell external_user ->
+# assigned_user_id, WhatsApp current-conversation proxy, never fuzzy -- is
+# the same one the live inbound path (ContactRepository.sync_lead) uses,
+# rather than two independently-maintained copies of the same logic. It
+# stays importable as `backfill_leads.resolve_assignment` (see the import
+# above) so nothing else in this codebase needs to change.
 
 
 async def _collect_events(
@@ -343,31 +334,24 @@ async def _patient_matches_by_hash(
 
 
 async def _kcell_assignment_map(session: AsyncSession, tenant_id: UUID) -> dict[str, UUID | None]:
-    rows = await session.execute(
-        select(
-            KcellExtensionAssignment.external_user, KcellExtensionAssignment.assigned_user_id
-        ).where(KcellExtensionAssignment.tenant_id == tenant_id)
-    )
-    return {external_user: assigned_user_id for external_user, assigned_user_id in rows}
+    """Thin wrapper around the shared, tenant-scoped loader -- kept as a
+    module-level name (rather than calling load_kcell_assignment_map
+    directly from backfill_tenant) purely so existing tests can keep
+    monkeypatching `backfill_leads._kcell_assignment_map` unchanged. No
+    filter: backfill processes every historical contact for the tenant in
+    one pass, so it needs the whole map up front, unlike the live path
+    (see app.modules.sales.lead_assignment.resolve_new_lead_assigned_user_id),
+    which resolves one contact -- and therefore one extension -- at a time.
+    """
+    return await load_kcell_assignment_map(session, tenant_id)
 
 
 async def _whatsapp_current_assignment(session: AsyncSession, tenant_id: UUID) -> dict[str, UUID | None]:
-    """Best-effort, current-state-only proxy -- see resolve_assignment's
-    docstring. A phone can have more than one conversation row (different
-    channel_id); if any of them currently has a human assigned, that wins.
+    """Thin wrapper around the shared, tenant-scoped loader -- see
+    _kcell_assignment_map's docstring for why this stays a module-level
+    name instead of calling load_whatsapp_current_assignment directly.
     """
-    rows = await session.execute(
-        select(WhatsAppConversation.contact_hash, WhatsAppConversation.assigned_user_id).where(
-            WhatsAppConversation.tenant_id == tenant_id
-        )
-    )
-    result: dict[str, UUID | None] = {}
-    for contact_hash, assigned_user_id in rows:
-        if assigned_user_id is not None:
-            result[contact_hash] = assigned_user_id
-        else:
-            result.setdefault(contact_hash, None)
-    return result
+    return await load_whatsapp_current_assignment(session, tenant_id)
 
 
 async def backfill_tenant(

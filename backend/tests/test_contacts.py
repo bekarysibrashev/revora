@@ -130,6 +130,35 @@ async def test_registry_projects_new_and_repeat_contacts_into_one_lead_key() -> 
 
 
 @pytest.mark.asyncio
+async def test_registry_threads_external_user_into_sync_lead() -> None:
+    """Kcell's raw agent/extension string must reach
+    ContactRepository.sync_lead so it can resolve the touched Lead's
+    assigned_user_id -- see app.modules.sales.lead_assignment. A WhatsApp
+    inbound never carries one, so it must arrive as None rather than
+    whatever the previous call happened to pass."""
+    repository = LeadRecordingRepository(patient=False)
+    registry = ContactRegistry(repository)
+    tenant_id = uuid4()
+    first = datetime(2026, 8, 27, 9, tzinfo=UTC)
+
+    await registry.register_inbound(
+        tenant_id=tenant_id,
+        phone="87012345678",
+        source="kcell",
+        occurred_at=first,
+        external_user="101",
+    )
+    await registry.register_inbound(
+        tenant_id=tenant_id,
+        phone="+7 701 234 56 78",
+        source="whatsapp",
+        occurred_at=first + timedelta(hours=1),
+    )
+
+    assert [item["external_user"] for item in repository.lead_syncs] == ["101", None]
+
+
+@pytest.mark.asyncio
 async def test_registry_does_not_mark_an_odata_patient_as_new() -> None:
     registry = ContactRegistry(FakeContactRepository(patient=True))
 

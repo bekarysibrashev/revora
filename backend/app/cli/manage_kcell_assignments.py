@@ -1,12 +1,20 @@
 """Admin CLI to manage the explicit Call.external_user (Kcell agent
-extension) -> User mapping used by the live lead-sync path and by
-app.cli.backfill_leads to resolve assigned_user_id.
+extension) -> User mapping used to resolve a Lead's assigned_user_id.
+
+That resolution itself lives in app.modules.sales.lead_assignment and is
+shared by both consumers of this table: the live inbound path
+(ContactRepository.sync_lead, reached from both the Kcell and WhatsApp
+webhooks) for every new contact from here on, and app.cli.backfill_leads
+for historical contacts that predate it. Configuring an extension here
+takes effect for both -- there is only one mapping, read the same way by
+both paths.
 
 The kcell_extension_assignments table is otherwise unreachable: nothing in
 Revora's product UI writes to it, and it has FORCE ROW LEVEL SECURITY, so
-until this command exists there is genuinely no way to configure it -- every
-Kcell-sourced Lead's assigned_user_id stays "unresolved" forever, no matter
-how completely the rest of the sync pipeline works.
+without this command there is genuinely no way to configure it -- an
+unconfigured extension's calls simply keep resolving to assigned_user_id
+None, live or backfilled, no matter how completely the rest of the sync
+pipeline works.
 
 Usage:
     # See both what's already configured and what still needs to be, before

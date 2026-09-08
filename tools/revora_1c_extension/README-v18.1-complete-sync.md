@@ -197,14 +197,18 @@ described under real concurrent execution or a real process crash. All of
 that requires the manual verification steps below, performed by a human
 with access to the real 1C base — this document does not claim otherwise.
 
-## Before running the lead backfill: configure Kcell extension assignments
+## Before the first Kcell call: configure Kcell extension assignments
 
-`backend/app/cli/backfill_leads.py` resolves a Kcell-sourced lead's
-`assigned_user_id` only from `kcell_extension_assignments` (see problem 3
-above) -- it never guesses from a name, and it never writes to that table
-itself. Run this sequence once per tenant, before the first real (non
-`--dry-run`) backfill, from the same shell that has `DATABASE_URL` pointing
-at that tenant's database (e.g. Render's Shell tab):
+Both `backend/app/cli/backfill_leads.py` (historical contacts) and the live
+Kcell/WhatsApp webhook path (every new contact from here on, via
+`ContactRepository.sync_lead`) resolve a Lead's `assigned_user_id` only from
+`kcell_extension_assignments` (see problem 3 above) -- neither ever guesses
+from a name, and neither ever writes to that table itself. Configuring an
+extension here takes effect for both live traffic and any future backfill;
+run this sequence once per tenant as early as possible -- ideally before the
+first real Kcell call reaches the live system, not just before backfill --
+from the same shell that has `DATABASE_URL` pointing at that tenant's
+database (e.g. Render's Shell tab):
 
 ```
 # 1. See which Kcell extensions have actually placed calls, and which of
@@ -234,9 +238,13 @@ Only after this -- run `backfill_leads --dry-run` (see problem 4 above),
 review its `assigned` / `unresolved_assignment` / `ambiguous_assignment`
 counts against what step 4 showed, and only then run backfill for real.
 Assignments can be revisited any time afterwards (`set` again to correct a
-mapping, `delete` to revert to unresolved) -- backfill only ever reads this
-table, so changing it later does not touch any Lead already created; it
-only affects the next run.
+mapping, `delete` to revert to unresolved) -- both the live path and
+backfill only ever *read* this table, so changing it later does not touch
+any Lead already created (live or backfilled) with a resolved
+`assigned_user_id`; a Lead still missing one (unresolved/ambiguous at the
+time it was created) picks up a real owner automatically the next time it
+is touched, live or by a later backfill run, once the mapping is fixed --
+see `ContactRepository.sync_lead`'s docstring.
 
 ## Installing
 

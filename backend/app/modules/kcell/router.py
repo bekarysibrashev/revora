@@ -90,6 +90,10 @@ async def receive_kcell_callback(
                 phone=str(values["phone"]),
                 source="kcell",
                 occurred_at=started_at,
+                # Kcell's raw agent/extension string, so a newly-touched
+                # Lead's assigned_user_id can be resolved from
+                # kcell_extension_assignments (see ContactRepository.sync_lead).
+                external_user=str(values["user"]),
             )
         call = Call(tenant_id=tenant.id, external_id=str(values["callid"]), phone_hash=phone_hash(str(values["phone"])), phone_masked=mask_phone(str(values["phone"])), direction=direction, started_at=started_at, duration_seconds=int(values["duration"]), outcome=str(values["status"]), external_user=str(values["user"]), recording_url=str(values.get("link") or "") or None)
         session.add(call)

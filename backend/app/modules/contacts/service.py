@@ -56,7 +56,13 @@ class ContactRegistry:
         self.sheets_client = sheets_client
 
     async def register_inbound(
-        self, *, tenant_id: UUID, phone: str, source: str, occurred_at: datetime
+        self,
+        *,
+        tenant_id: UUID,
+        phone: str,
+        source: str,
+        occurred_at: datetime,
+        external_user: str | None = None,
     ) -> InboundRegistration:
         """Classifies one inbound call/WhatsApp message per the required
         four-way rule (new_contact / existing_1c_patient / repeat_contact /
@@ -64,6 +70,11 @@ class ContactRegistry:
         synced to the "Отчет КЦ" Google Sheet -- an existing 1C patient
         reaching out on this channel for the first time is not a new
         acquisition, and a repeat contact was already synced the first time.
+
+        external_user is Kcell's own raw agent/extension string (only ever
+        set by the Kcell webhook; WhatsApp has no per-message equivalent).
+        It is only used to resolve the touched Lead's assigned_user_id (see
+        ContactRepository.sync_lead) -- it plays no part in classification.
         """
         if source not in {"kcell", "whatsapp"}:
             raise ValueError("unsupported contact source")
@@ -107,6 +118,7 @@ class ContactRegistry:
                     classification=classification,
                     source=source,
                     occurred_at=occurred_at,
+                    external_user=external_user,
                 )
                 return InboundRegistration(identity=inserted, classification=classification)
             # A Kcell call and WhatsApp message can arrive simultaneously. The
@@ -134,6 +146,7 @@ class ContactRegistry:
             classification=classification,
             source=source,
             occurred_at=occurred_at,
+            external_user=external_user,
         )
         return InboundRegistration(identity=item, classification=classification)
 
@@ -145,6 +158,7 @@ class ContactRegistry:
         classification: InquiryClassification,
         source: str,
         occurred_at: datetime,
+        external_user: str | None = None,
     ) -> None:
         sync = getattr(self.repository, "sync_lead", None)
         if sync is not None:
@@ -154,6 +168,7 @@ class ContactRegistry:
                 classification=classification,
                 source=source,
                 occurred_at=occurred_at,
+                external_user=external_user,
             )
 
     def _encrypt_phone(self, phone: str) -> str | None:
