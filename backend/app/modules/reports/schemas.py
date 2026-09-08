@@ -100,3 +100,27 @@ class OneCReportSnapshotBatchRequest(BaseModel):
 class OneCReportSnapshotBatchResponse(BaseModel):
     items: list[OfficialReportResponse]
     total: int
+
+
+class DimensionReconciliationResponse(BaseModel):
+    """Whether a per-dimension breakdown adds up to its clinic total.
+
+    `difference` is the unexplained residual and is deliberately kept apart
+    from `unattributed_total` (money 1C itself reports as having no doctor).
+    Merging the two would make every column add up and hide the problem --
+    see app.modules.reports.reconciliation.
+    """
+
+    metric_code: str
+    clinic_metric_code: str
+    dimension_type: str
+    clinic_total: Decimal | None
+    attributed_total: Decimal
+    unattributed_total: Decimal
+    dimension_total: Decimal
+    difference: Decimal | None
+    difference_percent: Decimal | None
+    rows_total: int
+    rows_without_dimension: int
+    status: str
+    diagnostics: list[str]

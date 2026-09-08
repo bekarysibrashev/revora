@@ -8,6 +8,7 @@ from app.modules.auth.models import User, UserRole
 from app.modules.doctors.repository import DoctorsRepository
 from app.modules.doctors.schemas import (
     CoverageInfoResponse,
+    DimensionReconciliationResponse,
     DoctorPerformance,
     DoctorsOverviewResponse,
 )
@@ -46,6 +47,15 @@ class DoctorsService:
             )
             for item in totals
         ]
+        # Optional on the repository so a caller can supply a lighter
+        # double without being forced to model reconciliation, matching how
+        # ContactRegistry treats an optional sync_lead.
+        reconcile = getattr(self.repository, "revenue_reconciliation", None)
+        reconciliation = (
+            await reconcile(user.tenant_id, date_from, date_to, branch_ids)
+            if reconcile is not None
+            else []
+        )
         timestamps = [item.data_as_of for item in totals if item.data_as_of]
         return DoctorsOverviewResponse(
             items=items,
@@ -55,6 +65,17 @@ class DoctorsService:
             branch_ids=branch_ids,
             data_as_of=max(timestamps) if timestamps else None,
             coverage=CoverageInfoResponse(**asdict(coverage)),
+            reconciliation=[
+                DimensionReconciliationResponse(
+                    **{
+                        key: value
+                        for key, value in asdict(item).items()
+                        if key != "tolerance"
+                    }
+                    | {"diagnostics": list(item.diagnostics)}
+                )
+                for item in reconciliation
+            ],
         )
 
     @staticmethod

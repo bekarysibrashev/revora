@@ -10,6 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.doctors.models import Doctor, DoctorRating
 from app.modules.finance.models import RevenueFact
+from app.modules.reports.reconciliation import (
+    DimensionReconciliation,
+    reconcile_dimension,
+)
 from app.modules.reports.repository import CoverageInfo, OfficialReportsRepository
 from app.modules.sales.models import Appointment
 
@@ -210,6 +214,56 @@ class DoctorsRepository:
             totals,
             key=lambda item: (-item.revenue_payment, item.full_name.casefold()),
         ), coverage
+
+    # Pairs of (clinic metric, doctor breakdown) that are meant to describe
+    # the same money. The paid pair is knowingly cross-report -- see
+    # REPORT_TYPE_BY_METRIC: revenue_payment comes from cash_receipts while
+    # doctor_revenue_payment comes from doctor_revenue. reconcile_dimension
+    # detects and names that rather than silently comparing them.
+    RECONCILED_PAIRS = (
+        ("revenue_accrual", "doctor_revenue_accrual"),
+        ("revenue_payment", "doctor_revenue_payment"),
+    )
+
+    async def revenue_reconciliation(
+        self,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        branch_ids: list[UUID] | None,
+    ) -> list[DimensionReconciliation]:
+        """Check both doctor revenue breakdowns against their clinic totals.
+
+        Read-only and never adjusts a figure: the caller is told what the
+        official total is, what the breakdown sums to, how much of it has no
+        doctor, and what is left unexplained.
+        """
+        official = OfficialReportsRepository(self.session)
+        clinic_values, _clinic_as_of, clinic_coverage = await official.exact_values(
+            tenant_id,
+            date_from,
+            date_to,
+            {code for code, _ in self.RECONCILED_PAIRS},
+            branch_ids,
+        )
+
+        results: list[DimensionReconciliation] = []
+        for clinic_code, dimension_code in self.RECONCILED_PAIRS:
+            rows, _as_of, dimension_coverage = await official.exact_dimension_metrics(
+                tenant_id, date_from, date_to, dimension_code, "doctor", branch_ids
+            )
+            results.append(
+                reconcile_dimension(
+                    metric_code=dimension_code,
+                    clinic_metric_code=clinic_code,
+                    dimension_type="doctor",
+                    clinic_total=clinic_values.get(clinic_code),
+                    rows=rows,
+                    clinic_coverage=clinic_coverage.get(clinic_code),
+                    dimension_coverage=dimension_coverage,
+                )
+            )
+        return results
 
     @staticmethod
     def _start(value: date) -> datetime:

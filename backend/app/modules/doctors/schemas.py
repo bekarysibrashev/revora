@@ -4,7 +4,10 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from app.modules.reports.schemas import CoverageInfoResponse
+from app.modules.reports.schemas import (
+    CoverageInfoResponse,
+    DimensionReconciliationResponse,
+)
 
 
 class DoctorPerformance(BaseModel):
@@ -27,3 +30,8 @@ class DoctorsOverviewResponse(BaseModel):
     branch_ids: list[UUID] | None
     data_as_of: datetime | None
     coverage: CoverageInfoResponse | None = None
+    # Empty only when no official totals exist for the period at all.
+    # A "partial" entry here means the doctor column does not add up to
+    # the clinic total and the residual is unexplained -- the reader is
+    # told rather than shown a reconciled-looking table.
+    reconciliation: list[DimensionReconciliationResponse] = []
