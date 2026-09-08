@@ -136,30 +136,25 @@ export function DateFilters() {
     setOpen(false);
   }
 
+  // Both fields must hold a real date and "С" must not be after "По" --
+  // never auto-swapped (that would silently apply a range the person didn't
+  // ask for), just rejected until they fix it themselves.
+  const isCustomValid = Boolean(draftFrom) && Boolean(draftTo) && draftFrom <= draftTo;
+
+  // Applying the custom range is a single atomic action, reachable only
+  // through an explicit "Применить" click. An earlier version applied on
+  // every keystroke in either field (via a useEffect watching
+  // [draftFrom, draftTo]): editing just "С" fired a request with the *new*
+  // "С" paired against the *still-old* "По", and immediately closed the
+  // popover before the person had picked "По" at all. Requiring the click
+  // means both fields are guaranteed to reflect the person's actual
+  // intended range before anything is ever sent, and the popover only
+  // closes once a valid range has actually been applied.
   function applyCustom() {
-    if (!draftFrom || !draftTo) return;
-    const from = draftFrom <= draftTo ? draftFrom : draftTo;
-    const to = draftFrom <= draftTo ? draftTo : draftFrom;
-    setRange(from, to);
+    if (!isCustomValid) return;
+    setRange(draftFrom, draftTo);
     setOpen(false);
   }
-
-  // A custom "С"/"По" edit used to only ever reach FiltersContext (and thus
-  // every page's react-query key) after a separate click on "Применить".
-  // Until that click, the two inputs visibly showed the new dates while
-  // every card kept rendering the previously committed period -- easy to
-  // read as "the filter didn't work" rather than "not applied yet". Both
-  // fields already hold a complete, valid date at all times (they start
-  // from, and are reset back to, the committed filters), so once either one
-  // actually changes we already have a full, valid custom range: commit it
-  // immediately, still through the same single atomic applyCustom() call
-  // used everywhere else, never a partial from-only/to-only update.
-  useEffect(() => {
-    if (!draftFrom || !draftTo) return;
-    if (draftFrom === filters.date_from && draftTo === filters.date_to) return;
-    applyCustom();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftFrom, draftTo]);
 
   return (
     <div className="date-range" ref={wrapRef}>
@@ -184,7 +179,7 @@ export function DateFilters() {
               <label>С<input type="date" value={draftFrom} max={draftTo || undefined} onChange={(e) => setDraftFrom(e.target.value)} /></label>
               <label>По<input type="date" value={draftTo} min={draftFrom || undefined} onChange={(e) => setDraftTo(e.target.value)} /></label>
             </div>
-            <button type="button" className="date-range-apply" onClick={applyCustom}>Применить</button>
+            <button type="button" className="date-range-apply" onClick={applyCustom} disabled={!isCustomValid}>Применить</button>
           </div>
         </div>
       )}

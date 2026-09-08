@@ -12,10 +12,22 @@ WhatsAppMessage/WhatsAppConversation directly, for all of a tenant's history
 in one pass, and is the only thing that turns old contacts into Leads.
 
 Usage:
-    python -m app.cli.backfill_leads --tenant-slug san-dental
-    python -m app.cli.backfill_leads --all-tenants
+    # Always look before you touch: prints exactly what a real run would do,
+    # writes nothing.
+    python -m app.cli.backfill_leads --tenant-slug san-dental --dry-run
 
-Rules (mirror the live lead-sync path exactly -- see
+    # The real run, once the dry-run output has been reviewed.
+    python -m app.cli.backfill_leads --tenant-slug san-dental
+
+    python -m app.cli.backfill_leads --all-tenants --dry-run
+
+This is a manual, explicitly-invoked command -- it is never run automatically
+on API startup or on every deploy (see render.yaml: the start command is only
+`alembic upgrade head && uvicorn ...`). Run it from Render's Shell tab (or any
+shell with DATABASE_URL pointing at the production database) after a deploy
+that changes this backfill's logic, always dry-run first.
+
+Rules (mirror the live lead-sync path where it still applies -- see
 contacts/repository.py::sync_lead for the ongoing path, and
 canonical_writer.py::_write_patient / reports/repository.py
 ::upsert_patient_identities for how a lead is won going forward):
@@ -24,28 +36,84 @@ canonical_writer.py::_write_patient / reports/repository.py
   never touches a plaintext phone number: Call.phone_hash and
   WhatsAppConversation.contact_hash are already-hashed columns, and nothing
   here decrypts a ciphertext or reads a raw phone field.
-- A phone_hash that is currently an active Patient's phone_hash gets a Lead
-  that starts life already "won" (a real historical contact genuinely
-  happened, it just also happens to already be a known patient today): the
-  matched Patient becomes patient_id and its branch_id is copied across --
-  both grounded in a real 1C match, never guessed. Everything else becomes
-  "new" (last contact inside the LOST_LEAD_DAYS window as of when this
-  script runs) or "lost" (silent for that long already) -- the exact same
-  cutoff sales/repository.py::reconcile_lost_leads uses going forward.
-- assigned_user_id is never set: none of Call, WhatsAppMessage or 1C carries
-  a responsible employee for a historical contact, so it stays unassigned
-  rather than guessed.
+
+- Whether a contact becomes a Lead at all -- and what it becomes -- is
+  decided by comparing the contact's *first* touch (first_contact_at, from
+  merge_contact_events) against the matching Patient row's *first_visit_at*
+  (when 1C first actually saw that person), never by whether a patient with
+  that phone happens to exist *today* and never by Patient.is_active alone:
+
+    * No Patient row shares this phone_hash at all -> a genuine, unmatched
+      contact. "new" while last_contact_at is within LOST_LEAD_DAYS of the
+      script's run time, "lost" once it has been silent longer -- the exact
+      same cutoff sales/repository.py::reconcile_lost_leads uses going
+      forward. patient_id/branch_id stay unset (nothing to attach).
+
+    * A Patient row shares this phone_hash (active OR inactive -- 1C marking
+      a patient inactive/deleted does not erase the fact that a real
+      relationship already existed, so an old inactive patient must not be
+      treated as if the phone had never been seen) and its first_visit_at is
+      known and is *before* first_contact_at -> this person was already a
+      1C patient before this contact ever happened. Not a lead. No Lead row
+      is created at all.
+
+    * A Patient row matches and its first_visit_at is known and is *at or
+      after* first_contact_at -> the contact genuinely came first and the
+      patient relationship followed. A real lead that won: status="won",
+      patient_id/branch_id copied from that real 1C match, never guessed.
+      If more than one Patient row shares the phone (a shared household
+      number) and more than one qualifies, the one with the earliest
+      first_visit_at is used -- the most-established real 1C appearance.
+
+    * A Patient row matches but *no* matching row has a known first_visit_at
+      -- 1C confirms the phone belongs to a real patient but never told us
+      when they first appeared, so the order of events cannot be
+      established. This is a deliberate, conservative fallback for
+      older/incomplete snapshots (the v18 extension always sends
+      first_visit_at going forward): rather than guess in either direction
+      -- which could inflate "won" just as easily as it could inflate
+      "new"/"lost" -- no Lead row is created. See resolve_lead_outcome.
+
+  See resolve_lead_outcome for the pure, unit-tested implementation of all
+  of the above.
+
+- assigned_user_id is resolved from the *first* contact's channel only (a
+  later contact on a different channel never overrides who first took the
+  inquiry) via resolve_assignment, using only real, explicit signals -- never
+  approximate/fuzzy full-name matching:
+
+    * Kcell: looked up in kcell_extension_assignments, an explicit,
+      administrator-maintained mapping from Call.external_user (Kcell's own
+      raw agent/extension string) to a User. No row for that extension at
+      all -> "unresolved" (never configured). A row that exists but has
+      assigned_user_id=NULL -> "ambiguous" (administrator explicitly marked
+      this extension as shared/no single owner, e.g. a front-desk line).
+
+    * WhatsApp: there is no per-message responsible-employee field, only
+      WhatsAppConversation.assigned_user_id -- current "who's handling this
+      now" state, not first-contact history. Used only as a best-effort
+      proxy when it happens to be set at backfill time; otherwise
+      "unresolved". This limitation is intentional and documented, not an
+      oversight -- WhatsApp genuinely carries no better signal today.
+
+  assignment_status ("assigned" / "unresolved" / "ambiguous") is tracked
+  purely for the printed backfill statistics -- it is never itself stored.
+
 - INSERT ... ON CONFLICT (tenant_id, external_id) DO NOTHING: a Lead that
   already exists (created by the live webhook path, an earlier run of this
   same script, or already won via a 1C patient snapshot) is never touched
   or overwritten. Re-running this script is a pure no-op for every phone
   already covered -- safe to run as many times as needed.
+
+- --dry-run computes and prints every statistic below without writing a
+  single row (the session is never asked to commit any Lead insert).
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -55,6 +123,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionFactory
+from app.modules.kcell.models import KcellExtensionAssignment
 from app.modules.sales.models import Call, Lead, Patient
 from app.modules.sales.repository import LOST_LEAD_DAYS
 from app.modules.tenancy.models import Tenant
@@ -62,71 +131,149 @@ from app.modules.whatsapp.models import WhatsAppConversation, WhatsAppMessage
 
 _INBOUND_CALL_DIRECTIONS = ("in", "incoming", "inbound", "входящий")
 
+# The exact fields every dry-run and real run reports, in this order --
+# see the module docstring and the "controlled deployment" requirement this
+# satisfies: a backfill run must always show contacts_scanned,
+# skipped_existing_patients, won, new, lost, skipped_existing_leads,
+# assigned, unresolved_assignment, ambiguous_assignment, errors.
+STAT_FIELDS = (
+    "contacts_scanned",
+    "skipped_existing_patients",
+    "won",
+    "new",
+    "lost",
+    "skipped_existing_leads",
+    "assigned",
+    "unresolved_assignment",
+    "ambiguous_assignment",
+    "errors",
+)
+
 
 @dataclass
 class ContactAggregate:
     first_at: datetime
     first_source: str
     last_at: datetime
+    # Call.external_user at the first-touching event, ONLY when
+    # first_source == "kcell" -- the raw signal resolve_assignment needs.
+    # Always None when the first contact was WhatsApp (that channel's
+    # assignment signal is looked up separately, by phone, since it is
+    # current-state rather than per-event).
+    first_external_user: str | None = None
+
+
+@dataclass(frozen=True)
+class PatientMatch:
+    patient_id: UUID
+    branch_id: UUID | None
+    first_visit_at: datetime | None
 
 
 def merge_contact_events(
-    events: list[tuple[str, str, datetime]],
+    events: list[tuple[str, str, datetime, str | None]],
 ) -> dict[str, ContactAggregate]:
-    """Pure aggregation: group (phone_hash, source, occurred_at) triples --
-    already-hashed, never plaintext -- into one first/last-contact record
-    per phone_hash. The earliest occurred_at across every channel wins the
-    "first source"; the latest wins last_at. A repeat contact on the same
-    channel, or a later contact on the other channel, updates last_at
-    without creating a second entry -- there is exactly one aggregate per
-    phone_hash no matter how many events reference it.
+    """Pure aggregation: group (phone_hash, source, occurred_at,
+    external_user) events -- phone_hash already-hashed, never plaintext --
+    into one first/last-contact record per phone_hash. The earliest
+    occurred_at across every channel wins "first source" (and, if that
+    first source is Kcell, its external_user); the latest wins last_at. A
+    repeat contact on the same channel, or a later contact on the other
+    channel, updates last_at without creating a second entry -- there is
+    exactly one aggregate per phone_hash no matter how many events
+    reference it.
     """
     merged: dict[str, ContactAggregate] = {}
-    for phone_hash, source, occurred_at in events:
+    for phone_hash, source, occurred_at, external_user in events:
         current = merged.get(phone_hash)
         if current is None:
             merged[phone_hash] = ContactAggregate(
-                first_at=occurred_at, first_source=source, last_at=occurred_at
+                first_at=occurred_at,
+                first_source=source,
+                last_at=occurred_at,
+                first_external_user=external_user if source == "kcell" else None,
             )
             continue
         if occurred_at < current.first_at:
             current.first_at = occurred_at
             current.first_source = source
+            current.first_external_user = external_user if source == "kcell" else None
         if occurred_at > current.last_at:
             current.last_at = occurred_at
     return merged
 
 
-def decide_lead_state(
+def resolve_lead_outcome(
     *,
-    matched_patient_id: UUID | None,
-    matched_patient_branch_id: UUID | None,
+    patient_matches: list[PatientMatch],
+    first_contact_at: datetime,
     last_contact_at: datetime,
     now: datetime,
-) -> tuple[str, UUID | None, UUID | None]:
-    """Pure decision: the (status, patient_id, branch_id) a backfilled Lead
-    should start with. Never invents a branch -- branch_id is populated only
-    when a real Patient row was matched, otherwise it stays None, exactly
-    the same rule the live "won" writers use.
+) -> tuple[str, UUID | None, UUID | None] | None:
+    """Pure decision: how a historical contact should become a Lead, or
+    None when it must not become a Lead at all. See the module docstring
+    for the full rationale; this is its direct, unit-tested implementation.
     """
-    if matched_patient_id is not None:
-        return "won", matched_patient_id, matched_patient_branch_id
+    dated_matches = [m for m in patient_matches if m.first_visit_at is not None]
+    if patient_matches and not dated_matches:
+        # Matched a real patient, but none of the matches carry a usable
+        # first_visit_at -- cannot establish contact-vs-visit order.
+        # Conservative default: not a lead, rather than guess.
+        return None
+    pre_existing = [m for m in dated_matches if m.first_visit_at < first_contact_at]
+    if pre_existing:
+        # At least one matching patient already existed in 1C before this
+        # contact -- treat the whole phone_hash as an existing relationship,
+        # even if another match on the same shared number looks newer.
+        return None
+    if dated_matches:
+        won_match = min(dated_matches, key=lambda m: m.first_visit_at)
+        return "won", won_match.patient_id, won_match.branch_id
     if now - last_contact_at >= timedelta(days=LOST_LEAD_DAYS):
         return "lost", None, None
     return "new", None, None
 
 
+def resolve_assignment(
+    *,
+    first_source: str,
+    first_external_user: str | None,
+    kcell_assignment_by_extension: dict[str, UUID | None],
+    whatsapp_current_assigned_user_id: UUID | None,
+) -> tuple[UUID | None, str]:
+    """Pure decision: (assigned_user_id, assignment_status) for a backfilled
+    Lead, from the first contact's channel only. assignment_status is one of
+    "assigned", "unresolved", "ambiguous", "not_applicable" -- tracked
+    purely for backfill statistics, never persisted.
+    """
+    if first_source == "kcell":
+        if first_external_user is None:
+            return None, "unresolved"
+        if first_external_user not in kcell_assignment_by_extension:
+            return None, "unresolved"
+        mapped = kcell_assignment_by_extension[first_external_user]
+        return (mapped, "assigned") if mapped is not None else (None, "ambiguous")
+    if first_source == "whatsapp":
+        if whatsapp_current_assigned_user_id is not None:
+            return whatsapp_current_assigned_user_id, "assigned"
+        return None, "unresolved"
+    return None, "not_applicable"
+
+
 async def _collect_events(
     session: AsyncSession, tenant_id: UUID
-) -> list[tuple[str, str, datetime]]:
-    events: list[tuple[str, str, datetime]] = []
+) -> list[tuple[str, str, datetime, str | None]]:
+    events: list[tuple[str, str, datetime, str | None]] = []
     call_rows = await session.execute(
-        select(Call.phone_hash, Call.started_at).where(
+        select(Call.phone_hash, Call.started_at, Call.external_user).where(
             Call.tenant_id == tenant_id,
             func.lower(Call.direction).in_(_INBOUND_CALL_DIRECTIONS),
         )
     )
-    events.extend((phone_hash, "kcell", started_at) for phone_hash, started_at in call_rows)
+    events.extend(
+        (phone_hash, "kcell", started_at, external_user)
+        for phone_hash, started_at, external_user in call_rows
+    )
 
     message_rows = await session.execute(
         select(
@@ -140,66 +287,155 @@ async def _collect_events(
         )
     )
     events.extend(
-        (contact_hash, "whatsapp", occurred_at) for contact_hash, occurred_at in message_rows
+        (contact_hash, "whatsapp", occurred_at, None) for contact_hash, occurred_at in message_rows
     )
     return events
 
 
+async def _patient_matches_by_hash(
+    session: AsyncSession, tenant_id: UUID, phone_hashes: set[str]
+) -> dict[str, list[PatientMatch]]:
+    """Fetches every Patient row (active or inactive -- see the module
+    docstring on why is_active must never gate this) sharing any of the
+    given phone hashes, in one query, grouped by phone_hash.
+    """
+    if not phone_hashes:
+        return {}
+    rows = (
+        await session.execute(
+            select(Patient.phone_hash, Patient.id, Patient.branch_id, Patient.first_visit_at).where(
+                Patient.tenant_id == tenant_id,
+                Patient.phone_hash.in_(phone_hashes),
+            )
+        )
+    ).all()
+    result: dict[str, list[PatientMatch]] = {}
+    for phone_hash, patient_id, branch_id, first_visit_at in rows:
+        result.setdefault(phone_hash, []).append(
+            PatientMatch(patient_id=patient_id, branch_id=branch_id, first_visit_at=first_visit_at)
+        )
+    return result
+
+
+async def _kcell_assignment_map(session: AsyncSession, tenant_id: UUID) -> dict[str, UUID | None]:
+    rows = await session.execute(
+        select(
+            KcellExtensionAssignment.external_user, KcellExtensionAssignment.assigned_user_id
+        ).where(KcellExtensionAssignment.tenant_id == tenant_id)
+    )
+    return {external_user: assigned_user_id for external_user, assigned_user_id in rows}
+
+
+async def _whatsapp_current_assignment(session: AsyncSession, tenant_id: UUID) -> dict[str, UUID | None]:
+    """Best-effort, current-state-only proxy -- see resolve_assignment's
+    docstring. A phone can have more than one conversation row (different
+    channel_id); if any of them currently has a human assigned, that wins.
+    """
+    rows = await session.execute(
+        select(WhatsAppConversation.contact_hash, WhatsAppConversation.assigned_user_id).where(
+            WhatsAppConversation.tenant_id == tenant_id
+        )
+    )
+    result: dict[str, UUID | None] = {}
+    for contact_hash, assigned_user_id in rows:
+        if assigned_user_id is not None:
+            result[contact_hash] = assigned_user_id
+        else:
+            result.setdefault(contact_hash, None)
+    return result
+
+
 async def backfill_tenant(
-    session: AsyncSession, tenant_id: UUID, *, now: datetime | None = None
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    now: datetime | None = None,
+    dry_run: bool = False,
 ) -> dict[str, int]:
     now = now or datetime.now(UTC)
     events = await _collect_events(session, tenant_id)
     aggregates = merge_contact_events(events)
 
-    totals = {"won": 0, "new": 0, "lost": 0, "skipped_existing": 0}
+    patient_matches = await _patient_matches_by_hash(session, tenant_id, set(aggregates))
+    kcell_assignments = await _kcell_assignment_map(session, tenant_id)
+    whatsapp_assignments = await _whatsapp_current_assignment(session, tenant_id)
+
+    totals = {field: 0 for field in STAT_FIELDS}
+    totals["contacts_scanned"] = len(aggregates)
+
     for phone_hash, aggregate in aggregates.items():
-        existing_lead = await session.scalar(
-            select(Lead.id).where(Lead.tenant_id == tenant_id, Lead.external_id == phone_hash)
-        )
-        if existing_lead is not None:
-            totals["skipped_existing"] += 1
-            continue
-        patient_row = (
-            await session.execute(
-                select(Patient.id, Patient.branch_id).where(
-                    Patient.tenant_id == tenant_id,
-                    Patient.phone_hash == phone_hash,
-                    Patient.is_active.is_(True),
-                )
+        try:
+            existing_lead = await session.scalar(
+                select(Lead.id).where(Lead.tenant_id == tenant_id, Lead.external_id == phone_hash)
             )
-        ).first()
-        status, patient_id, branch_id = decide_lead_state(
-            matched_patient_id=patient_row[0] if patient_row else None,
-            matched_patient_branch_id=patient_row[1] if patient_row else None,
-            last_contact_at=aggregate.last_at,
-            now=now,
-        )
-        statement = (
-            pg_insert(Lead)
-            .values(
-                id=uuid4(),
-                tenant_id=tenant_id,
-                branch_id=branch_id,
-                patient_id=patient_id,
-                assigned_user_id=None,
-                external_id=phone_hash,
-                source=aggregate.first_source,
-                status=status,
+            if existing_lead is not None:
+                totals["skipped_existing_leads"] += 1
+                continue
+
+            outcome = resolve_lead_outcome(
+                patient_matches=patient_matches.get(phone_hash, []),
+                first_contact_at=aggregate.first_at,
                 last_contact_at=aggregate.last_at,
-                created_at=aggregate.first_at,
+                now=now,
             )
-            .on_conflict_do_nothing(index_elements=["tenant_id", "external_id"])
-        )
-        result = await session.execute(statement)
-        if result.rowcount:
-            totals[status] += 1
-        else:
-            # Lost the race against a concurrent writer (live webhook,
-            # or another instance of this same script) between our
-            # existing-lead check and the insert -- not an error.
-            totals["skipped_existing"] += 1
+            if outcome is None:
+                totals["skipped_existing_patients"] += 1
+                continue
+            status, patient_id, branch_id = outcome
+
+            assigned_user_id, assignment_status = resolve_assignment(
+                first_source=aggregate.first_source,
+                first_external_user=aggregate.first_external_user,
+                kcell_assignment_by_extension=kcell_assignments,
+                whatsapp_current_assigned_user_id=whatsapp_assignments.get(phone_hash),
+            )
+            if assignment_status == "assigned":
+                totals["assigned"] += 1
+            elif assignment_status == "ambiguous":
+                totals["ambiguous_assignment"] += 1
+            elif assignment_status == "unresolved":
+                totals["unresolved_assignment"] += 1
+
+            if dry_run:
+                totals[status] += 1
+                continue
+
+            statement = (
+                pg_insert(Lead)
+                .values(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    branch_id=branch_id,
+                    patient_id=patient_id,
+                    assigned_user_id=assigned_user_id,
+                    external_id=phone_hash,
+                    source=aggregate.first_source,
+                    status=status,
+                    last_contact_at=aggregate.last_at,
+                    created_at=aggregate.first_at,
+                )
+                .on_conflict_do_nothing(index_elements=["tenant_id", "external_id"])
+            )
+            result = await session.execute(statement)
+            if result.rowcount:
+                totals[status] += 1
+            else:
+                # Lost the race against a concurrent writer (live webhook,
+                # or another instance of this same script) between our
+                # existing-lead check and the insert -- not an error.
+                totals["skipped_existing_leads"] += 1
+        except Exception as exc:  # noqa: BLE001 -- one bad phone must not abort the whole tenant
+            totals["errors"] += 1
+            print(
+                f"[backfill_leads] error processing phone_hash={phone_hash[:12]}...: {exc}",
+                file=sys.stderr,
+            )
     return totals
+
+
+def _merge_totals(into: dict[str, int], part: dict[str, int]) -> None:
+    for key, value in part.items():
+        into[key] = into.get(key, 0) + value
 
 
 async def _run(args: argparse.Namespace) -> None:
@@ -215,17 +451,18 @@ async def _run(args: argparse.Namespace) -> None:
             tenant_ids = list(
                 (await session.scalars(select(Tenant.id).where(Tenant.is_active.is_(True)))).all()
             )
-        totals = {"won": 0, "new": 0, "lost": 0, "skipped_existing": 0}
+        totals = {field: 0 for field in STAT_FIELDS}
         for tenant_id in tenant_ids:
-            result = await backfill_tenant(session, tenant_id)
-            for key, value in result.items():
-                totals[key] += value
-            await session.commit()
-        print(
-            f"Backfilled {len(tenant_ids)} tenant(s): "
-            f"{totals['won']} won, {totals['new']} new, {totals['lost']} lost, "
-            f"{totals['skipped_existing']} already present (untouched)."
-        )
+            result = await backfill_tenant(session, tenant_id, dry_run=args.dry_run)
+            _merge_totals(totals, result)
+            if args.dry_run:
+                await session.rollback()
+            else:
+                await session.commit()
+        mode = "DRY RUN (no rows written)" if args.dry_run else "REAL RUN (rows written)"
+        print(f"backfill_leads -- {mode} -- {len(tenant_ids)} tenant(s)")
+        for field in STAT_FIELDS:
+            print(f"  {field}: {totals[field]}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -233,6 +470,11 @@ def parse_args() -> argparse.Namespace:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--tenant-slug", help="Backfill one tenant by slug")
     group.add_argument("--all-tenants", action="store_true", help="Backfill every active tenant")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Compute and print every statistic without writing a single Lead row.",
+    )
     return parser.parse_args()
 
 

@@ -32,7 +32,7 @@ from app.modules.marketing.models import (
     MetaCampaignDailyMetric,
 )
 from app.modules.sales.models import Appointment, Call, Lead, Patient, ServiceDirection, TreatmentPlan
-from app.modules.kcell.models import KcellWebhookReceipt
+from app.modules.kcell.models import KcellExtensionAssignment, KcellWebhookReceipt
 from app.modules.losses.models import LossOpportunity
 from app.modules.ml.models import MLDatasetSnapshot, MLExperiment, MLModelVersion, MLPrediction
 from app.modules.reports.models import OfficialReportImport, OfficialReportMetric
