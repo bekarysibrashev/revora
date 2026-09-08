@@ -107,6 +107,30 @@ canonical_writer.py::_write_patient / reports/repository.py
 
 - --dry-run computes and prints every statistic below without writing a
   single row (the session is never asked to commit any Lead insert).
+
+- Every table this script reads or writes (calls, patients, leads,
+  whatsapp_conversations, kcell_extension_assignments) has
+  FORCE ROW LEVEL SECURITY. backfill_tenant sets the transaction-local
+  `app.tenant_id` GUC (the same `AuthRepository.set_tenant_context` used by
+  the request path and by app/cli/create_initial_owner.py) as its very
+  first action, before any tenant-scoped SELECT -- without this, RLS
+  silently returns zero rows (a --dry-run would report contacts_scanned: 0
+  even on a populated tenant) rather than raising. Because
+  set_config(..., true) is transaction-local, it is cleared by _run's
+  per-tenant commit()/rollback() and re-set from scratch by the next
+  tenant's backfill_tenant call -- context is never carried over between
+  tenants. RLS is never disabled and row_security is never turned off.
+
+- Each phone_hash's read-decide-write sequence runs inside its own
+  `session.begin_nested()` (a real SQL SAVEPOINT). If anything in it raises
+  -- most likely a constraint violation on the write -- only that
+  savepoint is rolled back; PostgreSQL never sees the outer, per-tenant
+  transaction as aborted, so every remaining phone_hash and the final
+  commit still proceed normally. Without this, one bad row would poison
+  the whole transaction (any statement after it fails with "current
+  transaction is aborted") and silently drop the rest of the tenant.
+  phone_hash is never written to stdout/stderr, not even truncated -- a
+  failure is logged by its position in this run (`contact #N`) only.
 """
 
 from __future__ import annotations
@@ -123,6 +147,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionFactory
+from app.modules.auth.repository import AuthRepository
 from app.modules.kcell.models import KcellExtensionAssignment
 from app.modules.sales.models import Call, Lead, Patient
 from app.modules.sales.repository import LOST_LEAD_DAYS
@@ -352,6 +377,14 @@ async def backfill_tenant(
     now: datetime | None = None,
     dry_run: bool = False,
 ) -> dict[str, int]:
+    # Every query below hits an RLS-protected (FORCE ROW LEVEL SECURITY)
+    # table -- this must be the first thing that touches `session` for this
+    # tenant, or every tenant-scoped SELECT below silently returns zero rows
+    # instead of raising (RLS filters, it doesn't error). Transaction-local
+    # (set_config(..., true)): cleared by the caller's commit()/rollback(),
+    # re-set here again for the next tenant's call.
+    await AuthRepository(session).set_tenant_context(tenant_id)
+
     now = now or datetime.now(UTC)
     events = await _collect_events(session, tenant_id)
     aggregates = merge_contact_events(events)
@@ -363,73 +396,81 @@ async def backfill_tenant(
     totals = {field: 0 for field in STAT_FIELDS}
     totals["contacts_scanned"] = len(aggregates)
 
-    for phone_hash, aggregate in aggregates.items():
+    for index, (phone_hash, aggregate) in enumerate(aggregates.items()):
         try:
-            existing_lead = await session.scalar(
-                select(Lead.id).where(Lead.tenant_id == tenant_id, Lead.external_id == phone_hash)
-            )
-            if existing_lead is not None:
-                totals["skipped_existing_leads"] += 1
-                continue
-
-            outcome = resolve_lead_outcome(
-                patient_matches=patient_matches.get(phone_hash, []),
-                first_contact_at=aggregate.first_at,
-                last_contact_at=aggregate.last_at,
-                now=now,
-            )
-            if outcome is None:
-                totals["skipped_existing_patients"] += 1
-                continue
-            status, patient_id, branch_id = outcome
-
-            assigned_user_id, assignment_status = resolve_assignment(
-                first_source=aggregate.first_source,
-                first_external_user=aggregate.first_external_user,
-                kcell_assignment_by_extension=kcell_assignments,
-                whatsapp_current_assigned_user_id=whatsapp_assignments.get(phone_hash),
-            )
-            if assignment_status == "assigned":
-                totals["assigned"] += 1
-            elif assignment_status == "ambiguous":
-                totals["ambiguous_assignment"] += 1
-            elif assignment_status == "unresolved":
-                totals["unresolved_assignment"] += 1
-
-            if dry_run:
-                totals[status] += 1
-                continue
-
-            statement = (
-                pg_insert(Lead)
-                .values(
-                    id=uuid4(),
-                    tenant_id=tenant_id,
-                    branch_id=branch_id,
-                    patient_id=patient_id,
-                    assigned_user_id=assigned_user_id,
-                    external_id=phone_hash,
-                    source=aggregate.first_source,
-                    status=status,
-                    last_contact_at=aggregate.last_at,
-                    created_at=aggregate.first_at,
+            # A real SQL SAVEPOINT for this phone_hash alone -- see the
+            # module docstring. If anything below raises, only this
+            # savepoint rolls back; the outer per-tenant transaction (and
+            # every phone_hash already processed in it) is unaffected, so
+            # the loop can safely continue and the final commit still
+            # succeeds.
+            async with session.begin_nested():
+                existing_lead = await session.scalar(
+                    select(Lead.id).where(Lead.tenant_id == tenant_id, Lead.external_id == phone_hash)
                 )
-                .on_conflict_do_nothing(index_elements=["tenant_id", "external_id"])
-            )
-            result = await session.execute(statement)
-            if result.rowcount:
-                totals[status] += 1
-            else:
-                # Lost the race against a concurrent writer (live webhook,
-                # or another instance of this same script) between our
-                # existing-lead check and the insert -- not an error.
-                totals["skipped_existing_leads"] += 1
+                if existing_lead is not None:
+                    totals["skipped_existing_leads"] += 1
+                    continue
+
+                outcome = resolve_lead_outcome(
+                    patient_matches=patient_matches.get(phone_hash, []),
+                    first_contact_at=aggregate.first_at,
+                    last_contact_at=aggregate.last_at,
+                    now=now,
+                )
+                if outcome is None:
+                    totals["skipped_existing_patients"] += 1
+                    continue
+                status, patient_id, branch_id = outcome
+
+                assigned_user_id, assignment_status = resolve_assignment(
+                    first_source=aggregate.first_source,
+                    first_external_user=aggregate.first_external_user,
+                    kcell_assignment_by_extension=kcell_assignments,
+                    whatsapp_current_assigned_user_id=whatsapp_assignments.get(phone_hash),
+                )
+                if assignment_status == "assigned":
+                    totals["assigned"] += 1
+                elif assignment_status == "ambiguous":
+                    totals["ambiguous_assignment"] += 1
+                elif assignment_status == "unresolved":
+                    totals["unresolved_assignment"] += 1
+
+                if dry_run:
+                    totals[status] += 1
+                    continue
+
+                statement = (
+                    pg_insert(Lead)
+                    .values(
+                        id=uuid4(),
+                        tenant_id=tenant_id,
+                        branch_id=branch_id,
+                        patient_id=patient_id,
+                        assigned_user_id=assigned_user_id,
+                        external_id=phone_hash,
+                        source=aggregate.first_source,
+                        status=status,
+                        last_contact_at=aggregate.last_at,
+                        created_at=aggregate.first_at,
+                    )
+                    .on_conflict_do_nothing(index_elements=["tenant_id", "external_id"])
+                )
+                result = await session.execute(statement)
+                if result.rowcount:
+                    totals[status] += 1
+                else:
+                    # Lost the race against a concurrent writer (live
+                    # webhook, or another instance of this same script)
+                    # between our existing-lead check and the insert --
+                    # not an error.
+                    totals["skipped_existing_leads"] += 1
         except Exception as exc:  # noqa: BLE001 -- one bad phone must not abort the whole tenant
             totals["errors"] += 1
-            print(
-                f"[backfill_leads] error processing phone_hash={phone_hash[:12]}...: {exc}",
-                file=sys.stderr,
-            )
+            # Never phone_hash, not even truncated -- position in this run
+            # only, so a bad record is still findable without ever writing
+            # PII-adjacent material to a log.
+            print(f"[backfill_leads] error processing contact #{index}: {exc}", file=sys.stderr)
     return totals
 
 

@@ -61,6 +61,10 @@ e.g. a front desk). WhatsApp has no per-message responsible-employee field,
 so `WhatsAppConversation.assigned_user_id`'s *current* state is used as a
 documented best-effort proxy only. See `resolve_assignment` and its tests.
 
+`kcell_extension_assignments` has no UI of its own -- it is populated only
+through `python -m app.cli.manage_kcell_assignments` (`list` /`set` /
+`mark-ambiguous` / `delete`), see "Before running the lead backfill" below.
+
 ### 4. Backfill had no controlled, observable way to run in production
 
 `backfill_leads.py` now supports `--dry-run` (computes and prints every
@@ -193,6 +197,47 @@ described under real concurrent execution or a real process crash. All of
 that requires the manual verification steps below, performed by a human
 with access to the real 1C base — this document does not claim otherwise.
 
+## Before running the lead backfill: configure Kcell extension assignments
+
+`backend/app/cli/backfill_leads.py` resolves a Kcell-sourced lead's
+`assigned_user_id` only from `kcell_extension_assignments` (see problem 3
+above) -- it never guesses from a name, and it never writes to that table
+itself. Run this sequence once per tenant, before the first real (non
+`--dry-run`) backfill, from the same shell that has `DATABASE_URL` pointing
+at that tenant's database (e.g. Render's Shell tab):
+
+```
+# 1. See which Kcell extensions have actually placed calls, and which of
+#    those are already mapped -- run this first, every time.
+python -m app.cli.manage_kcell_assignments list --tenant-slug san-dental
+
+# 2. For each extension listed as unconfigured that has one clear owner,
+#    map it to that person's existing Revora account (same tenant only --
+#    the command refuses a user from any other tenant).
+python -m app.cli.manage_kcell_assignments set --tenant-slug san-dental \
+    --external-user 101 --user-email doctor@example.com
+
+# 3. For an extension with no single owner (e.g. a shared front-desk
+#    line), mark it explicitly rather than leaving it unconfigured -- this
+#    is what makes backfill_leads report it as "ambiguous" instead of
+#    "unresolved", an intentionally different and more informative outcome.
+python -m app.cli.manage_kcell_assignments mark-ambiguous --tenant-slug san-dental \
+    --external-user front-desk
+
+# 4. Re-run list and confirm "Seen in calls but not yet configured" is
+#    either empty or contains only extensions you've deliberately decided
+#    to leave unresolved for now.
+python -m app.cli.manage_kcell_assignments list --tenant-slug san-dental
+```
+
+Only after this -- run `backfill_leads --dry-run` (see problem 4 above),
+review its `assigned` / `unresolved_assignment` / `ambiguous_assignment`
+counts against what step 4 showed, and only then run backfill for real.
+Assignments can be revisited any time afterwards (`set` again to correct a
+mapping, `delete` to revert to unresolved) -- backfill only ever reads this
+table, so changing it later does not touch any Lead already created; it
+only affects the next run.
+
 ## Installing
 
 1. 1C:Enterprise → Configurator → Конфигурация → Расширения → open the
@@ -210,7 +255,10 @@ with access to the real 1C base — this document does not claim otherwise.
 - The custom date-range popover (frontend) only applies once both dates are
   picked and "Применить" is clicked; editing one field alone must not close
   the popover or send a request.
-- Run `python -m app.cli.backfill_leads --tenant-slug san-dental --dry-run`
+- Before the first real backfill for a tenant, run the
+  `manage_kcell_assignments` setup sequence in "Before running the lead
+  backfill" above. Then run
+  `python -m app.cli.backfill_leads --tenant-slug san-dental --dry-run`
   from Render's Shell tab and review the printed statistics before ever
   running it for real.
 - Manually sync a period where you know at least one record was previously

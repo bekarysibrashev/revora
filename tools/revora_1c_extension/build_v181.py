@@ -7,7 +7,11 @@ import re
 import zipfile
 from pathlib import Path
 
-BASE_DIR = Path(".")
+# Resolve every path relative to this script's own location, not the
+# current working directory -- so `python build_v181.py`,
+# `python tools/revora_1c_extension/build_v181.py` from the repo root, and
+# any other invocation directory all find the same source files.
+BASE_DIR = Path(__file__).resolve().parent
 SRC_ZIP = BASE_DIR / "RevoraExtensionReady-v18-complete-sync.zip"
 OUT_ZIP = BASE_DIR / "RevoraExtensionReady-v18.1-complete-sync.zip"
 SERVER_MODULE_PATH = BASE_DIR / "РвОбменСервер.bsl"

@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
-from uuid import uuid4
+from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -12,6 +12,33 @@ from app.cli.backfill_leads import (
     resolve_assignment,
     resolve_lead_outcome,
 )
+
+
+class _FakeSavepoint:
+    """Stand-in for the object session.begin_nested() returns (a real
+    AsyncSessionTransaction backing a SQL SAVEPOINT). A plain pass-through
+    async context manager: does not suppress exceptions, so the caller's
+    own try/except still sees them after the (real) savepoint rollback."""
+
+    async def __aenter__(self) -> "_FakeSavepoint":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+def _session_with_savepoints() -> AsyncMock:
+    """A session mock whose begin_nested() behaves like the real
+    AsyncSession's -- a synchronous method returning a fresh async context
+    manager each call, not itself a coroutine to await. Plain AsyncMock()
+    auto-attributes don't get this right (they'd make begin_nested()
+    something you'd have to await instead), so every test that exercises
+    the per-phone_hash loop (which now runs inside `async with
+    session.begin_nested():`) must build its session with this helper.
+    """
+    session = AsyncMock()
+    session.begin_nested = MagicMock(side_effect=lambda: _FakeSavepoint())
+    return session
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +373,7 @@ async def test_backfill_tenant_dry_run_never_touches_session_execute(monkeypatch
     )
     monkeypatch.setattr(backfill_leads, "_whatsapp_current_assignment", AsyncMock(return_value={}))
 
-    session = AsyncMock()
+    session = _session_with_savepoints()
     session.scalar = AsyncMock(return_value=None)
 
     totals = await backfill_leads.backfill_tenant(session, tenant_id, now=now, dry_run=True)
@@ -354,7 +381,10 @@ async def test_backfill_tenant_dry_run_never_touches_session_execute(monkeypatch
     assert totals["contacts_scanned"] == 1
     assert totals["new"] == 1
     assert totals["ambiguous_assignment"] == 1
-    session.execute.assert_not_called()
+    # The one and only session.execute call is set_tenant_context's
+    # `SELECT set_config('app.tenant_id', ...)` -- dry-run must still never
+    # attempt to write a Lead row.
+    session.execute.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -375,14 +405,16 @@ async def test_backfill_tenant_rerun_is_idempotent_when_lead_already_exists(monk
     monkeypatch.setattr(backfill_leads, "_kcell_assignment_map", AsyncMock(return_value={}))
     monkeypatch.setattr(backfill_leads, "_whatsapp_current_assignment", AsyncMock(return_value={}))
 
-    session = AsyncMock()
+    session = _session_with_savepoints()
     session.scalar = AsyncMock(return_value=uuid4())  # a Lead already exists for this phone
 
     totals = await backfill_leads.backfill_tenant(session, tenant_id, now=now, dry_run=False)
 
     assert totals["skipped_existing_leads"] == 1
     assert totals["new"] == 0
-    session.execute.assert_not_called()
+    # Same as above -- only set_tenant_context's set_config call, never an
+    # INSERT, since the existing-lead check short-circuits first.
+    session.execute.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -396,3 +428,104 @@ async def test_backfill_tenant_empty_tenant_reports_all_zero_stats() -> None:
 
     for field in backfill_leads.STAT_FIELDS:
         assert totals[field] == 0
+
+
+@pytest.mark.asyncio
+async def test_backfill_tenant_sets_tenant_context_before_any_tenant_scoped_query(monkeypatch) -> None:
+    """Every table backfill_tenant touches (calls, patients, leads,
+    whatsapp_conversations, kcell_extension_assignments) has FORCE ROW LEVEL
+    SECURITY -- if app.tenant_id isn't set first, a tenant-scoped SELECT
+    silently returns zero rows instead of raising, rather than failing
+    loudly. set_tenant_context must therefore run strictly before
+    _collect_events, the first tenant-scoped query backfill_tenant issues.
+    """
+    tenant_id = uuid4()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    call_order: list[str] = []
+
+    class _RecordingAuthRepository:
+        def __init__(self, session) -> None:  # noqa: ARG002 -- matches AuthRepository(session)
+            self._session = session
+
+        async def set_tenant_context(self, tenant_id: UUID) -> None:  # noqa: ARG002
+            call_order.append("set_tenant_context")
+
+    async def _fake_collect_events(session, tenant_id):  # noqa: ARG001
+        call_order.append("_collect_events")
+        return []
+
+    async def _fake_patient_matches(session, tenant_id, phone_hashes):  # noqa: ARG001
+        call_order.append("_patient_matches_by_hash")
+        return {}
+
+    async def _fake_kcell_map(session, tenant_id):  # noqa: ARG001
+        call_order.append("_kcell_assignment_map")
+        return {}
+
+    async def _fake_whatsapp_map(session, tenant_id):  # noqa: ARG001
+        call_order.append("_whatsapp_current_assignment")
+        return {}
+
+    monkeypatch.setattr(backfill_leads, "AuthRepository", _RecordingAuthRepository)
+    monkeypatch.setattr(backfill_leads, "_collect_events", _fake_collect_events)
+    monkeypatch.setattr(backfill_leads, "merge_contact_events", lambda events: {})
+    monkeypatch.setattr(backfill_leads, "_patient_matches_by_hash", _fake_patient_matches)
+    monkeypatch.setattr(backfill_leads, "_kcell_assignment_map", _fake_kcell_map)
+    monkeypatch.setattr(backfill_leads, "_whatsapp_current_assignment", _fake_whatsapp_map)
+
+    session = _session_with_savepoints()
+
+    await backfill_leads.backfill_tenant(session, tenant_id, now=now, dry_run=True)
+
+    assert call_order[0] == "set_tenant_context"
+    assert call_order.index("set_tenant_context") < call_order.index("_collect_events")
+
+
+@pytest.mark.asyncio
+async def test_backfill_tenant_savepoint_isolates_one_bad_phone_hash(monkeypatch) -> None:
+    """One phone_hash's insert raising (e.g. a constraint violation) must
+    not poison the outer per-tenant transaction: PostgreSQL would otherwise
+    leave it 'aborted', failing every statement after it including the
+    final commit. Each phone_hash now runs inside its own
+    session.begin_nested() SAVEPOINT -- assert the next phone_hash is still
+    processed and persisted after the first one fails."""
+    tenant_id = uuid4()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    phone_hash_fails = "3" * 64
+    phone_hash_succeeds = "4" * 64
+    aggregate_fails = ContactAggregate(
+        first_at=now - timedelta(days=1), first_source="whatsapp", last_at=now - timedelta(days=1)
+    )
+    aggregate_succeeds = ContactAggregate(
+        first_at=now - timedelta(days=1), first_source="whatsapp", last_at=now - timedelta(days=1)
+    )
+
+    monkeypatch.setattr(backfill_leads, "_collect_events", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        backfill_leads,
+        "merge_contact_events",
+        lambda events: {phone_hash_fails: aggregate_fails, phone_hash_succeeds: aggregate_succeeds},
+    )
+    monkeypatch.setattr(backfill_leads, "_patient_matches_by_hash", AsyncMock(return_value={}))
+    monkeypatch.setattr(backfill_leads, "_kcell_assignment_map", AsyncMock(return_value={}))
+    monkeypatch.setattr(backfill_leads, "_whatsapp_current_assignment", AsyncMock(return_value={}))
+
+    session = _session_with_savepoints()
+    session.scalar = AsyncMock(return_value=None)  # neither phone already has a Lead
+
+    successful_insert_result = MagicMock()
+    successful_insert_result.rowcount = 1
+    session.execute = AsyncMock(
+        side_effect=[
+            None,  # set_tenant_context's SELECT set_config(...)
+            Exception("simulated constraint violation"),  # INSERT for phone_hash_fails
+            successful_insert_result,  # INSERT for phone_hash_succeeds
+        ]
+    )
+
+    totals = await backfill_leads.backfill_tenant(session, tenant_id, now=now, dry_run=False)
+
+    assert totals["contacts_scanned"] == 2
+    assert totals["errors"] == 1
+    assert totals["new"] == 1  # only the second phone_hash's insert actually persisted
+    assert session.execute.call_count == 3
