@@ -27,14 +27,33 @@ class ContactRepository:
         return await self.session.scalar(statement)
 
     async def is_patient(self, tenant_id: UUID, candidates: set[str]) -> bool:
-        # A deleted/inactive 1C patient record must not block a genuine
-        # new_contact classification -- if 1C no longer considers them an
-        # active patient, Revora shouldn't either.
+        """Has this phone number EVER belonged to a 1C patient?
+
+        The rule is deliberately historical, not current. A number the
+        clinic has ever known is not a marketing "new inquiry", even if the
+        1C card behind it has since been deleted, archived or merged away.
+        Filtering on is_active here (as this method used to) resurrected
+        those people as brand-new prospects every time they called back,
+        which inflated "Новые обращения" and mis-attributed advertising
+        spend to contacts the clinic already owned.
+
+        Two consequences of keying on phone_hash alone, accepted knowingly:
+
+        - A merged or tombstoned duplicate card keeps the number known,
+          which is exactly what we want: whichever row survives the merge,
+          and whichever is flagged inactive, the number still resolves.
+        - A shared household number counts as known for everyone using it,
+          so a genuinely new family member calling from it is not counted
+          as a new inquiry. Phone-based identity cannot separate them, and
+          under-counting a number the clinic already has is the safer error
+          than inventing a new patient. (upsert_patient_identities in
+          reports/repository.py deliberately keeps such people as distinct
+          Patient rows, so this is a reporting choice, not data loss.)
+        """
         return bool(await self.session.scalar(
             select(Patient.id).where(
                 Patient.tenant_id == tenant_id,
                 Patient.phone_hash.in_(candidates),
-                Patient.is_active.is_(True),
             ).limit(1)
         ))
 
@@ -215,11 +234,14 @@ class ContactRepository:
     async def summary(self, tenant_id: UUID, date_from: date, date_to: date) -> tuple[int, int, int, int, datetime | None]:
         start = clinic_day_start(date_from)
         end = clinic_day_end_exclusive(date_to)
+        # "Ever in 1C", not "active in 1C" -- the same historical rule
+        # is_patient() applies at classification time. A deactivated or
+        # merged-away card must not turn a long-known number back into a
+        # new inquiry in the reports either, or the two would disagree.
         patient_exists = exists(
             select(Patient.id).where(
                 Patient.tenant_id == tenant_id,
                 Patient.phone_hash == ContactIdentity.phone_hash,
-                Patient.is_active.is_(True),
             )
         )
         is_new = ContactIdentity.was_known_patient.is_(False) & ~patient_exists
@@ -249,11 +271,14 @@ class ContactRepository:
     ) -> list:
         start = clinic_day_start(date_from)
         end = clinic_day_end_exclusive(date_to)
+        # "Ever in 1C", not "active in 1C" -- the same historical rule
+        # is_patient() applies at classification time. A deactivated or
+        # merged-away card must not turn a long-known number back into a
+        # new inquiry in the reports either, or the two would disagree.
         patient_exists = exists(
             select(Patient.id).where(
                 Patient.tenant_id == tenant_id,
                 Patient.phone_hash == ContactIdentity.phone_hash,
-                Patient.is_active.is_(True),
             )
         )
         filters = [
