@@ -42,3 +42,35 @@ class KcellExtensionAssignment(UUIDPrimaryKeyMixin, TenantScopedMixin, Timestamp
     tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     external_user: Mapped[str] = mapped_column(String(150), index=True)
     assigned_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), index=True)
+
+
+class KcellAssignmentAudit(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    """Who changed a Kcell extension mapping, when, and what it was before.
+
+    The mapping decides which employee a lead is attributed to, so it is
+    exactly the kind of setting people later disagree about. Every write
+    through the API leaves a row here, including the backfill runs that
+    apply a mapping to leads created before it existed.
+
+    Deliberately stores no phone number and no phone_hash: an audit trail
+    of configuration changes never needs patient identifiers, and the
+    counts in `details` are enough to reconstruct what a change did.
+    """
+
+    __tablename__ = "kcell_assignment_audits"
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    external_user: Mapped[str] = mapped_column(String(150), index=True)
+    # set | mark_ambiguous | delete | backfill
+    action: Mapped[str] = mapped_column(String(30))
+    previous_assigned_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    new_assigned_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    changed_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    details: Mapped[dict | None] = mapped_column(JSONB)
