@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiBinary } from "@/shared/api-client";
 import { PageHeader } from "@/shared/ui";
 import { KcellAssignments } from "@/modules/admin/components/kcell-assignments";
+import { RevenueReconciliationDiagnostics } from "@/modules/admin/components/revenue-diagnostics";
 
 type Branch = { id:string; name:string; code:string; address:string|null; is_active:boolean };
 type User = { id:string; email:string; full_name:string; role:string; branch_ids:string[]; is_active:boolean };
@@ -60,6 +61,7 @@ function DataImport() {
   }
   return <div className="admin-stack">
     <OfficialReports/>
+    <RevenueReconciliationDiagnostics/>
     <OneCIntegration/>
     <section className="panel"><Step n="1" title="Источник" text="Создайте подключение для таблиц этой клиники."/>
       {connections.data?.items.length?<label>Подключение<select value={connection} onChange={e=>{setConnection(e.target.value);setProfile("")}}><option value="">Выберите источник</option>{connections.data.items.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>:null}
