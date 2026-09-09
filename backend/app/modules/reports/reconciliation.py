@@ -250,3 +250,122 @@ def reconcile_dimension(
         diagnostics=tuple(diagnostics),
         tolerance=tolerance,
     )
+
+
+# --- Verifying the 1C extension's own control run ------------------------
+
+# Extension v18.6 runs the services query a second time with RLS lifted and
+# adopts that result for the breakdowns only when it reproduces the standard
+# report's ИТОГО row. It reports what it did in the snapshot summary, but a
+# claim from the sending side is not evidence: the same decision is re-made
+# here from the raw numbers it sent, so a bug or a changed extension cannot
+# quietly promote an unverified figure into the clinic's reporting.
+
+ORDINARY_ALREADY_RECONCILED = "ordinary_already_reconciled"
+CONTROL_DID_NOT_RUN = "control_did_not_run"
+PRIVILEGED_MODE_NOT_RESTORED = "privileged_mode_not_restored"
+REPORT_TOTALS_INCOMPLETE = "report_totals_incomplete"
+PARTS_DO_NOT_SUM = "parts_do_not_sum"
+CONTROL_MATCHES_REPORT = "control_matches_report"
+
+
+@dataclass(frozen=True)
+class ControlRunVerdict:
+    """Should the privileged control result be trusted for the breakdowns?"""
+
+    accepted: bool
+    reason: str
+    invariants: dict[str, bool]
+
+    @property
+    def cause_proven(self) -> bool:
+        """True only when lifting RLS demonstrably reproduced the report.
+
+        This is the one condition under which "the ordinary query was losing
+        rows to access rights" is a proven statement rather than a guess.
+        """
+        return self.accepted and self.reason == CONTROL_MATCHES_REPORT
+
+
+def _close(left: Decimal, right: Decimal, tolerance: Decimal) -> bool:
+    return abs(Decimal(left) - Decimal(right)) <= tolerance
+
+
+def evaluate_control_run(
+    *,
+    report_quantity: Decimal,
+    report_revenue: Decimal,
+    report_discount: Decimal,
+    report_before_discount: Decimal,
+    ordinary_quantity: Decimal,
+    ordinary_revenue: Decimal,
+    control_ran: bool,
+    control_quantity: Decimal,
+    control_revenue: Decimal,
+    control_before_discount: Decimal,
+    control_mode_restored: bool = True,
+    tolerance: Decimal = TIYN,
+) -> ControlRunVerdict:
+    """Re-derive the extension's adoption decision from the numbers alone.
+
+    Every gate below is a refusal, not a preference. A control run is
+    accepted only when quantity, revenue and before-discount ALL reproduce
+    the report's own ИТОГО row: a result that happens to match on one
+    measure is more dangerous than an honest discrepancy, because it looks
+    like a fix. "Larger" and "closer to the expected figure" are never
+    reasons to accept anything.
+    """
+    invariants: dict[str, bool] = {}
+
+    if not control_ran:
+        return ControlRunVerdict(False, CONTROL_DID_NOT_RUN, invariants)
+    if not control_mode_restored:
+        # A run that left privileged mode switched on is not a result we
+        # are willing to build reporting on, however well its numbers fit.
+        return ControlRunVerdict(False, PRIVILEGED_MODE_NOT_RESTORED, invariants)
+    # A usable yardstick needs services in it. The money may legitimately be
+    # negative -- a period dominated by refunds and reversals is still a
+    # period, and refusing it here would silently exempt exactly the cases
+    # most worth checking.
+    # A usable yardstick needs services in it. The money may legitimately be
+    # negative -- a period dominated by refunds and reversals is still a
+    # period, and requiring a positive total here would silently exempt
+    # exactly the cases most worth checking.
+    if report_quantity <= 0:
+        return ControlRunVerdict(False, REPORT_TOTALS_INCOMPLETE, invariants)
+
+    parts_sum = _close(
+        Decimal(report_revenue) + Decimal(report_discount),
+        Decimal(report_before_discount),
+        tolerance,
+    )
+    invariants["report_parts_sum"] = parts_sum
+    if not parts_sum:
+        # The ИТОГО row is not "count | cost | discount | gross" after all,
+        # so we do not know which of its numbers to compare against.
+        return ControlRunVerdict(False, PARTS_DO_NOT_SUM, invariants)
+
+    ordinary_ok = _close(ordinary_quantity, report_quantity, tolerance) and _close(
+        ordinary_revenue, report_revenue, tolerance
+    )
+    invariants["ordinary_matches_report"] = ordinary_ok
+    if ordinary_ok:
+        # Nothing was lost, so there is nothing for a privileged run to fix.
+        return ControlRunVerdict(False, ORDINARY_ALREADY_RECONCILED, invariants)
+
+    invariants["control_quantity"] = _close(control_quantity, report_quantity, tolerance)
+    invariants["control_revenue"] = _close(control_revenue, report_revenue, tolerance)
+    invariants["control_before_discount"] = _close(
+        control_before_discount, report_before_discount, tolerance
+    )
+
+    checks = (
+        "control_quantity",
+        "control_revenue",
+        "control_before_discount",
+    )
+    failed = [name for name in checks if not invariants[name]]
+    if failed:
+        return ControlRunVerdict(False, f"control_mismatch:{','.join(failed)}", invariants)
+
+    return ControlRunVerdict(True, CONTROL_MATCHES_REPORT, invariants)
