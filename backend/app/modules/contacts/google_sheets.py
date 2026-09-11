@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 DEFAULT_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _TOKEN_LIFETIME_SECONDS = 3600
 _TOKEN_REFRESH_MARGIN_SECONDS = 60
@@ -105,20 +106,20 @@ def _hex_to_color(hex_color: str) -> dict[str, float]:
     return {"red": red, "green": green, "blue": blue}
 
 
-class GoogleSheetsClient:
-    """Minimal async Sheets v4 client authenticated as a service account."""
+class _ServiceAccountToken:
+    """Signs and caches an OAuth access token for one service account + scope.
 
-    def __init__(
-        self,
-        *,
-        credentials_json: str,
-        spreadsheet_id: str,
-        sheet_name: str,
-        transport: httpx.BaseTransport | None = None,
-    ) -> None:
-        # transport is test-only: it lets unit tests inject an httpx.MockTransport
-        # instead of making real calls to Google. Production never sets it.
-        self._transport = transport
+    Shared by GoogleSheetsClient (append access, "spreadsheets" scope) and
+    GoogleDriveReader (read-only export, "drive.readonly" scope) so the JWT
+    signing/token-exchange code -- the only genuinely fiddly part -- exists
+    once. The scope only decides which Google API the resulting token is
+    *accepted* by; it grants nothing by itself. What actually gates access is
+    which files the service account's own email has been shared on, and with
+    what role (Editor vs Viewer) -- that permission lives entirely on
+    Google's side, per file.
+    """
+
+    def __init__(self, credentials_json: str, scope: str) -> None:
         try:
             credentials = json.loads(credentials_json)
         except (TypeError, ValueError) as exc:
@@ -133,19 +134,17 @@ class GoogleSheetsClient:
                 f"service account JSON is missing required field {exc}"
             ) from exc
         self._token_uri = credentials.get("token_uri", DEFAULT_TOKEN_URL)
-        self._spreadsheet_id = spreadsheet_id
-        self._sheet_name = sheet_name
+        self._scope = scope
         self._cached_token: str | None = None
         self._cached_token_expires_at: float = 0.0
-        self._sheet_id: int | None = None
 
-    async def _access_token(self, client: httpx.AsyncClient) -> str:
+    async def get(self, client: httpx.AsyncClient) -> str:
         now = time.time()
         if self._cached_token and now < self._cached_token_expires_at - _TOKEN_REFRESH_MARGIN_SECONDS:
             return self._cached_token
         claims = {
             "iss": self._client_email,
-            "scope": SHEETS_SCOPE,
+            "scope": self._scope,
             "aud": self._token_uri,
             "iat": int(now),
             "exp": int(now) + _TOKEN_LIFETIME_SECONDS,
@@ -173,6 +172,88 @@ class GoogleSheetsClient:
             payload.get("expires_in", _TOKEN_LIFETIME_SECONDS)
         )
         return self._cached_token
+
+
+class GoogleDriveReader:
+    """Fetches one Google Sheet the service account can only *view*, as XLSX.
+
+    Deliberately has no method that could write anything -- it only ever
+    issues GET requests. Read-only is enforced twice over: this class never
+    calls a write endpoint, and even if it did, Google would reject it,
+    because the clinic shares the knowledge-base sheet with the service
+    account as Viewer, not Editor (a separate, unrelated sheet -- the
+    new-contacts report -- is shared as Editor for GoogleSheetsClient above;
+    Google permissions are per file, so that grant has no effect here).
+    """
+
+    def __init__(
+        self, *, credentials_json: str, transport: httpx.BaseTransport | None = None
+    ) -> None:
+        self._transport = transport
+        self._auth = _ServiceAccountToken(credentials_json, DRIVE_READONLY_SCOPE)
+
+    async def export_xlsx(self, spreadsheet_id: str) -> bytes:
+        url = f"https://www.googleapis.com/drive/v3/files/{quote(spreadsheet_id, safe='')}/export"
+        async with httpx.AsyncClient(timeout=30, transport=self._transport) as client:
+            token = await self._auth.get(client)
+            response = await client.get(
+                url,
+                params={
+                    "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.status_code == 404:
+                raise GoogleSheetsSyncError(
+                    "Таблица не найдена -- проверьте ссылку"
+                )
+            if response.status_code == 403:
+                raise GoogleSheetsSyncError(
+                    "Нет доступа -- откройте доступ по email сервисного аккаунта (роль: Читатель)"
+                )
+            if response.status_code >= 400:
+                raise GoogleSheetsSyncError(
+                    f"Google Drive export failed: {response.status_code} {response.text[:300]}"
+                )
+            return response.content
+
+
+_SPREADSHEET_ID_PATTERN = re.compile(r"/spreadsheets/d/([a-zA-Z0-9_-]+)")
+
+
+def extract_spreadsheet_id(value: str) -> str:
+    """Accept either a full Google Sheets URL or a bare spreadsheet id."""
+
+    value = value.strip()
+    match = _SPREADSHEET_ID_PATTERN.search(value)
+    if match:
+        return match.group(1)
+    if re.fullmatch(r"[a-zA-Z0-9_-]{20,80}", value):
+        return value
+    raise GoogleSheetsSyncError("Не похоже на ссылку или ID таблицы Google Sheets")
+
+
+class GoogleSheetsClient:
+    """Minimal async Sheets v4 client authenticated as a service account."""
+
+    def __init__(
+        self,
+        *,
+        credentials_json: str,
+        spreadsheet_id: str,
+        sheet_name: str,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        # transport is test-only: it lets unit tests inject an httpx.MockTransport
+        # instead of making real calls to Google. Production never sets it.
+        self._transport = transport
+        self._auth = _ServiceAccountToken(credentials_json, SHEETS_SCOPE)
+        self._spreadsheet_id = spreadsheet_id
+        self._sheet_name = sheet_name
+        self._sheet_id: int | None = None
+
+    async def _access_token(self, client: httpx.AsyncClient) -> str:
+        return await self._auth.get(client)
 
     async def append_row(self, values: list[object]) -> None:
         """Append one row to the configured tab. Raises on a failed append.
@@ -287,6 +368,37 @@ def _cached_client(credentials_json: str, spreadsheet_id: str, sheet_name: str) 
     return GoogleSheetsClient(
         credentials_json=credentials_json, spreadsheet_id=spreadsheet_id, sheet_name=sheet_name
     )
+
+
+def get_service_account_email(settings: "Settings") -> str | None:
+    """The service account's own email, so the UI can tell an owner who to
+    share a sheet with. Returns None while the integration isn't configured."""
+
+    credentials_json = settings.google_sheets_service_account_json.get_secret_value()
+    if not credentials_json:
+        return None
+    try:
+        return json.loads(credentials_json).get("client_email")
+    except (TypeError, ValueError):
+        return None
+
+
+def get_google_drive_reader(settings: "Settings") -> GoogleDriveReader | None:
+    """Return a read-only reader using the same service account as above.
+
+    Uses the same credentials as get_google_sheets_client -- the identity is
+    shared, but this reader is never given a spreadsheet id it's allowed to
+    write to, and only ever calls the export endpoint.
+    """
+
+    credentials_json = settings.google_sheets_service_account_json.get_secret_value()
+    if not credentials_json:
+        return None
+    try:
+        return GoogleDriveReader(credentials_json=credentials_json)
+    except GoogleSheetsCredentialsError:
+        logger.error("Google Sheets sync is configured but the credentials are invalid", exc_info=True)
+        return None
 
 
 def get_google_sheets_client(settings: "Settings") -> GoogleSheetsClient | None:

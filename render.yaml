@@ -99,7 +99,7 @@ services:
       - key: WHATSAPP_ACCESS_TOKEN
         sync: false
       - key: WHATSAPP_DATA_KEY
-        sync: false
+        generateValue: true
       - key: META_APP_ID
         value: "965678616515017"
       - key: WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID
@@ -132,6 +132,12 @@ services:
           envVarKey: WHATSAPP_QR_GATEWAY_SECRET
       - key: WHATSAPP_ADMIN_PAUSE_MINUTES
         value: "60"
+      - key: EMBEDDED_WHATSAPP_OPERATIONS_WORKER
+        value: "true"
+      - key: WHATSAPP_OPERATIONS_INTERVAL_SECONDS
+        value: "5"
+      - key: WHATSAPP_DELIVERY_MAX_ATTEMPTS
+        value: "5"
 
   - type: worker
     name: revora-san-telegram
@@ -205,6 +211,8 @@ services:
           envVarKey: RENDER_EXTERNAL_URL
       - key: WHATSAPP_QR_GATEWAY_SECRET
         generateValue: true
+      - key: WHATSAPP_MAX_MEDIA_BYTES
+        value: "8000000"
 
 databases:
   - name: revora-san-db

@@ -27,6 +27,8 @@ from app.modules.whatsapp.schemas import (
     EmbeddedSignupCompleteRequest,
     KnowledgeCreateRequest,
     KnowledgeUpdateRequest,
+    WhatsAppGatewayHeartbeat,
+    WhatsAppQrMessageEvent,
 )
 
 
@@ -141,6 +143,39 @@ def test_coexistence_history_payload_helpers_preserve_text_and_media() -> None:
     assert _message_body({"type": "image", "image": {"caption": "Scan"}}) == "Scan"
     assert _message_body({"type": "video", "video": {}}) == "[video]"
     assert _message_body({"type": "revoke", "revoke": {}}) is None
+
+
+def test_qr_gateway_payload_supports_monitoring_and_encrypted_media_ingest() -> None:
+    heartbeat = WhatsAppGatewayHeartbeat(
+        state="connected",
+        connected=True,
+        phone="77001234567",
+        messages_forwarded=15,
+        history_messages_forwarded=10,
+        logs=[
+            {
+                "level": "info",
+                "event": "connected",
+                "message": "WhatsApp connected",
+                "timestamp": 1789090000,
+            }
+        ],
+    )
+    message = WhatsAppQrMessageEvent(
+        id="message-1",
+        chat_id="77007654321",
+        direction="in",
+        message_type="audio",
+        body="[Голосовое сообщение]",
+        media_base64="dGVzdA==",
+        media_mime_type="audio/ogg",
+        media_filename="voice.ogg",
+    )
+
+    assert heartbeat.connected is True
+    assert heartbeat.logs[0].event == "connected"
+    assert message.media_base64 == "dGVzdA=="
+    assert message.message_type == "audio"
 
 
 @pytest.mark.asyncio

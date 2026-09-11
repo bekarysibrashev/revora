@@ -50,7 +50,10 @@ from app.modules.whatsapp.models import (
     WhatsAppAIUsage,
     WhatsAppChannel,
     WhatsAppConversation,
+    WhatsAppGatewayHealth,
+    WhatsAppGatewayLog,
     WhatsAppKnowledgeItem,
+    WhatsAppKnowledgeSheet,
     WhatsAppMessage,
     WhatsAppQrSession,
 )

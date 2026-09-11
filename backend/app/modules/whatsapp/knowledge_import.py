@@ -27,12 +27,30 @@ PROMOTIONAL_MARKERS = (
 EXCLUDED_SHEET_PATTERN = re.compile(r"^ЛИСТ\s*\d+$", re.IGNORECASE)
 
 
-def import_knowledge_workbook(data: bytes, filename: str) -> list[ImportedKnowledge]:
+def import_knowledge_workbook(
+    data: bytes, filename: str, only_sheets: set[str] | None = None
+) -> list[ImportedKnowledge]:
+    """Parse a workbook (or a Google Sheet exported as one) into rows.
+
+    only_sheets, when given, is a set of sheet-title strings (case- and
+    whitespace-insensitive -- comparison uses .strip().upper()) that limits
+    parsing to exactly those tabs. A source workbook is often a shared
+    multi-purpose file (AMO CRM export, staff records, broadcast templates
+    alongside the actual patient-facing Q&A) -- this lets an admin point
+    the bot at only the tab(s) meant to answer patients, ignoring the rest
+    of the workbook entirely, rather than relying only on the promotional
+    and Лист-N heuristics below.
+    """
     workbook = load_workbook(BytesIO(data), read_only=True, data_only=True)
+    normalized_only_sheets = (
+        {name.strip().upper() for name in only_sheets} if only_sheets else None
+    )
     result: list[ImportedKnowledge] = []
     for sheet in workbook.worksheets:
         category = str(sheet.title).strip()
         if EXCLUDED_SHEET_PATTERN.fullmatch(category):
+            continue
+        if normalized_only_sheets is not None and category.upper() not in normalized_only_sheets:
             continue
         for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
             cells = [_clean(cell) for cell in row]

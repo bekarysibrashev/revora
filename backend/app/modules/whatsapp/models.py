@@ -64,6 +64,17 @@ class WhatsAppMessage(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Ba
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False)
     provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivery_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_delivery_error: Mapped[str | None] = mapped_column(String(500))
+    media_mime_type: Mapped[str | None] = mapped_column(String(120))
+    media_filename: Mapped[str | None] = mapped_column(String(255))
+    media_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    media_ciphertext: Mapped[str | None] = mapped_column(Text)
+    transcript_ciphertext: Mapped[str | None] = mapped_column(Text)
+    transcription_status: Mapped[str | None] = mapped_column(String(30), index=True)
+    transcription_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    transcription_error: Mapped[str | None] = mapped_column(String(500))
 
 
 class WhatsAppKnowledgeItem(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
@@ -81,6 +92,32 @@ class WhatsAppKnowledgeItem(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMix
     is_approved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     approved_by_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WhatsAppKnowledgeSheet(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    """A Google Sheet the tenant shared read-only with Revora's service
+    account, kept in sync into WhatsAppKnowledgeItem rows on a schedule (or
+    on demand). One row per tenant -- connecting a new sheet replaces it."""
+
+    __tablename__ = "whatsapp_knowledge_sheets"
+    __table_args__ = (UniqueConstraint("tenant_id"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    spreadsheet_id: Mapped[str] = mapped_column(String(200))
+    sheet_url: Mapped[str] = mapped_column(String(500))
+    # Empty means "every tab except the promotional/Лист-N ones" (legacy
+    # behaviour); non-empty limits sync to exactly these tab names -- see
+    # import_knowledge_workbook(only_sheets=...).
+    sheet_names: Mapped[list] = mapped_column(JSONB, default=list)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_status: Mapped[str | None] = mapped_column(String(20))
+    last_sync_error: Mapped[str | None] = mapped_column(String(500))
+    last_sync_imported: Mapped[int] = mapped_column(Integer, default=0)
+    last_sync_updated: Mapped[int] = mapped_column(Integer, default=0)
+    last_sync_auto_approved: Mapped[int] = mapped_column(Integer, default=0)
+    last_sync_review_required: Mapped[int] = mapped_column(Integer, default=0)
+    last_sync_human_only: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class WhatsAppAIUsage(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
@@ -106,3 +143,41 @@ class WhatsAppQrSession(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
         PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
     archive_ciphertext: Mapped[str] = mapped_column(Text)
+
+
+class WhatsAppGatewayHealth(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    """Last durable heartbeat from the Baileys process serving a tenant."""
+
+    __tablename__ = "whatsapp_gateway_health"
+    __table_args__ = (UniqueConstraint("tenant_id"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    state: Mapped[str] = mapped_column(String(40), default="unknown", index=True)
+    connected: Mapped[bool] = mapped_column(Boolean, default=False)
+    phone_masked: Mapped[str | None] = mapped_column(String(30))
+    gateway_version: Mapped[str | None] = mapped_column(String(40))
+    instance_id: Mapped[str | None] = mapped_column(String(100))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_history_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    messages_forwarded: Mapped[int] = mapped_column(Integer, default=0)
+    history_messages_forwarded: Mapped[int] = mapped_column(Integer, default=0)
+    reconnect_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class WhatsAppGatewayLog(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    """Bounded operational log copied from Baileys into Revora."""
+
+    __tablename__ = "whatsapp_gateway_logs"
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), index=True
+    )
+    level: Mapped[str] = mapped_column(String(20), default="info", index=True)
+    event: Mapped[str] = mapped_column(String(80), default="gateway")
+    message: Mapped[str] = mapped_column(String(500))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

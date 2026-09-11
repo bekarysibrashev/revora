@@ -240,14 +240,15 @@ async def test_append_row_does_not_raise_when_highlighting_the_row_fails() -> No
 
 
 class _FakeContactRepository:
-    def __init__(self) -> None:
+    def __init__(self, *, patient: bool = False) -> None:
         self.items: dict = {}
+        self.patient = patient
 
     async def identity(self, tenant_id, digest, *, lock=False):
         return self.items.get((tenant_id, digest))
 
     async def is_patient(self, tenant_id, candidates):
-        return False
+        return self.patient
 
     async def prior_inbound(self, tenant_id, candidates):
         return (None, None)
@@ -297,19 +298,58 @@ async def test_registry_appends_a_row_only_for_a_brand_new_contact() -> None:
 async def test_registry_never_raises_when_the_sheet_sync_fails() -> None:
     registry = ContactRegistry(_FakeContactRepository(), sheets_client=_RecordingSheetsClient(fail=True))
 
-    item = await registry.register_inbound(
+    result = await registry.register_inbound(
         tenant_id=uuid4(), phone="87012345678", source="kcell", occurred_at=datetime(2026, 1, 1, tzinfo=UTC)
     )
 
-    assert item is not None  # the webhook's own result is unaffected
+    assert result.identity is not None  # the webhook's own result is unaffected
+    assert result.classification == "new_contact"
 
 
 @pytest.mark.asyncio
 async def test_registry_is_a_no_op_without_a_configured_sheets_client() -> None:
     registry = ContactRegistry(_FakeContactRepository())  # sheets_client defaults to None
 
-    item = await registry.register_inbound(
+    result = await registry.register_inbound(
         tenant_id=uuid4(), phone="87012345678", source="kcell", occurred_at=datetime(2026, 1, 1, tzinfo=UTC)
     )
 
-    assert item is not None
+    assert result.identity is not None
+
+
+@pytest.mark.asyncio
+async def test_registry_does_not_log_an_existing_1c_patients_first_call_as_a_new_contact() -> None:
+    """The business rule from the task: a phone new to Revora is only a real
+    new_contact if it is ALSO absent from 1C. An existing patient calling in
+    for the first time on this channel must not create a Sheets row."""
+    sheets_client = _RecordingSheetsClient()
+    registry = ContactRegistry(_FakeContactRepository(patient=True), sheets_client=sheets_client)
+
+    result = await registry.register_inbound(
+        tenant_id=uuid4(), phone="87012345678", source="kcell", occurred_at=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    assert result.classification == "existing_1c_patient"
+    assert result.identity is not None
+    assert result.identity.was_known_patient is True
+    assert sheets_client.rows == []
+
+
+@pytest.mark.asyncio
+async def test_registry_classifies_a_second_contact_as_repeat_not_new() -> None:
+    sheets_client = _RecordingSheetsClient()
+    registry = ContactRegistry(_FakeContactRepository(), sheets_client=sheets_client)
+    tenant_id = uuid4()
+
+    first = await registry.register_inbound(
+        tenant_id=tenant_id, phone="87012345678", source="whatsapp",
+        occurred_at=datetime(2026, 3, 4, 9, tzinfo=UTC),
+    )
+    second = await registry.register_inbound(
+        tenant_id=tenant_id, phone="87012345678", source="whatsapp",
+        occurred_at=datetime(2026, 3, 4, 10, tzinfo=UTC),
+    )
+
+    assert first.classification == "new_contact"
+    assert second.classification == "repeat_contact"
+    assert len(sheets_client.rows) == 1

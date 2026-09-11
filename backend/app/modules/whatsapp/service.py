@@ -1,3 +1,4 @@
+import base64
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -8,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import AppError
-from app.modules.contacts.google_sheets import get_google_sheets_client
+from app.modules.contacts.google_sheets import (
+    GoogleSheetsSyncError,
+    extract_spreadsheet_id,
+    get_google_drive_reader,
+    get_google_sheets_client,
+    get_service_account_email,
+)
 from app.modules.contacts.repository import ContactRepository
 from app.modules.contacts.service import ContactRegistry
 from app.modules.auth.models import User, UserRole
@@ -29,6 +36,7 @@ from app.modules.whatsapp.models import (
     WhatsAppChannel,
     WhatsAppConversation,
     WhatsAppKnowledgeItem,
+    WhatsAppKnowledgeSheet,
     WhatsAppMessage,
 )
 from app.modules.whatsapp.schemas import (
@@ -38,6 +46,7 @@ from app.modules.whatsapp.schemas import (
     KnowledgeImportResponse,
     KnowledgeCreateRequest,
     KnowledgeItemResponse,
+    KnowledgeSheetResponse,
     KnowledgeListResponse,
     KnowledgeUpdateRequest,
     SimulatorMessageResponse,
@@ -93,6 +102,13 @@ class WhatsAppService:
                 ),
             )
         ) or 0
+        automatic_channels = await self.session.scalar(
+            select(func.count()).select_from(WhatsAppChannel).where(
+                WhatsAppChannel.tenant_id == tenant,
+                WhatsAppChannel.is_active.is_(True),
+                WhatsAppChannel.bot_mode == "auto",
+            )
+        ) or 0
         setup_values = {
             "META_APP_ID": self.settings.meta_app_id,
             "WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID": (
@@ -134,7 +150,7 @@ class WhatsAppService:
             ),
             connection_missing=connection_missing,
             ai_provider=self.settings.whatsapp_ai_provider,
-            auto_send=self.settings.whatsapp_ai_auto_send,
+            auto_send=bool(automatic_channels),
             monthly_budget_kzt=self.settings.whatsapp_monthly_budget_kzt,
             estimated_spend_kzt=spend,
             channels=channels,
@@ -252,7 +268,12 @@ class WhatsAppService:
                         WhatsAppMessage.tenant_id == user.tenant_id,
                         WhatsAppMessage.conversation_id == item.id,
                     )
-                    .order_by(WhatsAppMessage.created_at)
+                    .order_by(
+                        func.coalesce(
+                            WhatsAppMessage.provider_timestamp,
+                            WhatsAppMessage.created_at,
+                        )
+                    )
                     .limit(300)
                 )
             ).all()
@@ -269,6 +290,15 @@ class WhatsAppService:
                     status=message.status,
                     is_draft=message.is_draft,
                     created_at=message.created_at,
+                    message_type=message.message_type,
+                    media_available=bool(message.media_ciphertext),
+                    media_filename=message.media_filename,
+                    media_mime_type=message.media_mime_type,
+                    transcript=self._decrypt_message(message.transcript_ciphertext),
+                    transcription_status=message.transcription_status,
+                    transcription_error=message.transcription_error,
+                    delivery_attempts=message.delivery_attempts,
+                    last_delivery_error=message.last_delivery_error,
                 )
                 for message in messages
             ],
@@ -298,6 +328,10 @@ class WhatsAppService:
         body: str,
         simulated: bool,
         provider_timestamp: datetime | None = None,
+        message_type: str = "text",
+        media_base64: str | None = None,
+        media_mime_type: str | None = None,
+        media_filename: str | None = None,
     ) -> SimulatorMessageResponse:
         duplicate = await self.session.scalar(
             select(WhatsAppMessage).where(
@@ -336,6 +370,12 @@ class WhatsAppService:
         if any(character in body.lower() for character in "әіңғүұқөһ"):
             conversation.language = "kk"
         conversation.unread_count += 1
+        media_size = None
+        if media_base64:
+            try:
+                media_size = len(base64.b64decode(media_base64, validate=True))
+            except ValueError as exc:
+                raise AppError("WHATSAPP_MEDIA_INVALID", "Invalid WhatsApp attachment", 422) from exc
         self.session.add(
             WhatsAppMessage(
                 tenant_id=tenant_id,
@@ -343,9 +383,15 @@ class WhatsAppService:
                 external_message_id=external_message_id,
                 direction="in",
                 sender_kind="patient",
+                message_type=message_type,
                 body_ciphertext=self._encrypt_message(body),
                 status="received",
                 provider_timestamp=provider_timestamp,
+                media_mime_type=media_mime_type,
+                media_filename=media_filename,
+                media_size_bytes=media_size,
+                media_ciphertext=self._encrypt_message(media_base64) if media_base64 else None,
+                transcription_status="queued" if message_type == "audio" and media_base64 else None,
             )
         )
         await self.session.flush()
@@ -380,7 +426,17 @@ class WhatsAppService:
                 provider="paused",
                 cost_kzt=Decimal("0"),
             )
-        decision, provider, cost = await self._decide(tenant_id, conversation, body)
+        if message_type != "text":
+            decision = rules_decision(None).model_copy(
+                update={
+                    "reply": "Сообщение и вложение сохранены. Передаю администратору.",
+                    "handoff": True,
+                    "handoff_reason": "Пациент отправил вложение или голосовое сообщение",
+                }
+            )
+            provider, cost = "media-handoff", Decimal("0")
+        else:
+            decision, provider, cost = await self._decide(tenant_id, conversation, body)
         if decision.handoff:
             conversation.state = "human_requested"
             conversation.handoff_reason = decision.handoff_reason
@@ -391,16 +447,26 @@ class WhatsAppService:
             direction="out",
             sender_kind="bot",
             body_ciphertext=self._encrypt_message(decision.reply),
-            status="simulated" if simulated else "draft",
-            is_draft=not simulated,
+            status=(
+                "simulated"
+                if simulated
+                else "queued"
+                if channel.bot_mode == "auto"
+                else "draft"
+            ),
+            is_draft=(
+                not simulated
+                and channel.bot_mode != "auto"
+            ),
+            next_delivery_at=(
+                datetime.now(UTC)
+                if not simulated
+                and channel.bot_mode == "auto"
+                else None
+            ),
         )
         self.session.add(outbound)
         await self.session.flush()
-        if not simulated and self.settings.whatsapp_ai_auto_send:
-            await self._send(channel, contact_id, decision.reply)
-            outbound.status = "sent"
-            outbound.is_draft = False
-            outbound.sent_at = now
         return SimulatorMessageResponse(
             conversation_id=conversation.id,
             state=conversation.state,
@@ -423,6 +489,9 @@ class WhatsAppService:
         body: str | None,
         provider_timestamp: datetime | None,
         status: str = "synced",
+        media_base64: str | None = None,
+        media_mime_type: str | None = None,
+        media_filename: str | None = None,
     ) -> None:
         duplicate = await self.session.scalar(
             select(WhatsAppMessage.id).where(
@@ -454,6 +523,12 @@ class WhatsAppService:
             or occurred_at > conversation.last_patient_message_at
         ):
             conversation.last_patient_message_at = occurred_at
+        media_size = None
+        if media_base64:
+            try:
+                media_size = len(base64.b64decode(media_base64, validate=True))
+            except ValueError as exc:
+                raise AppError("WHATSAPP_MEDIA_INVALID", "Invalid WhatsApp attachment", 422) from exc
         self.session.add(
             WhatsAppMessage(
                 tenant_id=tenant_id,
@@ -467,6 +542,11 @@ class WhatsAppService:
                 is_draft=False,
                 provider_timestamp=provider_timestamp,
                 sent_at=occurred_at if direction == "out" else None,
+                media_mime_type=media_mime_type,
+                media_filename=media_filename,
+                media_size_bytes=media_size,
+                media_ciphertext=self._encrypt_message(media_base64) if media_base64 else None,
+                transcription_status="queued" if message_type == "audio" and media_base64 else None,
             )
         )
         if direction == "out" and status not in {"bot_echo", "history"}:
@@ -504,19 +584,12 @@ class WhatsAppService:
             direction="out",
             sender_kind="human",
             body_ciphertext=self._encrypt_message(body),
-            status="simulated" if channel.phone_number_id == "simulator" else "sending",
+            status="simulated" if channel.phone_number_id == "simulator" else "queued",
             sent_at=now if channel.phone_number_id == "simulator" else None,
+            next_delivery_at=now if channel.phone_number_id != "simulator" else None,
         )
         self.session.add(message)
         await self.session.flush()
-        if channel.phone_number_id != "simulator":
-            contact = decrypt_contact(
-                item.contact_ciphertext,
-                self.settings.whatsapp_data_key.get_secret_value(),
-            )
-            await self._send(channel, contact, body)
-            message.status = "sent"
-            message.sent_at = now
         return MessageItem(
             id=message.id,
             direction=message.direction,
@@ -525,7 +598,28 @@ class WhatsAppService:
             status=message.status,
             is_draft=message.is_draft,
             created_at=message.created_at,
+            message_type=message.message_type,
+            media_available=False,
+            delivery_attempts=message.delivery_attempts,
+            last_delivery_error=message.last_delivery_error,
         )
+
+    async def set_bot_mode(self, user: User, auto_send: bool) -> WhatsAppStatusResponse:
+        self._owner(user)
+        channels = list(
+            (
+                await self.session.scalars(
+                    select(WhatsAppChannel).where(
+                        WhatsAppChannel.tenant_id == user.tenant_id,
+                        WhatsAppChannel.is_active.is_(True),
+                    )
+                )
+            ).all()
+        )
+        for channel in channels:
+            channel.bot_mode = "auto" if auto_send else "draft"
+        await self.session.flush()
+        return await self.status(user)
 
     async def import_knowledge(self, user: User, data: bytes, filename: str) -> KnowledgeImportResponse:
         self._owner(user)
@@ -535,48 +629,212 @@ class WhatsAppService:
             rows = import_knowledge_workbook(data, filename)
         except Exception as exc:
             raise AppError("KNOWLEDGE_FILE_INVALID", "Could not read the XLSX workbook", 422) from exc
+        return await self._ingest_rows(
+            tenant_id=user.tenant_id, rows=rows, approved_by_id=user.id
+        )
+
+    async def _ingest_rows(
+        self,
+        *,
+        tenant_id: UUID,
+        rows: list,
+        approved_by_id: UUID | None,
+    ) -> KnowledgeImportResponse:
+        """Insert brand-new rows and refresh ones that already exist.
+
+        The admin curates the source (workbook or sheet) themselves before
+        it reaches Revora, so a row is trusted and goes live immediately --
+        except anything the importer flagged as promotional/human_only,
+        which always needs a human to look at it before the bot can use it
+        with patients. Re-running this with the same source content is a
+        no-op; re-running it after the source changed updates the matching
+        item in place instead of leaving a stale duplicate. A row that
+        disappears from the source entirely is left alone -- this never
+        deletes or disables existing knowledge on its own.
+        """
         sources = [row.source for row in rows]
-        existing_sources = set(
-            (
+        existing_by_source = {
+            item.source: item
+            for item in (
                 await self.session.scalars(
-                    select(WhatsAppKnowledgeItem.source).where(
-                        WhatsAppKnowledgeItem.tenant_id == user.tenant_id,
+                    select(WhatsAppKnowledgeItem).where(
+                        WhatsAppKnowledgeItem.tenant_id == tenant_id,
                         WhatsAppKnowledgeItem.source.in_(sources),
                     )
                 )
             ).all()
-        ) if sources else set()
-        new_rows = [row for row in rows if row.source not in existing_sources]
+        } if sources else {}
         now = datetime.now(UTC)
-        auto_approved_count = 0
-        for row in new_rows:
-            # The admin curates the workbook itself before uploading it, so a
-            # row is trusted and goes live immediately -- except anything the
-            # importer flagged as promotional/human_only, which always needs
-            # a human to look at it before the bot can use it with patients.
-            auto_approved = row.risk_level != "human_only"
-            if auto_approved:
-                auto_approved_count += 1
-            self.session.add(
-                WhatsAppKnowledgeItem(
-                    tenant_id=user.tenant_id,
-                    category=row.category,
-                    title=row.title,
-                    content_ru=row.content_ru,
-                    content_kk=row.content_kk,
-                    keywords=[],
-                    risk_level=row.risk_level,
-                    source=row.source,
-                    is_approved=auto_approved,
-                    approved_by_id=user.id if auto_approved else None,
-                    approved_at=now if auto_approved else None,
+        imported = updated = auto_approved = review_required = human_only = 0
+        for row in rows:
+            is_human_only = row.risk_level == "human_only"
+            current = existing_by_source.get(row.source)
+            if current is None:
+                auto_approve_now = not is_human_only
+                self.session.add(
+                    WhatsAppKnowledgeItem(
+                        tenant_id=tenant_id,
+                        category=row.category,
+                        title=row.title,
+                        content_ru=row.content_ru,
+                        content_kk=row.content_kk,
+                        keywords=[],
+                        risk_level=row.risk_level,
+                        source=row.source,
+                        is_approved=auto_approve_now,
+                        approved_by_id=approved_by_id if auto_approve_now else None,
+                        approved_at=now if auto_approve_now else None,
+                    )
                 )
-            )
+                imported += 1
+            else:
+                changed = (
+                    current.category != row.category
+                    or current.title != row.title
+                    or current.content_ru != row.content_ru
+                    or current.content_kk != row.content_kk
+                    or current.risk_level != row.risk_level
+                )
+                if not changed:
+                    continue
+                current.category = row.category
+                current.title = row.title
+                current.content_ru = row.content_ru
+                current.content_kk = row.content_kk
+                current.risk_level = row.risk_level
+                if is_human_only:
+                    # The edited content now reads as promotional/admin-only
+                    # -- always re-require a human look, even if it was
+                    # approved before under its old wording.
+                    current.is_approved = False
+                else:
+                    current.is_approved = True
+                    current.approved_by_id = approved_by_id
+                    current.approved_at = now
+                updated += 1
+            if is_human_only:
+                human_only += 1
+            else:
+                review_required += 1
+                auto_approved += 1
         return KnowledgeImportResponse(
-            imported=len(new_rows),
-            auto_approved=auto_approved_count,
-            review_required=sum(row.risk_level == "review" for row in new_rows),
-            human_only=sum(row.risk_level == "human_only" for row in new_rows),
+            imported=imported,
+            updated=updated,
+            auto_approved=auto_approved,
+            review_required=review_required,
+            human_only=human_only,
+        )
+
+    async def get_knowledge_sheet(self, user: User) -> KnowledgeSheetResponse:
+        self._owner(user)
+        sheet = await self._knowledge_sheet(user.tenant_id)
+        response = self._sheet_response(sheet)
+        response.service_account_email = get_service_account_email(self.settings)
+        return response
+
+    async def connect_knowledge_sheet(
+        self, user: User, sheet_url: str, sheet_names: list[str] | None = None
+    ) -> KnowledgeSheetResponse:
+        self._owner(user)
+        try:
+            spreadsheet_id = extract_spreadsheet_id(sheet_url)
+        except GoogleSheetsSyncError as exc:
+            raise AppError("KNOWLEDGE_SHEET_URL_INVALID", str(exc), 422) from exc
+        cleaned_sheet_names = [name.strip() for name in (sheet_names or []) if name.strip()]
+        sheet = await self._knowledge_sheet(user.tenant_id)
+        if sheet is None:
+            sheet = WhatsAppKnowledgeSheet(
+                tenant_id=user.tenant_id,
+                spreadsheet_id=spreadsheet_id,
+                sheet_url=sheet_url,
+                sheet_names=cleaned_sheet_names,
+                is_enabled=True,
+            )
+            self.session.add(sheet)
+        else:
+            sheet.spreadsheet_id = spreadsheet_id
+            sheet.sheet_url = sheet_url
+            sheet.sheet_names = cleaned_sheet_names
+            sheet.is_enabled = True
+            sheet.last_sync_status = None
+            sheet.last_sync_error = None
+        await self.session.flush()
+        # Connecting (or re-pointing) the sheet syncs it right away, so the
+        # owner sees real numbers instead of an empty "not synced yet" state.
+        await self._run_sheet_sync(sheet, approved_by_id=user.id)
+        response = self._sheet_response(sheet)
+        response.service_account_email = get_service_account_email(self.settings)
+        return response
+
+    async def sync_knowledge_sheet(self, user: User) -> KnowledgeSheetResponse:
+        self._owner(user)
+        sheet = await self._knowledge_sheet(user.tenant_id)
+        if sheet is None:
+            raise AppError(
+                "KNOWLEDGE_SHEET_NOT_CONNECTED", "Сначала подключите таблицу", 404
+            )
+        await self._run_sheet_sync(sheet, approved_by_id=user.id)
+        response = self._sheet_response(sheet)
+        response.service_account_email = get_service_account_email(self.settings)
+        return response
+
+    async def _knowledge_sheet(self, tenant_id: UUID) -> WhatsAppKnowledgeSheet | None:
+        return await self.session.scalar(
+            select(WhatsAppKnowledgeSheet).where(
+                WhatsAppKnowledgeSheet.tenant_id == tenant_id
+            )
+        )
+
+    async def _run_sheet_sync(
+        self, sheet: WhatsAppKnowledgeSheet, *, approved_by_id: UUID | None
+    ) -> None:
+        reader = get_google_drive_reader(self.settings)
+        if reader is None:
+            sheet.last_sync_status = "error"
+            sheet.last_sync_error = "Сервисный аккаунт Google не настроен на сервере"
+            sheet.last_synced_at = datetime.now(UTC)
+            return
+        try:
+            data = await reader.export_xlsx(sheet.spreadsheet_id)
+            rows = import_knowledge_workbook(
+                data,
+                f"google-sheet:{sheet.spreadsheet_id}",
+                only_sheets=set(sheet.sheet_names) if sheet.sheet_names else None,
+            )
+            result = await self._ingest_rows(
+                tenant_id=sheet.tenant_id, rows=rows, approved_by_id=approved_by_id
+            )
+        except Exception as exc:
+            sheet.last_sync_status = "error"
+            sheet.last_sync_error = str(exc)[:500]
+            sheet.last_synced_at = datetime.now(UTC)
+            return
+        sheet.last_sync_status = "success"
+        sheet.last_sync_error = None
+        sheet.last_synced_at = datetime.now(UTC)
+        sheet.last_sync_imported = result.imported
+        sheet.last_sync_updated = result.updated
+        sheet.last_sync_auto_approved = result.auto_approved
+        sheet.last_sync_review_required = result.review_required
+        sheet.last_sync_human_only = result.human_only
+
+    @staticmethod
+    def _sheet_response(sheet: WhatsAppKnowledgeSheet | None) -> KnowledgeSheetResponse:
+        if sheet is None:
+            return KnowledgeSheetResponse(connected=False)
+        return KnowledgeSheetResponse(
+            connected=True,
+            sheet_url=sheet.sheet_url,
+            sheet_names=list(sheet.sheet_names or []),
+            is_enabled=sheet.is_enabled,
+            last_synced_at=sheet.last_synced_at,
+            last_sync_status=sheet.last_sync_status,
+            last_sync_error=sheet.last_sync_error,
+            last_sync_imported=sheet.last_sync_imported,
+            last_sync_updated=sheet.last_sync_updated,
+            last_sync_auto_approved=sheet.last_sync_auto_approved,
+            last_sync_review_required=sheet.last_sync_review_required,
+            last_sync_human_only=sheet.last_sync_human_only,
         )
 
     async def knowledge(self, user: User) -> KnowledgeListResponse:
@@ -701,7 +959,12 @@ class WhatsAppService:
                 await self.session.scalars(
                     select(WhatsAppMessage)
                     .where(WhatsAppMessage.conversation_id == conversation.id)
-                    .order_by(WhatsAppMessage.created_at.desc())
+                    .order_by(
+                        func.coalesce(
+                            WhatsAppMessage.provider_timestamp,
+                            WhatsAppMessage.created_at,
+                        ).desc()
+                    )
                     .limit(self.settings.whatsapp_max_context_messages)
                 )
             ).all()
@@ -735,7 +998,12 @@ class WhatsAppService:
         return decision, provider, cost
 
     async def _send(
-        self, channel: WhatsAppChannel, recipient: str, body: str
+        self,
+        channel: WhatsAppChannel,
+        recipient: str,
+        body: str,
+        *,
+        command_id: str | None = None,
     ) -> None:
         if channel.connection_mode == "qr":
             gateway_url = self.settings.whatsapp_qr_gateway_url.rstrip("/")
@@ -751,7 +1019,7 @@ class WhatsAppService:
                     response = await client.post(
                         f"{gateway_url}/send",
                         headers={"X-Gateway-Secret": gateway_secret},
-                        json={"to": recipient, "text": body},
+                        json={"to": recipient, "text": body, "command_id": command_id},
                     )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
@@ -807,7 +1075,7 @@ class WhatsAppService:
                 phone_number_id=phone_number_id,
                 display_name=display_name,
                 status=status,
-                bot_mode="draft",
+                bot_mode="auto" if self.settings.whatsapp_ai_auto_send else "draft",
                 is_active=True,
             )
             self.session.add(item)
@@ -870,7 +1138,7 @@ class WhatsAppService:
 
     def _data_secret(self) -> str:
         secret = self.settings.whatsapp_data_key.get_secret_value()
-        if not secret and not self.settings.whatsapp_access_token.get_secret_value():
+        if not secret and self.settings.app_env != "production":
             return "local-simulator-data-key-change-me"
         return secret
 

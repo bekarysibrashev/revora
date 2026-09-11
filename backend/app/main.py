@@ -39,6 +39,8 @@ from app.modules.sales.router import router as sales_router
 from app.modules.reports.router import router as reports_router
 from app.modules.tenancy.router import router as tenancy_router
 from app.modules.telegram.router import router as telegram_router
+from app.modules.whatsapp.embedded_worker import EmbeddedKnowledgeSheetWorker
+from app.modules.whatsapp.operations_worker import EmbeddedWhatsAppOperationsWorker
 from app.modules.whatsapp.router import router as whatsapp_router
 from app.modules.whatsapp.router import webhook_router as whatsapp_webhook_router
 from app.modules.whatsapp.router import qr_webhook_router as whatsapp_qr_webhook_router
@@ -50,6 +52,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     logger = logging.getLogger(__name__)
     call_worker = EmbeddedCallWorker(settings)
     meta_sync_worker = EmbeddedMetaSyncWorker(settings)
+    knowledge_sheet_worker = EmbeddedKnowledgeSheetWorker(settings)
+    whatsapp_operations_worker = EmbeddedWhatsAppOperationsWorker(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -81,11 +85,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         call_worker.start()
         meta_sync_worker.start()
+        knowledge_sheet_worker.start()
+        whatsapp_operations_worker.start()
         try:
             yield
         finally:
             await call_worker.stop()
             await meta_sync_worker.stop()
+            await knowledge_sheet_worker.stop()
+            await whatsapp_operations_worker.stop()
             logger.info("Stopping %s", settings.app_name)
 
     application = FastAPI(

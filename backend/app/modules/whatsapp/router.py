@@ -1,14 +1,14 @@
 import asyncio
 import hmac
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,10 +22,13 @@ from app.modules.whatsapp.schemas import (
     ConversationListResponse,
     EmbeddedSignupCompleteRequest,
     HumanMessageRequest,
+    WhatsAppBotModeRequest,
     KnowledgeCreateRequest,
     KnowledgeImportResponse,
     KnowledgeItemResponse,
     KnowledgeListResponse,
+    KnowledgeSheetConnectRequest,
+    KnowledgeSheetResponse,
     KnowledgeUpdateRequest,
     MessageItem,
     SimulatorMessageRequest,
@@ -33,10 +36,14 @@ from app.modules.whatsapp.schemas import (
     WhatsAppStatusResponse,
     WhatsAppChannelResponse,
     WhatsAppQrEventPayload,
+    WhatsAppGatewayHeartbeat,
+    WhatsAppGatewayLogResponse,
+    WhatsAppAnalyticsResponse,
     WhatsAppQrSessionPayload,
     WhatsAppQrStatusResponse,
 )
 from app.modules.whatsapp.models import WhatsAppQrSession
+from app.modules.whatsapp.operations import WhatsAppOperationsService
 from app.modules.whatsapp.security import (
     WhatsAppDataProtectionError,
     decrypt_contact,
@@ -103,6 +110,18 @@ async def status(
     return await WhatsAppService(session, settings).status(user)
 
 
+@router.patch("/bot-mode", response_model=WhatsAppStatusResponse)
+async def set_bot_mode(
+    payload: WhatsAppBotModeRequest,
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+) -> WhatsAppStatusResponse:
+    return await WhatsAppService(session, settings).set_bot_mode(
+        user, payload.auto_send
+    )
+
+
 async def _qr_gateway_request(
     settings: Settings, method: str, path: str
 ) -> WhatsAppQrStatusResponse:
@@ -144,11 +163,24 @@ async def _qr_gateway_request(
 
 @router.get("/qr/status", response_model=WhatsAppQrStatusResponse)
 async def qr_status(
-    user: CurrentUser, settings: RuntimeSettings
+    user: CurrentUser, session: Session, settings: RuntimeSettings
 ) -> WhatsAppQrStatusResponse:
     if user.role.value != "owner":
         raise AppError("FORBIDDEN", "Only the owner can connect WhatsApp", 403)
-    return await _qr_gateway_request(settings, "GET", "/status")
+    cached = await WhatsAppOperationsService(session, settings).cached_status(user)
+    try:
+        live = await _qr_gateway_request(settings, "GET", "/status")
+    except AppError:
+        return cached
+    live.last_heartbeat_at = cached.last_heartbeat_at
+    live.last_message_at = cached.last_message_at
+    live.last_history_sync_at = cached.last_history_sync_at
+    live.messages_forwarded = cached.messages_forwarded
+    live.history_messages_forwarded = cached.history_messages_forwarded
+    live.reconnect_count = cached.reconnect_count
+    live.last_error = cached.last_error
+    live.stale = cached.stale
+    return live
 
 
 @router.post("/qr/connect", response_model=WhatsAppQrStatusResponse)
@@ -158,6 +190,81 @@ async def qr_connect(
     if user.role.value != "owner":
         raise AppError("FORBIDDEN", "Only the owner can connect WhatsApp", 403)
     return await _qr_gateway_request(settings, "POST", "/connect")
+
+
+@router.get("/gateway/logs", response_model=WhatsAppGatewayLogResponse)
+async def gateway_logs(
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> WhatsAppGatewayLogResponse:
+    if user.role.value != "owner":
+        raise AppError("FORBIDDEN", "Only the owner can view gateway logs", 403)
+    return await WhatsAppOperationsService(session, settings).logs(user, limit)
+
+
+@router.get("/analytics", response_model=WhatsAppAnalyticsResponse)
+async def whatsapp_analytics(
+    date_from: date,
+    date_to: date,
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+) -> WhatsAppAnalyticsResponse:
+    return await WhatsAppOperationsService(session, settings).analytics(
+        user, date_from, date_to
+    )
+
+
+@router.get("/export")
+async def export_whatsapp_messages(
+    date_from: date,
+    date_to: date,
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+) -> Response:
+    data = await WhatsAppOperationsService(session, settings).export_xlsx(
+        user, date_from, date_to
+    )
+    return Response(
+        data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="revora-whatsapp-{date_from}-{date_to}.xlsx"'
+            )
+        },
+    )
+
+
+@router.get("/messages/{message_id}/media")
+async def whatsapp_media(
+    message_id: UUID,
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+) -> Response:
+    data, content_type, filename = await WhatsAppOperationsService(
+        session, settings
+    ).media(user, message_id)
+    return Response(
+        data,
+        media_type=content_type,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.post("/messages/{message_id}/retry")
+async def retry_whatsapp_message(
+    message_id: UUID,
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+) -> dict[str, str]:
+    await WhatsAppOperationsService(session, settings).retry_message(user, message_id)
+    return {"status": "queued"}
 
 
 @router.post(
@@ -286,6 +393,32 @@ async def import_knowledge(
     return await WhatsAppService(session, settings).import_knowledge(
         user, data, filename
     )
+
+
+@router.get("/knowledge/google-sheet", response_model=KnowledgeSheetResponse)
+async def knowledge_sheet(
+    user: CurrentUser, session: Session, settings: RuntimeSettings
+) -> KnowledgeSheetResponse:
+    return await WhatsAppService(session, settings).get_knowledge_sheet(user)
+
+
+@router.put("/knowledge/google-sheet", response_model=KnowledgeSheetResponse)
+async def connect_knowledge_sheet(
+    payload: KnowledgeSheetConnectRequest,
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+) -> KnowledgeSheetResponse:
+    return await WhatsAppService(session, settings).connect_knowledge_sheet(
+        user, payload.sheet_url, payload.sheet_names
+    )
+
+
+@router.post("/knowledge/google-sheet/sync", response_model=KnowledgeSheetResponse)
+async def sync_knowledge_sheet(
+    user: CurrentUser, session: Session, settings: RuntimeSettings
+) -> KnowledgeSheetResponse:
+    return await WhatsAppService(session, settings).sync_knowledge_sheet(user)
 
 
 @router.patch(
@@ -474,6 +607,27 @@ async def put_qr_session(
     return {"status": "saved"}
 
 
+@qr_webhook_router.post("/heartbeat")
+async def receive_qr_heartbeat(
+    payload: WhatsAppGatewayHeartbeat,
+    request: Request,
+    session: Session,
+    settings: RuntimeSettings,
+) -> dict[str, str]:
+    _require_qr_gateway(request, settings)
+    tenant = await _qr_tenant(session, settings)
+    await WhatsAppOperationsService(session, settings).record_heartbeat(
+        tenant.id, payload
+    )
+    if payload.connected and payload.phone:
+        await WhatsAppService(session, settings).ensure_qr_channel(
+            tenant.id,
+            payload.phone,
+            f"WhatsApp +{''.join(character for character in payload.phone if character.isdigit())}",
+        )
+    return {"status": "ok"}
+
+
 @qr_webhook_router.post("/events")
 async def receive_qr_events(
     payload: WhatsAppQrEventPayload,
@@ -501,6 +655,10 @@ async def receive_qr_events(
                 body=body,
                 simulated=False,
                 provider_timestamp=occurred_at,
+                message_type=message.message_type,
+                media_base64=message.media_base64,
+                media_mime_type=message.media_mime_type,
+                media_filename=message.media_filename,
             )
         else:
             await service.store_synced_message(
@@ -513,6 +671,9 @@ async def receive_qr_events(
                 body=body,
                 provider_timestamp=occurred_at,
                 status="history" if message.history else "synced",
+                media_base64=message.media_base64,
+                media_mime_type=message.media_mime_type,
+                media_filename=message.media_filename,
             )
         processed += 1
     return {"processed": processed}

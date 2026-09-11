@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     embedded_call_worker: bool = False
     embedded_call_worker_interval_seconds: int = Field(default=20, ge=5, le=300)
     embedded_call_processing_timeout_minutes: int = Field(default=15, ge=5, le=120)
+    # Google Sheet -> WhatsApp knowledge base resync (see whatsapp/embedded_worker.py).
+    # Defaults on: unlike the call/Meta workers above it costs nothing when no
+    # tenant has connected a sheet yet, and it's the automatic half of a
+    # feature the owner explicitly asked for.
+    embedded_knowledge_sheet_worker: bool = True
+    embedded_knowledge_sheet_worker_interval_seconds: int = Field(default=1200, ge=300, le=3600)
 
     # WhatsApp AI assistant. Production sending stays disabled until explicitly enabled.
     whatsapp_verify_token: SecretStr = SecretStr("")
@@ -117,6 +123,9 @@ class Settings(BaseSettings):
     whatsapp_qr_gateway_url: str = ""
     whatsapp_qr_gateway_secret: SecretStr = SecretStr("")
     whatsapp_admin_pause_minutes: int = Field(default=60, ge=5, le=1440)
+    embedded_whatsapp_operations_worker: bool = True
+    whatsapp_operations_interval_seconds: int = Field(default=5, ge=2, le=60)
+    whatsapp_delivery_max_attempts: int = Field(default=5, ge=1, le=12)
 
     # Telegram staff bot. The token is configured only in the bot process.
     telegram_bot_token: SecretStr = SecretStr("")
