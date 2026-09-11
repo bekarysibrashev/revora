@@ -11,6 +11,7 @@ from sqlalchemy.orm import aliased
 
 from app.modules.finance.models import RevenueFact
 from app.modules.losses.models import LossOpportunity
+from app.modules.reports.repository import OfficialReportsRepository
 from app.modules.sales.models import Appointment, Call, Lead
 from app.modules.sales.repository import reconcile_lost_leads
 from app.modules.whatsapp.models import WhatsAppConversation, WhatsAppMessage
@@ -71,6 +72,20 @@ class LossRepository:
             accrual_query = accrual_query.where(RevenueFact.branch_id == branch_id)
         completed = int((await self.session.scalar(completed_query)) or 0)
         accrual = Decimal((await self.session.scalar(accrual_query)) or 0)
+        official_values, _, _ = await OfficialReportsRepository(self.session).exact_values(
+            tenant_id,
+            date_from,
+            date_to,
+            {"appointments_completed", "revenue_accrual", "revenue_payment"},
+            [branch_id] if branch_id else None,
+        )
+        # The production 1C extension sends audited report totals even when
+        # canonical per-patient revenue rows are unavailable. Use that same
+        # source as the dashboards so the loss map never values hundreds of
+        # real cancellations at zero merely because the detailed fallback is
+        # incomplete.
+        completed = int(official_values.get("appointments_completed", completed))
+        accrual = official_values.get("revenue_accrual", accrual)
         average_visit = accrual / completed if completed else ZERO
 
         # Revenue and appointment dimensions are distinct SQL columns; build
@@ -149,6 +164,8 @@ class LossRepository:
                 )
             confidence = basis_confidence if is_no_show else basis_confidence * Decimal("0.60")
             estimate = unit_value if is_no_show else unit_value * Decimal("0.60")
+            if estimate <= ZERO:
+                continue
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(f"{row.status}:{row.id}"),
@@ -204,10 +221,15 @@ class LossRepository:
             payment_query = payment_query.where(RevenueFact.branch_id == branch_id)
             lost_leads_query = lost_leads_query.where(Lead.branch_id == branch_id)
         won_count = int((await self.session.scalar(won_count_query)) or 0)
-        payments = Decimal((await self.session.scalar(payment_query)) or 0)
+        if "revenue_payment" in official_values:
+            payments = official_values["revenue_payment"]
+        else:
+            payments = Decimal((await self.session.scalar(payment_query)) or 0)
         value_per_won_lead = payments / won_count if won_count else average_visit
         for row in (await self.session.execute(lost_leads_query)).all():
             estimate = value_per_won_lead * Decimal("0.35")
+            if estimate <= ZERO:
+                continue
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(f"lost_lead:{row.id}"),
@@ -249,6 +271,11 @@ class LossRepository:
         if branch_id:
             missed_calls = missed_calls.where(Call.branch_id == branch_id)
         for row in (await self.session.execute(missed_calls)).all():
+            estimate = (value_per_won_lead * Decimal("0.35")).quantize(
+                Decimal("0.01")
+            )
+            if estimate <= ZERO:
+                continue
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(f"missed_call:{row.id}"),
@@ -260,7 +287,7 @@ class LossRepository:
                     recommended_action="Перезвонить и зафиксировать результат обращения.",
                     entity_type="call",
                     entity_id=row.id,
-                    estimated_amount=(value_per_won_lead * Decimal("0.35")).quantize(Decimal("0.01")),
+                    estimated_amount=estimate,
                     confidence=Decimal("0.5000"),
                     evidence={
                         "started_at": row.started_at.isoformat(),
@@ -305,6 +332,11 @@ class LossRepository:
             # guess one or expose an unscoped item in a branch-only view.
             unanswered = unanswered.where(False)
         for row in (await self.session.execute(unanswered)).all():
+            estimate = (value_per_won_lead * Decimal("0.35")).quantize(
+                Decimal("0.01")
+            )
+            if estimate <= ZERO:
+                continue
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(
@@ -318,7 +350,7 @@ class LossRepository:
                     recommended_action="Ответить пациенту и предложить запись.",
                     entity_type="whatsapp_message",
                     entity_id=row.id,
-                    estimated_amount=(value_per_won_lead * Decimal("0.35")).quantize(Decimal("0.01")),
+                    estimated_amount=estimate,
                     confidence=Decimal("0.4000"),
                     evidence={
                         "occurred_at": row.provider_timestamp.isoformat(),
