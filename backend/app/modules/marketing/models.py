@@ -23,6 +23,7 @@ class AttributionFact(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Ba
     lead_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("leads.id", ondelete="CASCADE"), index=True)
     revenue_fact_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("revenue_facts.id", ondelete="CASCADE"))
     source: Mapped[str] = mapped_column(String(50)); confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    attribution_data: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     attributed_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2)); currency: Mapped[str] = mapped_column(String(3), default="KZT")
 
 

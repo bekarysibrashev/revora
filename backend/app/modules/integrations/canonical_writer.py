@@ -262,6 +262,11 @@ class CanonicalWriter:
 
     async def _write_expense_fact(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
         category_name = self._optional_string(data, "category_name")
+        normalized_category = (category_name or "").casefold()
+        if any(marker in normalized_category for marker in ("зарплат", "оплата труда", "фот")):
+            raise CanonicalWriteError(
+                "Salary must be imported as payroll_fact, not expense_fact"
+            )
         category_id = await self._expense_category_id(
             tenant_id, category_name, self._optional_string(data, "cost_behavior")
         )
@@ -379,6 +384,7 @@ class CanonicalWriter:
             "revenue_fact_id": revenue_id,
             "source": lead.source,
             "confidence": Decimal("1"),
+            "attribution_data": lead.attribution_data or {},
             "attributed_amount": amount,
             "currency": currency,
         }
@@ -388,6 +394,7 @@ class CanonicalWriter:
             set_={
                 "source": statement.excluded.source,
                 "confidence": statement.excluded.confidence,
+                "attribution_data": statement.excluded.attribution_data,
                 "attributed_amount": statement.excluded.attributed_amount,
                 "currency": statement.excluded.currency,
             },

@@ -4,14 +4,16 @@ from decimal import Decimal
 from hashlib import sha256
 from uuid import UUID
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, exists, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.modules.finance.models import RevenueFact
 from app.modules.losses.models import LossOpportunity
-from app.modules.sales.models import Appointment, Lead
+from app.modules.sales.models import Appointment, Call, Lead
 from app.modules.sales.repository import reconcile_lost_leads
+from app.modules.whatsapp.models import WhatsAppConversation, WhatsAppMessage
 
 ZERO = Decimal("0")
 
@@ -30,6 +32,7 @@ class LossCandidate:
     estimated_amount: Decimal
     confidence: Decimal
     evidence: dict[str, object]
+    assigned_user_id: UUID | None = None
 
 
 class LossRepository:
@@ -70,11 +73,49 @@ class LossRepository:
         accrual = Decimal((await self.session.scalar(accrual_query)) or 0)
         average_visit = accrual / completed if completed else ZERO
 
+        # Revenue and appointment dimensions are distinct SQL columns; build
+        # the maps explicitly so the grouping always references the
+        # table being queried.
+        async def dimension_averages(appointment_dimension, revenue_dimension):
+            counts = select(appointment_dimension, func.count(Appointment.id)).where(
+                Appointment.tenant_id == tenant_id,
+                Appointment.status == "completed",
+                Appointment.starts_at >= start,
+                Appointment.starts_at < end,
+                appointment_dimension.is_not(None),
+            )
+            payments = select(revenue_dimension, func.coalesce(func.sum(RevenueFact.amount), 0)).where(
+                RevenueFact.tenant_id == tenant_id,
+                RevenueFact.recognition_type == "payment",
+                RevenueFact.occurred_at >= start,
+                RevenueFact.occurred_at < end,
+                revenue_dimension.is_not(None),
+            )
+            if branch_id:
+                counts = counts.where(Appointment.branch_id == branch_id)
+                payments = payments.where(RevenueFact.branch_id == branch_id)
+            count_map = dict((await self.session.execute(counts.group_by(appointment_dimension))).all())
+            payment_map = dict((await self.session.execute(payments.group_by(revenue_dimension))).all())
+            return {
+                key: Decimal(payment_map.get(key) or 0) / count
+                for key, count in count_map.items()
+                if count and Decimal(payment_map.get(key) or 0) > ZERO
+            }
+
+        patient_averages = await dimension_averages(
+            Appointment.patient_id, RevenueFact.patient_id
+        )
+        doctor_averages = await dimension_averages(Appointment.doctor_id, RevenueFact.doctor_id)
+        direction_averages = await dimension_averages(
+            Appointment.direction_id, RevenueFact.direction_id
+        )
+
         appointment_query = select(
             Appointment.id,
             Appointment.branch_id,
             Appointment.status,
             Appointment.starts_at,
+            Appointment.patient_id,
             Appointment.doctor_id,
             Appointment.direction_id,
         ).where(
@@ -90,8 +131,24 @@ class LossRepository:
         candidates: list[LossCandidate] = []
         for row in appointments:
             is_no_show = row.status == "no_show"
-            confidence = Decimal("0.9000") if is_no_show else Decimal("0.5500")
-            estimate = average_visit if is_no_show else average_visit * Decimal("0.60")
+            if row.patient_id in patient_averages:
+                unit_value, basis, basis_confidence = (
+                    patient_averages[row.patient_id], "patient_payment_average", Decimal("0.9000")
+                )
+            elif row.direction_id in direction_averages:
+                unit_value, basis, basis_confidence = (
+                    direction_averages[row.direction_id], "direction_payment_average", Decimal("0.8000")
+                )
+            elif row.doctor_id in doctor_averages:
+                unit_value, basis, basis_confidence = (
+                    doctor_averages[row.doctor_id], "doctor_payment_average", Decimal("0.7000")
+                )
+            else:
+                unit_value, basis, basis_confidence = (
+                    average_visit, "clinic_accrual_average", Decimal("0.5000")
+                )
+            confidence = basis_confidence if is_no_show else basis_confidence * Decimal("0.60")
+            estimate = unit_value if is_no_show else unit_value * Decimal("0.60")
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(f"{row.status}:{row.id}"),
@@ -118,8 +175,8 @@ class LossRepository:
                         "starts_at": row.starts_at.isoformat(),
                         "doctor_linked": row.doctor_id is not None,
                         "direction_linked": row.direction_id is not None,
-                        "estimation_basis": "average_accrual_per_completed_visit",
-                        "average_visit": float(average_visit),
+                        "estimation_basis": basis,
+                        "unit_value": float(unit_value),
                     },
                 )
             )
@@ -170,6 +227,106 @@ class LossRepository:
                         "estimation_basis": "35_percent_of_payment_per_won_lead",
                         "value_per_won_lead": float(value_per_won_lead),
                     },
+                )
+            )
+
+        missed_calls = select(
+            Call.id,
+            Call.branch_id,
+            Call.started_at,
+            Call.duration_seconds,
+            Lead.assigned_user_id,
+        ).outerjoin(
+            Lead,
+            (Lead.tenant_id == Call.tenant_id) & (Lead.id == Call.lead_id),
+        ).where(
+            Call.tenant_id == tenant_id,
+            func.lower(Call.direction).in_(["in", "incoming", "inbound", "входящий"]),
+            func.coalesce(Call.duration_seconds, 0) <= 5,
+            Call.started_at >= start,
+            Call.started_at < end,
+        )
+        if branch_id:
+            missed_calls = missed_calls.where(Call.branch_id == branch_id)
+        for row in (await self.session.execute(missed_calls)).all():
+            candidates.append(
+                LossCandidate(
+                    fingerprint=self._fingerprint(f"missed_call:{row.id}"),
+                    branch_id=row.branch_id,
+                    loss_type="missed_call",
+                    severity="critical",
+                    title="Пропущенный входящий звонок",
+                    description="Входящий звонок не перешёл в разговор с клиникой.",
+                    recommended_action="Перезвонить и зафиксировать результат обращения.",
+                    entity_type="call",
+                    entity_id=row.id,
+                    estimated_amount=(value_per_won_lead * Decimal("0.35")).quantize(Decimal("0.01")),
+                    confidence=Decimal("0.5000"),
+                    evidence={
+                        "started_at": row.started_at.isoformat(),
+                        "duration_seconds": row.duration_seconds or 0,
+                        "estimation_basis": "35_percent_of_payment_per_won_lead",
+                        "unit_value": float(value_per_won_lead),
+                    },
+                    assigned_user_id=row.assigned_user_id,
+                )
+            )
+
+        inbound = aliased(WhatsAppMessage)
+        later_outbound = aliased(WhatsAppMessage)
+        unanswered = select(
+            inbound.id,
+            inbound.conversation_id,
+            inbound.provider_timestamp,
+            WhatsAppConversation.assigned_user_id,
+        ).join(
+            WhatsAppConversation,
+            (WhatsAppConversation.tenant_id == inbound.tenant_id)
+            & (WhatsAppConversation.id == inbound.conversation_id),
+        ).where(
+            inbound.tenant_id == tenant_id,
+            inbound.direction == "in",
+            inbound.provider_timestamp >= start,
+            inbound.provider_timestamp < end,
+            inbound.provider_timestamp < datetime.now(UTC) - timedelta(minutes=30),
+            ~exists(
+                select(later_outbound.id).where(
+                    later_outbound.tenant_id == inbound.tenant_id,
+                    later_outbound.conversation_id == inbound.conversation_id,
+                    later_outbound.direction == "out",
+                    later_outbound.provider_timestamp > inbound.provider_timestamp,
+                )
+            ),
+        ).distinct(inbound.conversation_id).order_by(
+            inbound.conversation_id, inbound.provider_timestamp.desc()
+        )
+        if branch_id:
+            # WhatsApp conversations do not carry a proven branch. Never
+            # guess one or expose an unscoped item in a branch-only view.
+            unanswered = unanswered.where(False)
+        for row in (await self.session.execute(unanswered)).all():
+            candidates.append(
+                LossCandidate(
+                    fingerprint=self._fingerprint(
+                        f"whatsapp_unanswered:{row.conversation_id}"
+                    ),
+                    branch_id=None,
+                    loss_type="whatsapp_unanswered",
+                    severity="warning",
+                    title="WhatsApp без ответа",
+                    description="Сообщение пациента осталось без исходящего ответа более 30 минут.",
+                    recommended_action="Ответить пациенту и предложить запись.",
+                    entity_type="whatsapp_message",
+                    entity_id=row.id,
+                    estimated_amount=(value_per_won_lead * Decimal("0.35")).quantize(Decimal("0.01")),
+                    confidence=Decimal("0.4000"),
+                    evidence={
+                        "occurred_at": row.provider_timestamp.isoformat(),
+                        "response_sla_minutes": 30,
+                        "estimation_basis": "35_percent_of_payment_per_won_lead",
+                        "unit_value": float(value_per_won_lead),
+                    },
+                    assigned_user_id=row.assigned_user_id,
                 )
             )
 
@@ -242,6 +399,7 @@ class LossRepository:
             statement = insert(LossOpportunity).values(
                 tenant_id=tenant_id,
                 branch_id=item.branch_id,
+                assigned_user_id=item.assigned_user_id,
                 fingerprint=item.fingerprint,
                 loss_type=item.loss_type,
                 severity=item.severity,
@@ -265,6 +423,9 @@ class LossRepository:
                 index_elements=["tenant_id", "fingerprint"],
                 set_={
                     "branch_id": statement.excluded.branch_id,
+                    "assigned_user_id": func.coalesce(
+                        LossOpportunity.assigned_user_id, statement.excluded.assigned_user_id
+                    ),
                     "severity": statement.excluded.severity,
                     "title": statement.excluded.title,
                     "description": statement.excluded.description,
@@ -303,6 +464,104 @@ class LossRepository:
         if branch_id:
             statement = statement.where(LossOpportunity.branch_id == branch_id)
         return list((await self.session.scalars(statement)).all())
+
+    async def reconcile_recoveries(
+        self,
+        tenant_id: UUID,
+        date_from: date,
+        date_to: date,
+        branch_id: UUID | None,
+    ) -> int:
+        """Confirm recovery only from a later real payment linked to the same patient.
+
+        A Telegram completion or a manual status change is not financial proof. This
+        reconciliation is safe to repeat and never exposes patient data in evidence.
+        """
+        opportunities = select(LossOpportunity).where(
+            LossOpportunity.tenant_id == tenant_id,
+            LossOpportunity.period_start == date_from,
+            LossOpportunity.period_end == date_to,
+            LossOpportunity.status.in_(["open", "in_progress"]),
+            LossOpportunity.entity_type.in_(["appointment", "lead", "call", "whatsapp_message"]),
+        )
+        if branch_id:
+            opportunities = opportunities.where(LossOpportunity.branch_id == branch_id)
+        recovered = 0
+        for item in (await self.session.scalars(opportunities)).all():
+            patient_id = None
+            event_at = None
+            if item.entity_type == "appointment":
+                entity = await self.session.scalar(
+                    select(Appointment).where(
+                        Appointment.tenant_id == tenant_id,
+                        Appointment.id == item.entity_id,
+                    )
+                )
+                if entity is not None:
+                    patient_id, event_at = entity.patient_id, entity.starts_at
+            elif item.entity_type == "lead":
+                entity = await self.session.scalar(
+                    select(Lead).where(Lead.tenant_id == tenant_id, Lead.id == item.entity_id)
+                )
+                if entity is not None:
+                    patient_id, event_at = entity.patient_id, entity.created_at
+            elif item.entity_type == "call":
+                entity = await self.session.scalar(
+                    select(Call).where(Call.tenant_id == tenant_id, Call.id == item.entity_id)
+                )
+                if entity is not None and entity.lead_id is not None:
+                    lead = await self.session.scalar(
+                        select(Lead).where(Lead.tenant_id == tenant_id, Lead.id == entity.lead_id)
+                    )
+                    if lead is not None:
+                        patient_id, event_at = lead.patient_id, entity.started_at
+            elif item.entity_type == "whatsapp_message":
+                entity = (await self.session.execute(
+                    select(WhatsAppMessage, WhatsAppConversation.contact_hash)
+                    .join(
+                        WhatsAppConversation,
+                        (WhatsAppConversation.tenant_id == WhatsAppMessage.tenant_id)
+                        & (WhatsAppConversation.id == WhatsAppMessage.conversation_id),
+                    )
+                    .where(
+                        WhatsAppMessage.tenant_id == tenant_id,
+                        WhatsAppMessage.id == item.entity_id,
+                    )
+                )).first()
+                if entity is not None:
+                    message, contact_hash = entity
+                    lead = await self.session.scalar(
+                        select(Lead).where(
+                            Lead.tenant_id == tenant_id, Lead.external_id == contact_hash
+                        )
+                    )
+                    if lead is not None:
+                        patient_id = lead.patient_id
+                        event_at = message.provider_timestamp or message.created_at
+            if patient_id is None or event_at is None:
+                continue
+            payment = Decimal(
+                (await self.session.scalar(
+                    select(func.coalesce(func.sum(RevenueFact.amount), 0)).where(
+                        RevenueFact.tenant_id == tenant_id,
+                        RevenueFact.patient_id == patient_id,
+                        RevenueFact.recognition_type == "payment",
+                        RevenueFact.occurred_at >= event_at,
+                    )
+                )) or 0
+            )
+            if payment <= ZERO:
+                continue
+            item.status = "recovered"
+            item.recovered_amount = payment.quantize(Decimal("0.01"))
+            item.resolved_at = datetime.now(UTC)
+            item.evidence = {
+                **item.evidence,
+                "recovery_basis": "later_patient_payment",
+                "recovery_confirmed_at": item.resolved_at.isoformat(),
+            }
+            recovered += 1
+        return recovered
 
     async def get(self, tenant_id: UUID, opportunity_id: UUID) -> LossOpportunity | None:
         return await self.session.scalar(

@@ -31,9 +31,12 @@ class FinanceService:
     ) -> PnlResponse:
         self._validate(user, date_from, date_to, branch_id)
         totals = await self.repository.pnl_totals(user.tenant_id, date_from, date_to, branch_id)
-        total_expenses = (
+        imported_expenses = (
             totals.variable_expenses + totals.fixed_expenses + totals.uncategorized_expenses
         )
+        # Payroll is a separate canonical 1C fact and is added exactly once;
+        # the generic expense import rejects salary categories.
+        total_expenses = imported_expenses + totals.payroll_accrual
         gross_profit = totals.revenue_accrual - totals.variable_expenses
         net_profit = totals.revenue_accrual - total_expenses
         # Operating profit excludes uncategorized expenses (which are, by
@@ -47,7 +50,7 @@ class FinanceService:
         )
         classified_expenses = totals.variable_expenses + totals.fixed_expenses
         classification_rate = (
-            classified_expenses / total_expenses if total_expenses else Decimal("0")
+            classified_expenses / imported_expenses if imported_expenses else Decimal("0")
         )
         # Revora does not yet receive dedicated tax, bank-fee and depreciation
         # ledgers. Even a 100% category match therefore cannot certify net profit.
@@ -58,7 +61,7 @@ class FinanceService:
         profit_is_complete = (
             is_full_coverage(revenue_coverage)
             and totals.uncategorized_expenses == 0
-            and total_expenses > 0
+            and imported_expenses > 0
         )
         return PnlResponse(
             revenue_accrual=totals.revenue_accrual,

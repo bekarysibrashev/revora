@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TenantScopedMixin, TimestampMixin, UUIDPrimaryKeyMixin
@@ -50,6 +50,10 @@ class Lead(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     assigned_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"), index=True)
     external_id: Mapped[str] = mapped_column(String(150))
     source: Mapped[str] = mapped_column(String(100))
+    # Explicit first-touch metadata supplied by the channel (for example a
+    # WhatsApp click-to-chat externalAdReply). It contains only advertising
+    # identifiers/URLs, never message text or a phone number.
+    attribution_data: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     status: Mapped[str] = mapped_column(String(50), index=True)
     last_contact_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 

@@ -114,6 +114,12 @@ class MetaCampaignPerformance(BaseModel):
     click_to_conversation_rate: Decimal | None
     landing_page_view_rate: Decimal | None
     video_thruplay_rate: Decimal | None
+    attributed_revenue: Decimal
+    attributed_revenue_currency: str | None
+    attributed_leads: int
+    roas: Decimal | None
+    romi: Decimal | None
+    attribution_confidence: Decimal | None
 
 
 class MetaAccountPerformance(BaseModel):

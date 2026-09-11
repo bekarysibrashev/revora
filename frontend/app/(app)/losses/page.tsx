@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { api } from "@/shared/api-client";
 
 import {
   getLossMap,
@@ -23,6 +24,10 @@ export default function LossesPage() {
   const { filters } = useFilters();
   const query = queryString(filters);
   const client = useQueryClient();
+  const employees = useQuery({
+    queryKey: ["telegram-employees"],
+    queryFn: () => api<{ items: TelegramEmployee[] }>("/telegram/employees"),
+  });
   const data = useQuery({
     queryKey: ["loss-map", query],
     queryFn: () => getLossMap(query),
@@ -38,14 +43,17 @@ export default function LossesPage() {
       id,
       status,
       amount,
+      assignedUserId,
     }: {
       id: string;
       status: string;
       amount?: number;
+      assignedUserId?: string;
     }) =>
       updateLoss(id, {
         status,
         recovered_amount: amount,
+        assigned_user_id: assignedUserId,
       }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["loss-map", query] }),
   });
@@ -119,8 +127,9 @@ export default function LossesPage() {
                   key={item.id}
                   item={item}
                   pending={change.isPending}
-                  onChange={(status, amount) =>
-                    change.mutate({ id: item.id, status, amount })
+                  employees={employees.data?.items.filter((employee) => employee.is_active && employee.linked_user_id) || []}
+                  onChange={(status, amount, assignedUserId) =>
+                    change.mutate({ id: item.id, status, amount, assignedUserId })
                   }
                 />
               ))}
@@ -147,13 +156,16 @@ export default function LossesPage() {
 function LossCard({
   item,
   pending,
+  employees,
   onChange,
 }: {
   item: LossOpportunity;
   pending: boolean;
-  onChange: (status: string, amount?: number) => void;
+  employees: TelegramEmployee[];
+  onChange: (status: string, amount?: number, assignedUserId?: string) => void;
 }) {
   const [amount, setAmount] = useState(item.recovered_amount || "");
+  const [assignedUserId, setAssignedUserId] = useState(item.assigned_user_id || "");
   const confidence = Math.round(Number(item.confidence) * 100);
   return (
     <article className={`loss-card ${item.severity}`}>
@@ -182,12 +194,20 @@ function LossCard({
         ) : (
           <div className="loss-controls">
             {item.status === "open" && (
-              <button
-                disabled={pending}
-                onClick={() => onChange("in_progress")}
-              >
-                Взять в работу
-              </button>
+              <>
+                <select value={assignedUserId} onChange={(event) => setAssignedUserId(event.target.value)}>
+                  <option value="">Выберите сотрудника</option>
+                  {employees.map((employee) => (
+                    <option key={employee.id} value={employee.linked_user_id || ""}>{employee.full_name}</option>
+                  ))}
+                </select>
+                <button
+                  disabled={pending || !assignedUserId}
+                  onClick={() => onChange("in_progress", undefined, assignedUserId)}
+                >
+                  Назначить и отправить в Telegram
+                </button>
+              </>
             )}
             {item.status === "in_progress" && (
               <>
@@ -222,6 +242,13 @@ function LossCard({
     </article>
   );
 }
+
+type TelegramEmployee = {
+  id: string;
+  linked_user_id: string | null;
+  full_name: string;
+  is_active: boolean;
+};
 
 function statusLabel(status: LossOpportunity["status"]) {
   return {

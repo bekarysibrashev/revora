@@ -15,6 +15,7 @@ from app.modules.marketing.models import (
     MetaAdsAccount,
     MetaCampaignDailyMetric,
 )
+from app.modules.sales.models import Lead
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,76 @@ class MarketingRepository:
 
     async def commit(self) -> None:
         await self.session.commit()
+
+    async def unresolved_meta_ad_ids(self, tenant_id: UUID) -> list[str]:
+        rows = await self.session.scalars(
+            select(Lead.attribution_data["ad_id"].astext)
+            .where(
+                Lead.tenant_id == tenant_id,
+                Lead.source == "meta",
+                Lead.attribution_data.has_key("ad_id"),  # noqa: W601
+                ~Lead.attribution_data.has_key("campaign_id"),  # noqa: W601
+            )
+            .distinct()
+            .limit(500)
+        )
+        return [value for value in rows if value]
+
+    async def enrich_meta_ad(self, tenant_id: UUID, data) -> None:
+        leads = await self.session.scalars(
+            select(Lead).where(
+                Lead.tenant_id == tenant_id,
+                Lead.source == "meta",
+                Lead.attribution_data["ad_id"].astext == data.ad_id,
+            )
+        )
+        for lead in leads:
+            lead.attribution_data = {
+                **lead.attribution_data,
+                "account_id": data.account_id,
+                "campaign_id": data.campaign_id,
+                "adset_id": data.adset_id,
+                "ad_id": data.ad_id,
+            }
+            facts = await self.session.scalars(
+                select(AttributionFact).where(
+                    AttributionFact.tenant_id == tenant_id,
+                    AttributionFact.lead_id == lead.id,
+                )
+            )
+            for fact in facts:
+                fact.attribution_data = dict(lead.attribution_data)
+
+    async def campaign_attribution_totals(
+        self, tenant_id: UUID, date_from: date, date_to: date
+    ) -> dict[str, tuple[Decimal, int, str | None]]:
+        rows = await self.session.execute(
+            select(
+                AttributionFact.attribution_data["campaign_id"].astext,
+                func.sum(AttributionFact.attributed_amount),
+                func.count(func.distinct(AttributionFact.lead_id)),
+                func.max(AttributionFact.currency),
+                func.count(func.distinct(AttributionFact.currency)),
+            )
+            .join(RevenueFact, RevenueFact.id == AttributionFact.revenue_fact_id)
+            .where(
+                AttributionFact.tenant_id == tenant_id,
+                AttributionFact.source == "meta",
+                AttributionFact.attribution_data.has_key("campaign_id"),  # noqa: W601
+                RevenueFact.recognition_type == "payment",
+                RevenueFact.occurred_at >= self._start(date_from),
+                RevenueFact.occurred_at < self._end(date_to),
+            )
+            .group_by(AttributionFact.attribution_data["campaign_id"].astext)
+        )
+        return {
+            row[0]: (
+                Decimal(row[1] or 0),
+                int(row[2] or 0),
+                row[3] if int(row[4] or 0) == 1 else None,
+            )
+            for row in rows
+        }
 
     async def overview(
         self, tenant_id: UUID, date_from: date, date_to: date, branch_id: UUID | None

@@ -63,6 +63,7 @@ class ContactRegistry:
         source: str,
         occurred_at: datetime,
         external_user: str | None = None,
+        attribution: dict[str, str] | None = None,
     ) -> InboundRegistration:
         """Classifies one inbound call/WhatsApp message per the required
         four-way rule (new_contact / existing_1c_patient / repeat_contact /
@@ -84,6 +85,11 @@ class ContactRegistry:
         except ValueError:
             return InboundRegistration(identity=None, classification="unknown_patient")
         occurred_at = occurred_at if occurred_at.tzinfo else occurred_at.replace(tzinfo=UTC)
+        if attribution:
+            attribution = {
+                **attribution,
+                "first_touch_at": occurred_at.astimezone(UTC).isoformat(),
+            }
         item = await self.repository.identity(tenant_id, digest, lock=True)
         if item is None:
             prior_at, prior_source = await self.repository.prior_inbound(tenant_id, candidates)
@@ -119,6 +125,7 @@ class ContactRegistry:
                     source=source,
                     occurred_at=occurred_at,
                     external_user=external_user,
+                    attribution=attribution,
                 )
                 return InboundRegistration(identity=inserted, classification=classification)
             # A Kcell call and WhatsApp message can arrive simultaneously. The
@@ -147,6 +154,7 @@ class ContactRegistry:
             source=source,
             occurred_at=occurred_at,
             external_user=external_user,
+            attribution=attribution,
         )
         return InboundRegistration(identity=item, classification=classification)
 
@@ -159,6 +167,7 @@ class ContactRegistry:
         source: str,
         occurred_at: datetime,
         external_user: str | None = None,
+        attribution: dict[str, str] | None = None,
     ) -> None:
         sync = getattr(self.repository, "sync_lead", None)
         if sync is not None:
@@ -169,6 +178,7 @@ class ContactRegistry:
                 source=source,
                 occurred_at=occurred_at,
                 external_user=external_user,
+                attribution=attribution,
             )
 
     def _encrypt_phone(self, phone: str) -> str | None:

@@ -18,7 +18,7 @@ from app.modules.contacts.service import ContactRegistry
 from app.modules.ai.call_quality.defaults import ensure_default_rule_set
 from app.modules.ai.call_quality.models import CallQualityAnalysis, CallQualityRuleSet
 from app.modules.kcell.models import KcellWebhookReceipt
-from app.modules.sales.models import Call
+from app.modules.sales.models import Call, Lead
 from app.modules.tenancy.models import Tenant
 
 router = APIRouter(prefix="/webhooks/kcell", tags=["kcell"])
@@ -98,6 +98,15 @@ async def receive_kcell_callback(
         call = Call(tenant_id=tenant.id, external_id=str(values["callid"]), phone_hash=phone_hash(str(values["phone"])), phone_masked=mask_phone(str(values["phone"])), direction=direction, started_at=started_at, duration_seconds=int(values["duration"]), outcome=str(values["status"]), external_user=str(values["user"]), recording_url=str(values.get("link") or "") or None)
         session.add(call)
         await session.flush()
+        # ContactRegistry created/touched the canonical lead in this same
+        # transaction. Link the call after the flush so the complete
+        # call -> lead -> patient -> payment chain is queryable.
+        call.lead_id = await session.scalar(
+            select(Lead.id).where(
+                Lead.tenant_id == tenant.id,
+                Lead.external_id == call.phone_hash,
+            )
+        )
         rules = await ensure_default_rule_set(session, tenant.id)
         if rules is not None:
             duration = int(values["duration"])
@@ -120,6 +129,13 @@ async def receive_kcell_callback(
         call.outcome = str(values["status"])
         call.phone_masked = mask_phone(str(values["phone"]))
         call.recording_url = str(values.get("link") or "") or call.recording_url
+        if call.lead_id is None:
+            call.lead_id = await session.scalar(
+                select(Lead.id).where(
+                    Lead.tenant_id == tenant.id,
+                    Lead.external_id == call.phone_hash,
+                )
+            )
         analysis = await session.scalar(
             select(CallQualityAnalysis).where(
                 CallQualityAnalysis.tenant_id == tenant.id,

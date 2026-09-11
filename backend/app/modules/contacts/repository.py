@@ -109,6 +109,7 @@ class ContactRepository:
         source: str,
         occurred_at: datetime,
         external_user: str | None = None,
+        attribution: dict[str, str] | None = None,
     ) -> None:
         """Materialize or touch a prospect from a real inbound contact -- the
         single live-path entry point for both the Kcell webhook
@@ -157,7 +158,8 @@ class ContactRepository:
             assigned_user_id = await resolve_new_lead_assigned_user_id(
                 self.session,
                 tenant_id,
-                source=source,
+                source="meta" if attribution and attribution.get("kind") == "meta_whatsapp_click" else source,
+                attribution_data=attribution or {},
                 phone_hash=phone_hash,
                 external_user=external_user,
             )

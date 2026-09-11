@@ -12,7 +12,9 @@ from app.modules.marketing.meta_client import (
     MetaAccountData,
     MetaAdsClient,
     MetaAdsError,
+    MetaAdAttribution,
     MetaCampaignDay,
+    MetaAdAttribution,
 )
 from app.modules.marketing.repository import MetaCampaignTotals
 from app.modules.marketing.service import MarketingService
@@ -68,6 +70,9 @@ class FakeMetaClient:
             )
         ]
 
+    async def ad_attribution(self, ad_id):
+        return MetaAdAttribution("act_1", "campaign-1", "adset-1", ad_id)
+
 
 class FakeMetaRepository:
     def __init__(self):
@@ -75,6 +80,7 @@ class FakeMetaRepository:
         self.successes = []
         self.failures = []
         self.commits = 0
+        self.enriched_ads = []
 
     async def upsert_meta_account(self, tenant_id, data, synced_at):
         return SimpleNamespace(id=uuid4())
@@ -91,6 +97,15 @@ class FakeMetaRepository:
 
     async def commit(self):
         self.commits += 1
+
+    async def unresolved_meta_ad_ids(self, tenant_id):
+        return []
+
+    async def enrich_meta_ad(self, tenant_id, data):
+        self.enriched_ads.append(data)
+
+    async def campaign_attribution_totals(self, tenant_id, date_from, date_to):
+        return {}
 
     async def meta_campaign_totals(
         self, tenant_id, date_from, date_to, account_external_id=None
@@ -165,6 +180,23 @@ def test_meta_client_extracts_conversations_from_actions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_meta_account_response_is_parsed() -> None:
+    class Client(MetaAdsClient):
+        async def _get(self, path, params):
+            return {
+                "id": "act_1",
+                "name": "San Dental",
+                "account_status": 1,
+                "currency": "USD",
+                "timezone_name": "Asia/Almaty",
+            }
+
+    result = await Client("token", "v25.0").account("act_1")
+
+    assert result == MetaAccountData("act_1", "San Dental", 1, "USD", "Asia/Almaty")
+
+
+@pytest.mark.asyncio
 async def test_meta_client_sends_explicit_attribution_settings() -> None:
     class CapturingClient(MetaAdsClient):
         def __init__(self):
@@ -186,6 +218,26 @@ async def test_meta_client_sends_explicit_attribution_settings() -> None:
     insights = next(params for path, params in client.calls if path.endswith("/insights"))
     assert insights["action_attribution_windows"] == '["7d_click", "1d_view"]'
     assert insights["action_report_time"] == "impression"
+
+
+@pytest.mark.asyncio
+async def test_meta_ad_id_resolves_to_account_campaign_and_adset() -> None:
+    class CapturingClient(MetaAdsClient):
+        def __init__(self):
+            super().__init__("token", "v25.0")
+
+        async def _get(self, path, params):
+            assert path == "/ad-1"
+            return {
+                "id": "ad-1",
+                "account_id": "act_1",
+                "campaign": {"id": "campaign-1"},
+                "adset": {"id": "adset-1"},
+            }
+
+    result = await CapturingClient().ad_attribution("ad-1")
+
+    assert result == MetaAdAttribution("act_1", "campaign-1", "adset-1", "ad-1")
 
 
 @pytest.mark.asyncio
@@ -283,6 +335,42 @@ async def test_meta_overview_calculates_business_metrics() -> None:
     assert response.recommendations[0].campaign_name == "Имплантация"
     assert response.recommendations[0].result_metric == "WhatsApp-диалоги"
     assert response.recommendations[0].cost_per_result == Decimal("5")
+
+
+@pytest.mark.asyncio
+async def test_campaign_roas_requires_deterministic_revenue_and_same_currency() -> None:
+    class AttributedRepository(FakeMetaRepository):
+        async def meta_campaign_totals(self, *args, **kwargs):
+            rows = await super().meta_campaign_totals(*args, **kwargs)
+            return [replace(row, currency="KZT") for row in rows]
+
+        async def campaign_attribution_totals(self, tenant_id, date_from, date_to):
+            return {"campaign-1": (Decimal("400"), 2, "KZT")}
+
+    response = await MarketingService(AttributedRepository()).meta_overview(
+        make_user(), date(2026, 7, 1), date(2026, 7, 27)
+    )
+
+    assert response.campaigns[0].attributed_revenue == Decimal("400")
+    assert response.campaigns[0].attributed_leads == 2
+    assert response.campaigns[0].roas == Decimal("4")
+    assert response.campaigns[0].romi == Decimal("3")
+
+
+@pytest.mark.asyncio
+async def test_campaign_roas_is_hidden_for_mixed_currencies() -> None:
+    class AttributedRepository(FakeMetaRepository):
+        async def campaign_attribution_totals(self, tenant_id, date_from, date_to):
+            return {"campaign-1": (Decimal("400"), 2, "KZT")}
+
+    response = await MarketingService(AttributedRepository()).meta_overview(
+        make_user(), date(2026, 7, 1), date(2026, 7, 27)
+    )
+
+    assert response.campaigns[0].currency == "USD"
+    assert response.campaigns[0].attributed_revenue_currency == "KZT"
+    assert response.campaigns[0].roas is None
+    assert response.campaigns[0].romi is None
 
 
 @pytest.mark.asyncio

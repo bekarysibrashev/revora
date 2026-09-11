@@ -87,8 +87,8 @@ async def test_finance_summary_calculates_profit_and_cashflow() -> None:
         make_user(UserRole.OWNER), date(2026, 7, 1), date(2026, 7, 31), None
     )
 
-    assert response.total_expenses == Decimal("600000")
-    assert response.net_profit == Decimal("400000")
+    assert response.total_expenses == Decimal("850000")
+    assert response.net_profit == Decimal("150000")
     assert response.net_cash_flow == Decimal("300000")
     assert response.closing_balance == Decimal("1200000")
     assert response.meta.data_as_of == datetime(2026, 7, 20, 11, tzinfo=UTC)
@@ -145,7 +145,7 @@ async def test_ebitda_is_operating_profit_not_an_alias_of_net_profit() -> None:
     # attributed to a real cost line); net_profit deducts it. They must
     # differ, and ebitda must track operating_profit, not net_profit.
     assert response.operating_profit == Decimal("200000")
-    assert response.net_profit == Decimal("400000")
+    assert response.net_profit == Decimal("150000")
     assert response.ebitda == response.operating_profit
     assert response.ebitda != response.net_profit
 

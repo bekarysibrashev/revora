@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -12,13 +12,20 @@ from app.modules.losses.schemas import (
     LossRefreshResponse,
     LossUpdateRequest,
 )
+from app.modules.telegram.models import TelegramTaskPriority
+from app.modules.telegram.repository import TelegramRepository
 
 ZERO = Decimal("0")
 
 
 class LossService:
-    def __init__(self, repository: LossRepository) -> None:
+    def __init__(
+        self,
+        repository: LossRepository,
+        telegram_repository: TelegramRepository | None = None,
+    ) -> None:
         self.repository = repository
+        self.telegram_repository = telegram_repository
 
     async def refresh(
         self, user: User, date_from: date, date_to: date, branch_id: UUID | None
@@ -29,6 +36,9 @@ class LossService:
         )
         detected = await self.repository.upsert(
             user.tenant_id, candidates, date_from, date_to
+        )
+        await self.repository.reconcile_recoveries(
+            user.tenant_id, date_from, date_to, branch_id
         )
         response = await self.map(user, date_from, date_to, branch_id)
         return LossRefreshResponse(**response.model_dump(), detected=detected)
@@ -80,6 +90,13 @@ class LossService:
             raise AppError("BRANCH_FORBIDDEN", "Opportunity is outside your branch scope", 403)
         if payload.recovered_amount is not None:
             item.recovered_amount = payload.recovered_amount
+        assigned_user_id = payload.assigned_user_id or item.assigned_user_id
+        if payload.status == "in_progress" and assigned_user_id is None:
+            raise AppError(
+                "LOSS_ASSIGNEE_REQUIRED",
+                "Select an employee before starting loss recovery",
+                422,
+            )
         if payload.status == "recovered" and item.recovered_amount <= ZERO:
             raise AppError(
                 "RECOVERED_AMOUNT_REQUIRED",
@@ -87,7 +104,48 @@ class LossService:
                 422,
             )
         item.status = payload.status
-        item.assigned_user_id = payload.assigned_user_id
+        item.assigned_user_id = assigned_user_id
+        if payload.status == "in_progress" and "telegram_task_id" not in item.evidence:
+            if self.telegram_repository is None:
+                raise AppError("TELEGRAM_NOT_CONFIGURED", "Telegram task service is unavailable", 503)
+            employee = await self.telegram_repository.get_employee_by_linked_user(
+                user.tenant_id, assigned_user_id
+            )
+            if employee is None or not employee.is_active:
+                raise AppError(
+                    "TELEGRAM_EMPLOYEE_NOT_LINKED",
+                    "The selected Revora employee has no active Telegram account",
+                    422,
+                )
+            task = await self.telegram_repository.create_task(
+                tenant_id=user.tenant_id,
+                employee_id=employee.id,
+                assigned_by_user_id=user.id,
+                title=item.title,
+                description=(
+                    f"{item.description}\n\nСледующее действие: {item.recommended_action}\n"
+                    f"Оценка возможности: {item.estimated_amount} {item.currency}."
+                ),
+                priority=(
+                    TelegramTaskPriority.URGENT
+                    if item.severity == "critical"
+                    else TelegramTaskPriority.HIGH
+                ),
+                due_at=datetime.now(UTC) + (
+                    timedelta(minutes=30)
+                    if item.severity == "critical"
+                    else timedelta(hours=2)
+                ),
+            )
+            item.evidence = {**item.evidence, "telegram_task_id": str(task.id)}
+            await self.telegram_repository.add_audit(
+                tenant_id=user.tenant_id,
+                actor_user_id=user.id,
+                action="loss.recovery_task.created",
+                entity_type="loss_opportunity",
+                entity_id=item.id,
+                changes={"telegram_task_id": str(task.id), "assigned_user_id": str(assigned_user_id)},
+            )
         item.resolved_at = (
             datetime.now(UTC) if payload.status in {"recovered", "dismissed"} else None
         )

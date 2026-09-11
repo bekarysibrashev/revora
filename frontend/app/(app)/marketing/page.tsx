@@ -140,6 +140,12 @@ type MetaOverview = {
     click_to_conversation_rate: string | null;
     landing_page_view_rate: string | null;
     video_thruplay_rate: string | null;
+    attributed_revenue: string;
+    attributed_revenue_currency: string | null;
+    attributed_leads: number;
+    roas: string | null;
+    romi: string | null;
+    attribution_confidence: string | null;
   }[];
   data_as_of: string | null;
 };
@@ -391,6 +397,8 @@ export default function MarketingPage() {
                       <th>CPL</th>
                       <th>Диалоги</th>
                       <th>Цена диалога</th>
+                      <th>Связанная оплата</th>
+                      <th>ROAS / ROMI</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -400,6 +408,24 @@ export default function MarketingPage() {
                       >
                         <td>
                           <strong>{campaign.campaign_name}</strong>
+                        </td>
+                        <td>
+                          {campaign.attribution_confidence
+                            ? currency(
+                                campaign.attributed_revenue,
+                                campaign.attributed_revenue_currency || "KZT",
+                              )
+                            : "Нет доказанной связи"}
+                          {campaign.attributed_leads > 0 && (
+                            <small> · {campaign.attributed_leads} пациентов</small>
+                          )}
+                        </td>
+                        <td>
+                          {campaign.roas
+                            ? `${Number(campaign.roas).toFixed(2)}× / ${(
+                                Number(campaign.romi || 0) * 100
+                              ).toFixed(0)}%`
+                            : "—"}
                         </td>
                         <td><span className={`campaign-status ${campaign.effective_status.toLowerCase()}`}>{campaign.effective_status==="ACTIVE"?"Активна":campaign.effective_status==="UNKNOWN"?"Статус не получен":"Остановлена"}</span></td><td>{campaign.account_name}</td>
                         <td>{currency(campaign.spend, campaign.currency)}</td>
@@ -427,7 +453,7 @@ export default function MarketingPage() {
                     ))}
                     {!meta.data.campaigns.length && (
                       <tr>
-                        <td colSpan={8} className="empty">
+                        <td colSpan={10} className="empty">
                           За выбранный период рекламы нет.
                         </td>
                       </tr>

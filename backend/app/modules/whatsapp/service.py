@@ -332,6 +332,7 @@ class WhatsAppService:
         media_base64: str | None = None,
         media_mime_type: str | None = None,
         media_filename: str | None = None,
+        attribution: dict[str, str] | None = None,
     ) -> SimulatorMessageResponse:
         duplicate = await self.session.scalar(
             select(WhatsAppMessage).where(
@@ -360,6 +361,7 @@ class WhatsAppService:
                 phone=contact_id,
                 source="whatsapp",
                 occurred_at=provider_timestamp or datetime.now(UTC),
+                attribution=attribution,
             )
         conversation = await self._get_or_create_conversation(
             tenant_id, channel.id, contact_id
@@ -492,6 +494,7 @@ class WhatsAppService:
         media_base64: str | None = None,
         media_mime_type: str | None = None,
         media_filename: str | None = None,
+        attribution: dict[str, str] | None = None,
     ) -> None:
         duplicate = await self.session.scalar(
             select(WhatsAppMessage.id).where(
@@ -511,6 +514,7 @@ class WhatsAppService:
                 phone=contact_id,
                 source="whatsapp",
                 occurred_at=provider_timestamp or datetime.now(UTC),
+                attribution=attribution,
             )
         conversation = await self._get_or_create_conversation(
             tenant_id, channel.id, contact_id

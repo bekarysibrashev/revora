@@ -22,6 +22,14 @@ class MetaAccountData:
 
 
 @dataclass(frozen=True)
+class MetaAdAttribution:
+    account_id: str
+    campaign_id: str
+    adset_id: str
+    ad_id: str
+
+
+@dataclass(frozen=True)
 class MetaCampaignDay:
     campaign_external_id: str
     campaign_name: str
@@ -96,6 +104,17 @@ class MetaAdsClient:
             timezone_name=str(payload["timezone_name"]),
         )
 
+    async def ad_attribution(self, ad_id: str) -> MetaAdAttribution:
+        payload = await self._get(
+            f"/{ad_id}",
+            {"fields": "id,account_id,campaign{id},adset{id}"},
+        )
+        return MetaAdAttribution(
+            account_id=str(payload["account_id"]),
+            campaign_id=str(payload["campaign"]["id"]),
+            adset_id=str(payload["adset"]["id"]),
+            ad_id=str(payload["id"]),
+        )
     async def campaign_days(
         self, account_id: str, date_from: date, date_to: date
     ) -> list[MetaCampaignDay]:

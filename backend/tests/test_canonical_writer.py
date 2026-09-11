@@ -70,3 +70,19 @@ async def test_patient_phone_hash_converts_matching_lead_to_won() -> None:
     assert result == patient_id
     statement = session.execute.await_args.args[0]
     assert "UPDATE leads" in str(statement)
+
+
+@pytest.mark.asyncio
+async def test_salary_cannot_be_duplicated_through_expense_import() -> None:
+    writer = CanonicalWriter(AsyncMock())
+
+    with pytest.raises(CanonicalWriteError, match="payroll_fact"):
+        await writer._write_expense_fact(
+            uuid4(),
+            {
+                "external_id": "salary-2026-08",
+                "occurred_on": "2026-08-31",
+                "amount": "100000",
+                "category_name": "Начисление зарплаты",
+            },
+        )

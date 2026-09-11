@@ -59,11 +59,32 @@ class FakeLossRepository:
     async def upsert(self, tenant_id, candidates, date_from, date_to):
         return len(candidates)
 
+    async def reconcile_recoveries(self, tenant_id, date_from, date_to, branch_id):
+        return 0
+
     async def list(self, tenant_id, date_from, date_to, branch_id):
         return [self.item]
 
     async def get(self, tenant_id, opportunity_id):
         return self.item if opportunity_id == self.item.id else None
+
+
+class FakeTelegramRepository:
+    def __init__(self, linked_user_id):
+        self.employee = SimpleNamespace(id=uuid4(), linked_user_id=linked_user_id, is_active=True)
+        self.tasks = []
+        self.audits = []
+
+    async def get_employee_by_linked_user(self, tenant_id, user_id):
+        return self.employee if user_id == self.employee.linked_user_id else None
+
+    async def create_task(self, **values):
+        task = SimpleNamespace(id=uuid4(), **values)
+        self.tasks.append(task)
+        return task
+
+    async def add_audit(self, **values):
+        self.audits.append(values)
 
 
 @pytest.mark.asyncio
@@ -91,3 +112,40 @@ async def test_recovered_loss_requires_amount() -> None:
         )
 
     assert error.value.code == "RECOVERED_AMOUNT_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_starting_recovery_creates_one_linked_telegram_task() -> None:
+    repository = FakeLossRepository()
+    linked_user_id = uuid4()
+    telegram = FakeTelegramRepository(linked_user_id)
+    service = LossService(repository, telegram)
+    from app.modules.losses.schemas import LossUpdateRequest
+
+    actor = make_user()
+    await service.update(
+        actor,
+        repository.item.id,
+        LossUpdateRequest(status="in_progress", assigned_user_id=linked_user_id),
+    )
+    await service.update(
+        actor,
+        repository.item.id,
+        LossUpdateRequest(status="in_progress", assigned_user_id=linked_user_id),
+    )
+
+    assert len(telegram.tasks) == 1
+    assert repository.item.evidence["telegram_task_id"] == str(telegram.tasks[0].id)
+
+
+@pytest.mark.asyncio
+async def test_starting_recovery_requires_assignee() -> None:
+    repository = FakeLossRepository()
+    from app.modules.losses.schemas import LossUpdateRequest
+
+    with pytest.raises(AppError) as error:
+        await LossService(repository).update(
+            make_user(), repository.item.id, LossUpdateRequest(status="in_progress")
+        )
+
+    assert error.value.code == "LOSS_ASSIGNEE_REQUIRED"

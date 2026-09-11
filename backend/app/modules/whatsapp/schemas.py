@@ -206,6 +206,7 @@ class WhatsAppQrMessageEvent(BaseModel):
     media_base64: str | None = Field(default=None, max_length=12_000_000)
     media_mime_type: str | None = Field(default=None, max_length=120)
     media_filename: str | None = Field(default=None, max_length=255)
+    attribution: dict[str, str] | None = None
 
 
 class WhatsAppQrEventPayload(BaseModel):

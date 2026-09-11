@@ -292,6 +292,24 @@ function usableJid(message) {
   return candidates.find((jid) => String(jid || '').endsWith('@s.whatsapp.net')) || candidates[1]
 }
 
+function attributionFromMessage(message) {
+  const payload = message?.message || {}
+  const context = payload.extendedTextMessage?.contextInfo
+    || payload.imageMessage?.contextInfo
+    || payload.videoMessage?.contextInfo
+    || payload.documentMessage?.contextInfo
+    || payload.buttonsResponseMessage?.contextInfo
+    || payload.listResponseMessage?.contextInfo
+    || payload.messageContextInfo
+  const reply = context?.externalAdReply
+  if (!reply) return null
+  const attribution = { kind: 'meta_whatsapp_click' }
+  if (reply.sourceId) attribution.ad_id = String(reply.sourceId).slice(0, 120)
+  if (reply.ctwaClid) attribution.ctwa_clid = String(reply.ctwaClid).slice(0, 300)
+  if (reply.sourceUrl) attribution.source_url = String(reply.sourceUrl).slice(0, 1000)
+  return Object.keys(attribution).length > 1 ? attribution : null
+}
+
 async function eventFromMessage(message, history = false) {
   const jid = usableJid(message)
   if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast') return null
@@ -310,6 +328,7 @@ async function eventFromMessage(message, history = false) {
     media_filename: content.media_filename || null,
     timestamp: timestampSeconds(message.messageTimestamp),
     history,
+    attribution: attributionFromMessage(message),
   }
 }
 

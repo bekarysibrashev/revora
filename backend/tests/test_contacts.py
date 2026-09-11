@@ -59,6 +59,29 @@ class LeadRecordingRepository(FakeContactRepository):
 
 
 @pytest.mark.asyncio
+async def test_explicit_meta_whatsapp_first_touch_is_forwarded_to_lead() -> None:
+    repository = LeadRecordingRepository()
+    registry = ContactRegistry(repository)
+    attribution = {
+        "kind": "meta_whatsapp_click",
+        "ad_id": "120000000001",
+        "ctwa_clid": "privacy-safe-click-id",
+    }
+
+    await registry.register_inbound(
+        tenant_id=uuid4(),
+        phone="+77011234567",
+        source="whatsapp",
+        occurred_at=datetime(2026, 9, 11, tzinfo=UTC),
+        attribution=attribution,
+    )
+
+    saved = repository.lead_syncs[0]["attribution"]
+    assert {key: saved[key] for key in attribution} == attribution
+    assert saved["first_touch_at"] == "2026-09-11T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
 async def test_registry_deduplicates_channels_and_keeps_first_source() -> None:
     repository = FakeContactRepository()
     registry = ContactRegistry(repository)

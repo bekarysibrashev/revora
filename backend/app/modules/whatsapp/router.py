@@ -659,6 +659,7 @@ async def receive_qr_events(
                 media_base64=message.media_base64,
                 media_mime_type=message.media_mime_type,
                 media_filename=message.media_filename,
+                attribution=message.attribution,
             )
         else:
             await service.store_synced_message(
@@ -674,6 +675,7 @@ async def receive_qr_events(
                 media_base64=message.media_base64,
                 media_mime_type=message.media_mime_type,
                 media_filename=message.media_filename,
+                attribution=message.attribution,
             )
         processed += 1
     return {"processed": processed}

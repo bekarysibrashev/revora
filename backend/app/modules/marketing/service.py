@@ -141,6 +141,15 @@ class MarketingService:
                 await self.repository.mark_meta_sync_succeeded(
                     tenant_id, account_id, synced_at
                 )
+            for ad_id in await self.repository.unresolved_meta_ad_ids(tenant_id):
+                try:
+                    await self.repository.enrich_meta_ad(
+                        tenant_id, await self.meta_client.ad_attribution(ad_id)
+                    )
+                except MetaAdsError:
+                    # Campaign metrics remain usable. Unresolvable/expired ad
+                    # identifiers stay explicitly unattributed and retry later.
+                    continue
         except MetaAdsError as exc:
             await self.repository.mark_meta_sync_failed(
                 tenant_id, account_id, synced_at, str(exc)
@@ -190,6 +199,9 @@ class MarketingService:
             [row for row in all_rows if row.account_external_id == account_id]
             if account_id
             else all_rows
+        )
+        campaign_attribution = await self.repository.campaign_attribution_totals(
+            user.tenant_id, date_from, date_to
         )
         period_days = (date_to - date_from).days + 1
         previous_date_to = date_from - timedelta(days=1)
@@ -250,6 +262,38 @@ class MarketingService:
                 ),
                 video_thruplay_rate=self._ratio(
                     row.video_thruplays, row.video_plays
+                ),
+                attributed_revenue=campaign_attribution.get(
+                    row.campaign_external_id, (Decimal("0"), 0, None)
+                )[0],
+                attributed_leads=campaign_attribution.get(
+                    row.campaign_external_id, (Decimal("0"), 0, None)
+                )[1],
+                attributed_revenue_currency=campaign_attribution.get(
+                    row.campaign_external_id, (Decimal("0"), 0, None)
+                )[2],
+                roas=(
+                    campaign_attribution.get(row.campaign_external_id, (Decimal("0"), 0, None))[0]
+                    / row.spend
+                    if row.spend
+                    and campaign_attribution.get(row.campaign_external_id, (Decimal("0"), 0, None))[0]
+                    and campaign_attribution.get(row.campaign_external_id, (Decimal("0"), 0, None))[2]
+                    == row.currency
+                    else None
+                ),
+                romi=(
+                    (campaign_attribution.get(row.campaign_external_id, (Decimal("0"), 0, None))[0] - row.spend)
+                    / row.spend
+                    if row.spend
+                    and campaign_attribution.get(row.campaign_external_id, (Decimal("0"), 0, None))[0]
+                    and campaign_attribution.get(row.campaign_external_id, (Decimal("0"), 0, None))[2]
+                    == row.currency
+                    else None
+                ),
+                attribution_confidence=(
+                    Decimal("1")
+                    if campaign_attribution.get(row.campaign_external_id, (Decimal("0"), 0, None))[1]
+                    else None
                 ),
             )
             for row in rows
