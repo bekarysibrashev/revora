@@ -395,30 +395,38 @@ class LossRepository:
         date_to: date,
     ) -> int:
         now = datetime.now(UTC)
-        for item in candidates:
-            statement = insert(LossOpportunity).values(
-                tenant_id=tenant_id,
-                branch_id=item.branch_id,
-                assigned_user_id=item.assigned_user_id,
-                fingerprint=item.fingerprint,
-                loss_type=item.loss_type,
-                severity=item.severity,
-                status="open",
-                title=item.title,
-                description=item.description,
-                recommended_action=item.recommended_action,
-                entity_type=item.entity_type,
-                entity_id=item.entity_id,
-                estimated_amount=item.estimated_amount,
-                recovered_amount=ZERO,
-                currency="KZT",
-                confidence=item.confidence,
-                evidence=item.evidence,
-                period_start=date_from,
-                period_end=date_to,
-                detected_at=now,
-                last_detected_at=now,
-            )
+        values = [
+            {
+                "tenant_id": tenant_id,
+                "branch_id": item.branch_id,
+                "assigned_user_id": item.assigned_user_id,
+                "fingerprint": item.fingerprint,
+                "loss_type": item.loss_type,
+                "severity": item.severity,
+                "status": "open",
+                "title": item.title,
+                "description": item.description,
+                "recommended_action": item.recommended_action,
+                "entity_type": item.entity_type,
+                "entity_id": item.entity_id,
+                "estimated_amount": item.estimated_amount,
+                "recovered_amount": ZERO,
+                "currency": "KZT",
+                "confidence": item.confidence,
+                "evidence": item.evidence,
+                "period_start": date_from,
+                "period_end": date_to,
+                "detected_at": now,
+                "last_detected_at": now,
+            }
+            for item in candidates
+        ]
+        # A three-month clinic range can yield thousands of cancellations.
+        # Sending one INSERT per opportunity made the HTTP refresh take minutes
+        # on Render. Keep batches below PostgreSQL's parameter limit while
+        # reducing the operation to a handful of round trips.
+        for offset in range(0, len(values), 500):
+            statement = insert(LossOpportunity).values(values[offset : offset + 500])
             statement = statement.on_conflict_do_update(
                 index_elements=["tenant_id", "fingerprint"],
                 set_={
@@ -486,38 +494,70 @@ class LossRepository:
         )
         if branch_id:
             opportunities = opportunities.where(LossOpportunity.branch_id == branch_id)
-        recovered = 0
-        for item in (await self.session.scalars(opportunities)).all():
-            patient_id = None
-            event_at = None
-            if item.entity_type == "appointment":
-                entity = await self.session.scalar(
-                    select(Appointment).where(
-                        Appointment.tenant_id == tenant_id,
-                        Appointment.id == item.entity_id,
+        items = list((await self.session.scalars(opportunities)).all())
+        if not items:
+            return 0
+
+        event_by_opportunity: dict[UUID, tuple[UUID | None, datetime | None]] = {}
+
+        appointment_ids = [item.entity_id for item in items if item.entity_type == "appointment"]
+        if appointment_ids:
+            rows = await self.session.execute(
+                select(Appointment.id, Appointment.patient_id, Appointment.starts_at).where(
+                    Appointment.tenant_id == tenant_id,
+                    Appointment.id.in_(appointment_ids),
+                )
+            )
+            entity_map = {row.id: (row.patient_id, row.starts_at) for row in rows.all()}
+            event_by_opportunity.update(
+                (item.id, entity_map.get(item.entity_id, (None, None)))
+                for item in items
+                if item.entity_type == "appointment"
+            )
+
+        lead_ids = [item.entity_id for item in items if item.entity_type == "lead"]
+        if lead_ids:
+            rows = await self.session.execute(
+                select(Lead.id, Lead.patient_id, Lead.created_at).where(
+                    Lead.tenant_id == tenant_id, Lead.id.in_(lead_ids)
+                )
+            )
+            entity_map = {row.id: (row.patient_id, row.created_at) for row in rows.all()}
+            event_by_opportunity.update(
+                (item.id, entity_map.get(item.entity_id, (None, None)))
+                for item in items
+                if item.entity_type == "lead"
+            )
+
+        call_ids = [item.entity_id for item in items if item.entity_type == "call"]
+        if call_ids:
+            rows = await self.session.execute(
+                select(Call.id, Lead.patient_id, Call.started_at)
+                .outerjoin(
+                    Lead,
+                    (Lead.tenant_id == Call.tenant_id) & (Lead.id == Call.lead_id),
+                )
+                .where(Call.tenant_id == tenant_id, Call.id.in_(call_ids))
+            )
+            entity_map = {row.id: (row.patient_id, row.started_at) for row in rows.all()}
+            event_by_opportunity.update(
+                (item.id, entity_map.get(item.entity_id, (None, None)))
+                for item in items
+                if item.entity_type == "call"
+            )
+
+        message_ids = [
+            item.entity_id for item in items if item.entity_type == "whatsapp_message"
+        ]
+        if message_ids:
+            rows = (
+                await self.session.execute(
+                    select(
+                        WhatsAppMessage.id,
+                        WhatsAppMessage.provider_timestamp,
+                        WhatsAppMessage.created_at,
+                        WhatsAppConversation.contact_hash,
                     )
-                )
-                if entity is not None:
-                    patient_id, event_at = entity.patient_id, entity.starts_at
-            elif item.entity_type == "lead":
-                entity = await self.session.scalar(
-                    select(Lead).where(Lead.tenant_id == tenant_id, Lead.id == item.entity_id)
-                )
-                if entity is not None:
-                    patient_id, event_at = entity.patient_id, entity.created_at
-            elif item.entity_type == "call":
-                entity = await self.session.scalar(
-                    select(Call).where(Call.tenant_id == tenant_id, Call.id == item.entity_id)
-                )
-                if entity is not None and entity.lead_id is not None:
-                    lead = await self.session.scalar(
-                        select(Lead).where(Lead.tenant_id == tenant_id, Lead.id == entity.lead_id)
-                    )
-                    if lead is not None:
-                        patient_id, event_at = lead.patient_id, entity.started_at
-            elif item.entity_type == "whatsapp_message":
-                entity = (await self.session.execute(
-                    select(WhatsAppMessage, WhatsAppConversation.contact_hash)
                     .join(
                         WhatsAppConversation,
                         (WhatsAppConversation.tenant_id == WhatsAppMessage.tenant_id)
@@ -525,30 +565,65 @@ class LossRepository:
                     )
                     .where(
                         WhatsAppMessage.tenant_id == tenant_id,
-                        WhatsAppMessage.id == item.entity_id,
+                        WhatsAppMessage.id.in_(message_ids),
                     )
-                )).first()
-                if entity is not None:
-                    message, contact_hash = entity
-                    lead = await self.session.scalar(
-                        select(Lead).where(
-                            Lead.tenant_id == tenant_id, Lead.external_id == contact_hash
-                        )
-                    )
-                    if lead is not None:
-                        patient_id = lead.patient_id
-                        event_at = message.provider_timestamp or message.created_at
+                )
+            ).all()
+            hashes = {row.contact_hash for row in rows}
+            lead_rows = await self.session.execute(
+                select(Lead.external_id, Lead.patient_id).where(
+                    Lead.tenant_id == tenant_id, Lead.external_id.in_(hashes)
+                )
+            )
+            patient_by_hash = {row.external_id: row.patient_id for row in lead_rows.all()}
+            entity_map = {
+                row.id: (
+                    patient_by_hash.get(row.contact_hash),
+                    row.provider_timestamp or row.created_at,
+                )
+                for row in rows
+            }
+            event_by_opportunity.update(
+                (item.id, entity_map.get(item.entity_id, (None, None)))
+                for item in items
+                if item.entity_type == "whatsapp_message"
+            )
+
+        patient_ids = {
+            patient_id
+            for patient_id, event_at in event_by_opportunity.values()
+            if patient_id is not None and event_at is not None
+        }
+        payments_by_patient: dict[UUID, list[tuple[datetime, Decimal]]] = {}
+        if patient_ids:
+            payment_rows = await self.session.execute(
+                select(
+                    RevenueFact.patient_id,
+                    RevenueFact.occurred_at,
+                    RevenueFact.amount,
+                ).where(
+                    RevenueFact.tenant_id == tenant_id,
+                    RevenueFact.patient_id.in_(patient_ids),
+                    RevenueFact.recognition_type == "payment",
+                )
+            )
+            for row in payment_rows.all():
+                payments_by_patient.setdefault(row.patient_id, []).append(
+                    (row.occurred_at, Decimal(row.amount))
+                )
+
+        recovered = 0
+        for item in items:
+            patient_id, event_at = event_by_opportunity.get(item.id, (None, None))
             if patient_id is None or event_at is None:
                 continue
-            payment = Decimal(
-                (await self.session.scalar(
-                    select(func.coalesce(func.sum(RevenueFact.amount), 0)).where(
-                        RevenueFact.tenant_id == tenant_id,
-                        RevenueFact.patient_id == patient_id,
-                        RevenueFact.recognition_type == "payment",
-                        RevenueFact.occurred_at >= event_at,
-                    )
-                )) or 0
+            payment = sum(
+                (
+                    amount
+                    for occurred_at, amount in payments_by_patient.get(patient_id, [])
+                    if occurred_at >= event_at
+                ),
+                ZERO,
             )
             if payment <= ZERO:
                 continue

@@ -51,7 +51,7 @@
 
 ## Проверки
 
-- Backend: `370 passed, 1 skipped`.
+- Backend: `371 passed, 1 skipped`.
 - Frontend typecheck: без ошибок.
 - Frontend Vitest: `6 passed`.
 - Alembic: одна head `20260911_0040`.

@@ -7,6 +7,7 @@ import pytest
 
 from app.core.errors import AppError
 from app.modules.auth.models import User, UserRole
+from app.modules.losses.repository import LossCandidate, LossRepository
 from app.modules.losses.service import LossService
 
 
@@ -85,6 +86,40 @@ class FakeTelegramRepository:
 
     async def add_audit(self, **values):
         self.audits.append(values)
+
+
+class RecordingSession:
+    def __init__(self):
+        self.statements = []
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+
+
+@pytest.mark.asyncio
+async def test_loss_upsert_batches_large_maps() -> None:
+    session = RecordingSession()
+    candidate = LossCandidate(
+        fingerprint="f",
+        branch_id=None,
+        loss_type="cancelled",
+        severity="warning",
+        title="Отмена",
+        description="Описание",
+        recommended_action="Перезвонить",
+        entity_type="appointment",
+        entity_id=uuid4(),
+        estimated_amount=Decimal("100"),
+        confidence=Decimal("0.5"),
+        evidence={},
+    )
+
+    detected = await LossRepository(session).upsert(
+        uuid4(), [candidate] * 1201, date(2026, 6, 1), date(2026, 8, 31)
+    )
+
+    assert detected == 1201
+    assert len(session.statements) == 3
 
 
 @pytest.mark.asyncio
