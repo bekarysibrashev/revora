@@ -37,6 +37,8 @@ class LossMapSummary(BaseModel):
     in_progress_count: int
     recovered_count: int
     critical_count: int
+    stage_counts: dict[str, int] = Field(default_factory=dict)
+    stage_amounts: dict[str, Decimal] = Field(default_factory=dict)
 
 
 class LossMapResponse(BaseModel):

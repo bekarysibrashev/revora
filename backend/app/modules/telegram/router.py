@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.modules.auth.dependencies import CurrentUser
 from app.modules.telegram.dependencies import get_telegram_service
@@ -17,11 +17,24 @@ from app.modules.telegram.schemas import (
     TaskCreateRequest,
     TaskListResponse,
     TaskResponse,
+    TelegramRuntimeStatusResponse,
 )
 from app.modules.telegram.service import TelegramService
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 ServiceDependency = Annotated[TelegramService, Depends(get_telegram_service)]
+
+
+@router.get("/status", response_model=TelegramRuntimeStatusResponse)
+async def runtime_status(
+    request: Request, _: CurrentUser
+) -> TelegramRuntimeStatusResponse:
+    worker = request.app.state.telegram_worker
+    return TelegramRuntimeStatusResponse(
+        configured=worker.configured,
+        running=worker.running,
+        last_error=worker.last_error,
+    )
 
 
 @router.post("/invitations", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED)
@@ -82,4 +95,3 @@ async def configure_report(
 ) -> Response:
     await service.configure_report(user, employee_id, payload)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-

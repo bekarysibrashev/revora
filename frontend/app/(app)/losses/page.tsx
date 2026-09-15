@@ -93,6 +93,8 @@ export default function LossesPage() {
               />
             </section>
 
+            <LossFunnel summary={data.data.summary} />
+
             <section className="panel loss-toolbar">
               <div>
                 <strong>Детерминированный поиск потерь</strong>
@@ -153,6 +155,32 @@ export default function LossesPage() {
   );
 }
 
+function LossFunnel({ summary }: { summary: {stage_counts:Record<string,number>;stage_amounts:Record<string,string>} }) {
+  const stages = ["response", "booking", "visit", "payment"];
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>Где обрывается путь пациента</h2>
+          <p>Все активные случаи, для которых истёк контрольный срок и не найдено следующее действие.</p>
+        </div>
+      </div>
+      <div className="status-list">
+        {stages.map((stage) => {
+          const count = summary.stage_counts[stage] || 0;
+          const amount = Number(summary.stage_amounts[stage] || 0);
+          return (
+            <span key={stage}>
+              {stageLabel(stage)}
+              <strong>{count} · {money(amount)}</strong>
+            </span>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function LossCard({
   item,
   pending,
@@ -180,6 +208,22 @@ function LossCard({
         </div>
         <h2>{item.title}</h2>
         <p>{item.description}</p>
+        <div className="loss-proof">
+          <span>
+            <small>Где оборвалась цепочка</small>
+            <strong>{stageLabel(item.evidence.funnel_stage)}</strong>
+          </span>
+          <span>
+            <small>Почему показано</small>
+            <strong>{reasonLabel(item.evidence.reason_code)}</strong>
+          </span>
+          {typeof item.evidence.source === "string" && (
+            <span>
+              <small>Источник</small>
+              <strong>{sourceLabel(item.evidence.source)}</strong>
+            </span>
+          )}
+        </div>
         <div className="loss-action">
           <small>Следующее действие</small>
           <strong>{item.recommended_action}</strong>
@@ -257,4 +301,27 @@ function statusLabel(status: LossOpportunity["status"]) {
     recovered: "Возвращено",
     dismissed: "Исключено",
   }[status];
+}
+
+function stageLabel(value: unknown) {
+  return {
+    response: "Ответ на обращение",
+    booking: "Обращение → запись",
+    visit: "Запись → визит",
+    payment: "Лечение → оплата",
+  }[String(value)] || "Требует проверки";
+}
+
+function reasonLabel(value: unknown) {
+  return {
+    missed_without_callback: "Не найден обратный звонок за 30 минут",
+    whatsapp_unanswered_after_sla: "Нет ответа в WhatsApp более 30 минут",
+    no_patient_or_appointment_after_14_days: "За 14 дней не появились пациент и запись",
+    cancelled: "Отмена без последующей активной записи",
+    no_show: "Неявка без последующей активной записи",
+  }[String(value)] || "Есть подтверждённый обрыв воронки";
+}
+
+function sourceLabel(value: string) {
+  return { kcell: "Kcell", whatsapp: "WhatsApp", meta: "Meta Ads" }[value] || value;
 }

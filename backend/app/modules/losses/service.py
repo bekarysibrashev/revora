@@ -37,6 +37,9 @@ class LossService:
         detected = await self.repository.upsert(
             user.tenant_id, candidates, date_from, date_to
         )
+        await self.repository.dismiss_absent(
+            user.tenant_id, candidates, date_from, date_to
+        )
         await self.repository.reconcile_recoveries(
             user.tenant_id, date_from, date_to, branch_id
         )
@@ -50,27 +53,23 @@ class LossService:
         records = await self.repository.list(
             user.tenant_id, date_from, date_to, branch_id
         )
+        totals = await self.repository.summary(
+            user.tenant_id, date_from, date_to, branch_id
+        )
         items = [self._response(item) for item in records]
         return LossMapResponse(
             summary=LossMapSummary(
-                estimated_total=sum(
-                    (
-                        item.estimated_amount
-                        for item in items
-                        if item.status not in {"recovered", "dismissed"}
-                    ),
-                    ZERO,
-                ),
-                recovered_total=sum((item.recovered_amount for item in items), ZERO),
-                open_count=sum(item.status == "open" for item in items),
-                in_progress_count=sum(item.status == "in_progress" for item in items),
-                recovered_count=sum(item.status == "recovered" for item in items),
-                critical_count=sum(
-                    item.severity == "critical" and item.status == "open" for item in items
-                ),
+                estimated_total=totals.estimated_total,
+                recovered_total=totals.recovered_total,
+                open_count=totals.open_count,
+                in_progress_count=totals.in_progress_count,
+                recovered_count=totals.recovered_count,
+                critical_count=totals.critical_count,
+                stage_counts=totals.stage_counts,
+                stage_amounts=totals.stage_amounts,
             ),
             items=items,
-            total=len(items),
+            total=totals.total_count,
             date_from=date_from,
             date_to=date_to,
             branch_id=branch_id,

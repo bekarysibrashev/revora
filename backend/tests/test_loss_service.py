@@ -7,7 +7,12 @@ import pytest
 
 from app.core.errors import AppError
 from app.modules.auth.models import User, UserRole
-from app.modules.losses.repository import LossCandidate, LossRepository
+from app.modules.losses.repository import (
+    LossCandidate,
+    LossRepository,
+    LossTotals,
+    expected_contact_value,
+)
 from app.modules.losses.service import LossService
 
 
@@ -63,8 +68,24 @@ class FakeLossRepository:
     async def reconcile_recoveries(self, tenant_id, date_from, date_to, branch_id):
         return 0
 
+    async def dismiss_absent(self, tenant_id, candidates, date_from, date_to):
+        return 0
+
     async def list(self, tenant_id, date_from, date_to, branch_id):
         return [self.item]
+
+    async def summary(self, tenant_id, date_from, date_to, branch_id):
+        return LossTotals(
+            estimated_total=Decimal("100000"),
+            recovered_total=Decimal("0"),
+            open_count=1,
+            in_progress_count=0,
+            recovered_count=0,
+            critical_count=1,
+            total_count=1832,
+            stage_counts={"visit": 1832},
+            stage_amounts={"visit": Decimal("100000")},
+        )
 
     async def get(self, tenant_id, opportunity_id):
         return self.item if opportunity_id == self.item.id else None
@@ -122,6 +143,36 @@ async def test_loss_upsert_batches_large_maps() -> None:
     assert len(session.statements) == 3
 
 
+def test_contact_value_is_probability_weighted() -> None:
+    amount, rates = expected_contact_value(
+        average_visit=Decimal("50000"),
+        leads_total=100,
+        leads_won=60,
+        appointments_total=100,
+        appointments_completed=80,
+        revenue_accrual=Decimal("1000000"),
+        revenue_payment=Decimal("900000"),
+    )
+
+    assert amount == Decimal("21600.00")
+    assert rates == {"booking_rate": 0.6, "show_rate": 0.8, "collection_rate": 0.9}
+
+
+def test_contact_value_uses_conservative_rates_for_sparse_history() -> None:
+    amount, rates = expected_contact_value(
+        average_visit=Decimal("50000"),
+        leads_total=2,
+        leads_won=1,
+        appointments_total=4,
+        appointments_completed=4,
+        revenue_accrual=Decimal("0"),
+        revenue_payment=Decimal("0"),
+    )
+
+    assert amount == Decimal("11156.25")
+    assert rates == {"booking_rate": 0.35, "show_rate": 0.75, "collection_rate": 0.85}
+
+
 @pytest.mark.asyncio
 async def test_loss_refresh_returns_financial_summary() -> None:
     response = await LossService(FakeLossRepository()).refresh(
@@ -131,6 +182,8 @@ async def test_loss_refresh_returns_financial_summary() -> None:
     assert response.detected == 1
     assert response.summary.estimated_total == Decimal("100000")
     assert response.summary.critical_count == 1
+    assert response.total == 1832
+    assert response.summary.stage_counts == {"visit": 1832}
 
 
 @pytest.mark.asyncio

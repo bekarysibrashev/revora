@@ -48,6 +48,13 @@ class EmployeeListResponse(BaseModel):
     total: int
 
 
+class TelegramRuntimeStatusResponse(BaseModel):
+    configured: bool
+    running: bool
+    mode: str = "embedded"
+    last_error: str | None = None
+
+
 class EmployeeUpdateRequest(BaseModel):
     is_active: bool | None = None
     role: UserRole | None = None

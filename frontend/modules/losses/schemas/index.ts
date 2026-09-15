@@ -27,6 +27,8 @@ export type LossMap = {
     in_progress_count: number;
     recovered_count: number;
     critical_count: number;
+    stage_counts: Record<string, number>;
+    stage_amounts: Record<string, string>;
   };
   items: LossOpportunity[];
   total: number;

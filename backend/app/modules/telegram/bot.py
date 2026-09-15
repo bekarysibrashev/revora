@@ -474,21 +474,40 @@ class TelegramBotRunner:
         self.offset: int | None = None
 
     async def run_forever(self) -> None:
-        await self.api.call("deleteWebhook", {"drop_pending_updates": False})
-        await self.api.call(
-            "setMyCommands",
-            {
-                "commands": [
-                    {"command": "tasks", "description": "Мои активные задания"},
-                    {"command": "agent", "description": "Задать вопрос ИИ-агенту"},
-                    {"command": "new", "description": "Новый диалог с ИИ"},
-                    {"command": "me", "description": "Мой профиль и роль"},
-                    {"command": "help", "description": "Помощь"},
-                ]
-            },
-        )
-        logger.info("Telegram staff bot started")
+        # Telegram long polling permits only one consumer per bot token. Keep
+        # an advisory lock for the entire process lifetime so an embedded web
+        # worker and an accidentally left dedicated worker cannot conflict.
+        async with AsyncSessionFactory() as lock_session:
+            while not bool(
+                await lock_session.scalar(
+                    text("SELECT pg_try_advisory_lock(72498611235813)")
+                )
+            ):
+                logger.info("Another Telegram worker owns the polling lock; retrying")
+                await asyncio.sleep(30)
+            try:
+                await self._poll_forever()
+            finally:
+                await lock_session.execute(
+                    text("SELECT pg_advisory_unlock(72498611235813)")
+                )
+
+    async def _poll_forever(self) -> None:
         try:
+            await self.api.call("deleteWebhook", {"drop_pending_updates": False})
+            await self.api.call(
+                "setMyCommands",
+                {
+                    "commands": [
+                        {"command": "tasks", "description": "Мои активные задания"},
+                        {"command": "agent", "description": "Задать вопрос ИИ-агенту"},
+                        {"command": "new", "description": "Новый диалог с ИИ"},
+                        {"command": "me", "description": "Мой профиль и роль"},
+                        {"command": "help", "description": "Помощь"},
+                    ]
+                },
+            )
+            logger.info("Telegram staff bot started")
             while True:
                 try:
                     updates, _ = await asyncio.gather(
