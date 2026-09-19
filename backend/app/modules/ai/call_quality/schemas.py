@@ -132,6 +132,31 @@ class ManualTestResponse(BaseModel):
     status: str
 
 
+class CallLabSegment(BaseModel):
+    """A transcript segment returned once to the owner, never persisted."""
+
+    start: float
+    end: float
+    speaker: str
+    role: str
+    text: str
+
+
+class CallLabResponse(BaseModel):
+    """Ephemeral result of a manually uploaded recording."""
+
+    status: str
+    duration_seconds: float
+    operator_speaker: str
+    customer_speaker: str
+    confidence: float
+    needs_review: bool
+    languages: list[str]
+    mixed_language: bool
+    summary: str
+    transcript: list[CallLabSegment]
+
+
 class OperatorPerformanceItem(BaseModel):
     employee: str
     calls_analyzed: int

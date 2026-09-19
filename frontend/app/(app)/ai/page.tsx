@@ -23,6 +23,18 @@ type Evidence = { criterion: string; timestamp_from: number; timestamp_to: numbe
 type Analysis = { id:string;call_id:string;status:string;result:string|null;score:number|null;summary:string|null;criteria_scores:Array<{name:string;score:number;weight:number;explanation:string}>;strengths:string[];loss_reasons:string[];recommendations:string[];flags:Record<string,boolean>;evidence:Evidence[];languages:string[];mixed_language:boolean|null;confidence:number|null;needs_review:boolean;attempt_count:number;error_code:string|null;model_version:string|null;completed_at:string|null };
 type Operators = { items:Array<{employee:string;calls_analyzed:number;average_score:number;successful_calls:number;success_rate:number;needs_review:number}> };
 type ManualTest = { call_id:string;analysis_id:string;status:string };
+type LabResult = {
+  status:"ready"|"needs_review";
+  duration_seconds:number;
+  operator_speaker:string;
+  customer_speaker:string;
+  confidence:number;
+  needs_review:boolean;
+  languages:string[];
+  mixed_language:boolean;
+  summary:string;
+  transcript:Array<{start:number;end:number;speaker:string;role:string;text:string}>;
+};
 type ContactItem = { phone_number:string;call_count:number;qualified_calls:number;first_call_at:string;last_call_at:string;first_call_duration_seconds:number|null;total_duration_seconds:number;last_outcome:string|null;extensions:string[];contact_type:"first"|"repeat" };
 type Contacts = { items:ContactItem[];summary:{unique_contacts:number;first_only:number;repeat_contacts:number;total_calls:number;qualified_calls:number};total:number;page:number;page_size:number;pages:number };
 
@@ -99,12 +111,23 @@ export default function AiPage() {
   const [selectedCall, setSelectedCall] = useState<string|null>(null);
   const [audioFile, setAudioFile] = useState<File|null>(null);
   const [operatorName, setOperatorName] = useState("Тестовый оператор");
+  const [labFile, setLabFile] = useState<File|null>(null);
+  const [labConsent, setLabConsent] = useState(false);
   const analysis = useQuery({ queryKey:["call-analysis",selectedCall], queryFn:()=>api<Analysis>(`/call-quality/calls/${selectedCall}/analysis`), enabled:Boolean(selectedCall), refetchInterval: query => ["queued","processing","retrying","pending"].includes(query.state.data?.status || "") ? 3000 : false });
   const save = useMutation({ mutationFn: () => api<RuleSet>("/call-quality/rule-sets", { method: "POST", body: JSON.stringify(form) }), onSuccess: () => { client.invalidateQueries({ queryKey: ["call-quality-status"] }); setEditing(false); } });
   const upload = useMutation({ mutationFn: () => {
     if (!audioFile) throw new Error("Выберите аудиофайл");
     return api<ManualTest>("/call-quality/manual-tests",{method:"POST",headers:{"Content-Type":audioFile.type || "audio/mpeg","X-Filename":encodeURIComponent(audioFile.name),"X-Operator-Name":encodeURIComponent(operatorName)},body:audioFile});
   },onSuccess:data=>{setSelectedCall(data.call_id);setAudioFile(null);client.invalidateQueries({queryKey:["call-quality-calls"]});client.invalidateQueries({queryKey:["call-quality-status"]});}});
+  const lab = useMutation({ mutationFn: () => {
+    if (!labFile) throw new Error("Выберите аудиофайл");
+    if (!labConsent) throw new Error("Подтвердите условия обработки записи");
+    return api<LabResult>("/call-quality/lab-transcriptions", {
+      method:"POST",
+      headers:{"Content-Type":labFile.type || "audio/mpeg","X-Filename":encodeURIComponent(labFile.name)},
+      body:labFile,
+    });
+  }});
   const reanalyze = useMutation({mutationFn:(callId:string)=>api<Analysis>(`/call-quality/calls/${callId}/reanalyze`,{method:"POST"}),onSuccess:data=>{setSelectedCall(data.call_id);client.invalidateQueries({queryKey:["call-analysis",data.call_id]});}});
   const begin = () => { setForm(current || defaults); setEditing(true); };
   async function exportContacts() {
@@ -130,15 +153,30 @@ export default function AiPage() {
       </section>
     </DataState>
 
+    <section className="panel call-lab">
+      <div className="panel-head"><div><p className="eyebrow">Без ожидания Kcell</p><h2>Лаборатория распознавания звонков</h2><p>Проверьте конкретную запись: текст, разделение «администратор / клиент» и смысл разговора. Результат не попадёт в журнал звонков или карту потерь.</p></div></div>
+      <div className="call-upload-row">
+        <label className="file-drop">Аудиозапись<input type="file" accept=".mp3,.m4a,.wav,.ogg,.webm,audio/*" onChange={event=>{setLabFile(event.target.files?.[0]||null);lab.reset();}} /><span>{labFile?.name || "Выберите MP3, M4A, WAV, OGG или WEBM"}</span></label>
+        <label className="toggle-row"><input type="checkbox" checked={labConsent} onChange={event=>setLabConsent(event.target.checked)} />Я имею право загрузить запись. Аудио будет передано OpenAI для распознавания и Groq для анализа; в Revora не сохраняется.</label>
+        <button className="primary" disabled={!labFile||!labConsent||lab.isPending} onClick={()=>lab.mutate()}>{lab.isPending?<><span className="spinner" aria-hidden="true"/>Распознаём…</>:"Проверить запись"}</button>
+      </div>
+      {lab.error&&<p className="error-box">{lab.error instanceof Error?lab.error.message:"Не удалось распознать запись"}</p>}
+      {lab.data&&<div className="lab-result" aria-live="polite">
+        <div className="lab-result-head"><div><span className={`health-badge ${lab.data.needs_review?"warning":"ready"}`}>{lab.data.needs_review?"Нужна проверка":"Роли определены"}</span><h3>{lab.data.summary}</h3><p>Длительность {durationLabel(Math.round(lab.data.duration_seconds))} · языки: {lab.data.languages.join(", ") || "не определены"} · уверенность: {Math.round(lab.data.confidence*100)}%</p></div><div className="lab-roles"><span>{lab.data.operator_speaker} <b>Администратор</b></span><span>{lab.data.customer_speaker} <b>Клиент</b></span></div></div>
+        {lab.data.needs_review&&<p className="warning-box">Система не уверена в разделении ролей или тексте. Не используйте этот результат как факт — сравните его с аудио.</p>}
+        <div className="lab-transcript">{lab.data.transcript.map((item,index)=><article key={`${item.start}-${index}`} className={item.role==="Администратор"?"operator":item.role==="Клиент"?"customer":"unknown"}><time>{durationLabel(Math.floor(item.start))}</time><div><strong>{item.role} <small>{item.speaker}</small></strong><p>{item.text}</p></div></article>)}</div>
+        <p className="hint">Текст виден только в этой вкладке и не записан в журнал Revora. Закройте страницу или выберите другую запись, чтобы убрать его с экрана.</p>
+      </div>}
+    </section>
+
     <section className="panel call-manual-test">
-      <div className="panel-head"><div><h2>Ручная проверка AI</h2><p>Дополнительный режим для спорного звонка или тестовой MP3. Автоматические Kcell-звонки загружать не нужно.</p></div></div>
+      <div className="panel-head"><div><h2>Сохранённый тест качества</h2><p>Нужен только если хотите добавить тестовый звонок в журнал и получить стандартный AI-отчёт. Для обычной проверки используйте лабораторию выше.</p></div></div>
       <div className="call-upload-row">
         <label>Оператор<input value={operatorName} maxLength={150} onChange={event=>setOperatorName(event.target.value)} /></label>
         <label className="file-drop">Аудиозапись<input type="file" accept=".mp3,.m4a,.wav,.ogg,.webm,audio/*" onChange={event=>setAudioFile(event.target.files?.[0]||null)} /><span>{audioFile?.name || "Выберите MP3, M4A, WAV, OGG или WEBM"}</span></label>
-        <button className="primary" disabled={!audioFile||upload.isPending} onClick={()=>upload.mutate()}>{upload.isPending?<><span className="spinner" aria-hidden="true"/>ИИ анализирует…</>:"Проверить звонок"}</button>
+        <button className="primary" disabled={!audioFile||upload.isPending} onClick={()=>upload.mutate()}>{upload.isPending?<><span className="spinner" aria-hidden="true"/>ИИ анализирует…</>:"Добавить в журнал"}</button>
       </div>
       {upload.error&&<p className="error-box">{upload.error instanceof Error?upload.error.message:"Не удалось загрузить запись"}</p>}
-      {upload.data&&<p className={upload.data.status==="failed"?"error-box":"success-box"}>{upload.data.status==="failed"?"Анализ завершился ошибкой — откройте отчёт для кода ошибки.":"Анализ завершён. Откройте сформированный отчёт."}</p>}
     </section>
 
     <div className="journal-tabs" role="tablist">

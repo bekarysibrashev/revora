@@ -19,7 +19,8 @@ from app.modules.ai.call_quality.models import CallQualityAnalysis
 from app.modules.ai.call_quality.pipeline import CallQualityPipeline
 from app.modules.ai.call_quality.schemas import (
     CallAnalysisResponse, CallerContactListResponse, CallListResponse, CallQualityStatusResponse,
-    ManualTestResponse, OperatorPerformanceResponse, RuleSetRequest, RuleSetResponse,
+    CallLabResponse, CallLabSegment, ManualTestResponse, OperatorPerformanceResponse,
+    RuleSetRequest, RuleSetResponse,
 )
 from app.modules.ai.call_quality.service import CallQualityService
 from app.modules.auth.dependencies import CurrentUser
@@ -221,4 +222,71 @@ async def manual_test(
     )
     return ManualTestResponse(
         call_id=call.id, analysis_id=analysis.id, status=final_status
+    )
+
+
+@router.post("/lab-transcriptions", response_model=CallLabResponse)
+async def lab_transcription(
+    request: Request,
+    response: Response,
+    user: CurrentUser,
+    session: Session,
+    settings: RuntimeSettings,
+) -> CallLabResponse:
+    """One-time owner test: return transcript but never store it server-side."""
+    if user.role != UserRole.OWNER:
+        raise AppError("FORBIDDEN", "Only the owner can test call transcription", 403)
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type not in ALLOWED_AUDIO_TYPES:
+        raise AppError("AUDIO_TYPE_UNSUPPORTED", "Upload MP3, M4A, WAV, OGG or WEBM audio", 415)
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > settings.call_max_audio_bytes:
+            raise AppError("AUDIO_TOO_LARGE", "Audio file exceeds the configured size limit", 413)
+        chunks.append(chunk)
+    if not size:
+        raise AppError("AUDIO_EMPTY", "Audio file is empty", 422)
+    rules = await ensure_default_rule_set(session, user.tenant_id)
+    if rules is None:
+        raise AppError("CALL_RULE_SET_MISSING", "A call quality rule set could not be created", 409)
+    filename = Path(unquote(request.headers.get("x-filename", "lab-recording.mp3"))).name[:200]
+    try:
+        transcript, report, _score, needs_review = await CallQualityPipeline(
+            session, settings
+        ).run_lab_audio(
+            user.tenant_id,
+            b"".join(chunks),
+            filename=filename,
+            content_type=content_type,
+            rules=rules,
+        )
+    finally:
+        chunks.clear()
+    roles = {
+        report.operator_speaker: "Администратор",
+        report.customer_speaker: "Клиент",
+    }
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    return CallLabResponse(
+        status="needs_review" if needs_review else "ready",
+        duration_seconds=transcript.duration,
+        operator_speaker=report.operator_speaker,
+        customer_speaker=report.customer_speaker,
+        confidence=report.confidence,
+        needs_review=needs_review,
+        languages=report.languages,
+        mixed_language=report.mixed_language,
+        summary=report.summary,
+        transcript=[
+            CallLabSegment(
+                start=item.start,
+                end=item.end,
+                speaker=item.speaker,
+                role=roles.get(item.speaker, "Не определён"),
+                text=item.text,
+            )
+            for item in transcript.segments
+        ],
     )

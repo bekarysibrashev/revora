@@ -277,6 +277,40 @@ class CallQualityPipeline:
         finally:
             transcript = None
 
+    async def run_lab_audio(
+        self,
+        tenant_id: UUID,
+        audio: bytes,
+        *,
+        filename: str,
+        content_type: str,
+        rules: CallQualityRuleSet,
+    ) -> tuple[DiarizedTranscript, CallReport, int, bool]:
+        """Analyze an owner-uploaded recording without creating any call rows.
+
+        The caller receives the transcript directly in the HTTP response.  No
+        audio or transcript is written to the database, object storage, or a
+        queue.  This is intentionally separate from automatic Kcell analysis.
+        """
+        await self._set_tenant_context(tenant_id)
+        transcript = await self.transcription_client.transcribe(
+            audio, filename=filename, content_type=content_type
+        )
+        report = await self.analysis_client.analyze(transcript, self._rules_payload(rules))
+        score, needs_review = self._validate_report(report, rules, transcript)
+        return transcript, report, score, needs_review
+
+    @staticmethod
+    def _rules_payload(rules: CallQualityRuleSet) -> dict:
+        return {
+            "name": rules.name,
+            "success_definition": rules.success_definition,
+            "partial_success_definition": rules.partial_success_definition,
+            "loss_definition": rules.loss_definition,
+            "criteria": rules.criteria,
+            "loss_reasons": rules.loss_reasons,
+        }
+
     def _validate_and_apply(
         self,
         analysis: CallQualityAnalysis,
@@ -284,26 +318,8 @@ class CallQualityPipeline:
         rules: CallQualityRuleSet,
         transcript: DiarizedTranscript,
     ) -> None:
-        duration = transcript.duration
+        weighted, needs_review = self._validate_report(report, rules, transcript)
         configured = {item["name"].casefold(): item for item in rules.criteria}
-        returned = {item.name.casefold(): item for item in report.criteria_scores}
-        if configured.keys() != returned.keys():
-            raise CallIntelligenceError(
-                "ANALYSIS_CRITERIA_MISMATCH",
-                "The report did not score the configured criteria",
-                retryable=False,
-            )
-        for item in report.evidence:
-            if item.timestamp_to < item.timestamp_from or item.timestamp_to > duration + 1:
-                raise CallIntelligenceError(
-                    "ANALYSIS_EVIDENCE_INVALID",
-                    "The report contains invalid evidence timestamps",
-                    retryable=False,
-                )
-        weighted = round(sum(
-            returned[name].score * int(criterion["weight"]) / 100
-            for name, criterion in configured.items()
-        ))
         analysis.result = report.result
         analysis.score = weighted
         analysis.summary = report.summary
@@ -312,20 +328,7 @@ class CallQualityPipeline:
         analysis.languages = report.languages
         analysis.mixed_language = report.mixed_language
         analysis.confidence = Decimal(str(report.confidence))
-        speakers = {item.speaker for item in transcript.segments}
-        diarization_uncertain = "UNKNOWN" in speakers or len(speakers) < 2
-        assigned_speakers = {report.operator_speaker, report.customer_speaker}
-        role_assignment_uncertain = (
-            report.operator_speaker == report.customer_speaker
-            or "UNKNOWN" in assigned_speakers
-            or not assigned_speakers.issubset(speakers)
-        )
-        analysis.needs_review = (
-            report.needs_review
-            or report.confidence < 0.65
-            or diarization_uncertain
-            or role_assignment_uncertain
-        )
+        analysis.needs_review = needs_review
         analysis.criteria_scores = [
             {**item.model_dump(), "weight": configured[item.name.casefold()]["weight"]}
             for item in report.criteria_scores
@@ -340,6 +343,43 @@ class CallQualityPipeline:
         analysis.completed_at = datetime.now(UTC)
         analysis.error_code = None
         analysis.error_message = None
+
+    @staticmethod
+    def _validate_report(
+        report: CallReport,
+        rules: CallQualityRuleSet,
+        transcript: DiarizedTranscript,
+    ) -> tuple[int, bool]:
+        """Validate model output and return server-derived score/review state."""
+        configured = {item["name"].casefold(): item for item in rules.criteria}
+        returned = {item.name.casefold(): item for item in report.criteria_scores}
+        if configured.keys() != returned.keys():
+            raise CallIntelligenceError(
+                "ANALYSIS_CRITERIA_MISMATCH",
+                "The report did not score the configured criteria",
+                retryable=False,
+            )
+        for item in report.evidence:
+            if item.timestamp_to < item.timestamp_from or item.timestamp_to > transcript.duration + 1:
+                raise CallIntelligenceError(
+                    "ANALYSIS_EVIDENCE_INVALID",
+                    "The report contains invalid evidence timestamps",
+                    retryable=False,
+                )
+        weighted = round(sum(
+            returned[name].score * int(criterion["weight"]) / 100
+            for name, criterion in configured.items()
+        ))
+        speakers = {item.speaker for item in transcript.segments}
+        assigned_speakers = {report.operator_speaker, report.customer_speaker}
+        uncertain = (
+            "UNKNOWN" in speakers
+            or len(speakers) < 2
+            or report.operator_speaker == report.customer_speaker
+            or "UNKNOWN" in assigned_speakers
+            or not assigned_speakers.issubset(speakers)
+        )
+        return weighted, report.needs_review or report.confidence < 0.65 or uncertain
 
     async def _fail(
         self,

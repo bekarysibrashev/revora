@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -297,6 +298,45 @@ def test_pipeline_requires_review_when_speaker_roles_conflict() -> None:
     pipeline._validate_and_apply(analysis, report, rules, diarized_transcript())
     assert analysis.status == "needs_review"
     assert analysis.needs_review is True
+
+
+@pytest.mark.asyncio
+async def test_lab_run_returns_transcript_without_persisting_it() -> None:
+    class Session:
+        async def execute(self, *_args, **_kwargs) -> None:
+            return None
+
+    class Client:
+        async def transcribe(self, *_args, **_kwargs) -> DiarizedTranscript:
+            return diarized_transcript()
+
+        async def analyze(self, *_args, **_kwargs) -> CallReport:
+            return CallReport.model_validate(report_payload())
+
+    rules = SimpleNamespace(
+        name="Стандарт",
+        success_definition="Запись подтверждена",
+        partial_success_definition="Есть следующий шаг",
+        loss_definition="Нет записи",
+        criteria=[
+            {"name": "Приветствие", "weight": 25},
+            {"name": "Запись", "weight": 75},
+        ],
+        loss_reasons=[],
+    )
+    pipeline = CallQualityPipeline(Session(), Settings(_env_file=None, app_env="test"), client=Client())
+    transcript, report, score, needs_review = await pipeline.run_lab_audio(
+        uuid4(),
+        b"audio",
+        filename="test.mp3",
+        content_type="audio/mpeg",
+        rules=rules,
+    )
+    assert transcript.segments[0].text == "Клиника, здравствуйте"
+    assert report.operator_speaker == "A"
+    assert score == 95
+    assert needs_review is False
+    assert "transcript" not in CallQualityAnalysis.__table__.columns
 
 
 def test_call_analysis_table_cannot_store_transcript() -> None:
