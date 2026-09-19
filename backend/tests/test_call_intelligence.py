@@ -17,6 +17,7 @@ from app.modules.ai.call_quality.intelligence import (
 )
 from app.modules.ai.call_quality.models import CallQualityAnalysis
 from app.modules.ai.call_quality.pipeline import CallQualityPipeline
+from app.modules.ai.call_quality.router import _call_intelligence_app_error
 
 
 def rule_payload() -> dict:
@@ -356,3 +357,11 @@ def test_report_rejects_out_of_schema_transcript_field() -> None:
     payload["transcript"] = "Полный текст не должен сохраняться"
     with pytest.raises(Exception):
         CallReport.model_validate(payload)
+
+
+def test_lab_returns_actionable_error_when_openai_is_not_configured() -> None:
+    error = _call_intelligence_app_error(
+        CallIntelligenceError("AI_NOT_CONFIGURED", "OPENAI_API_KEY is not configured", retryable=False)
+    )
+    assert error.status_code == 503
+    assert "OpenAI" in error.message

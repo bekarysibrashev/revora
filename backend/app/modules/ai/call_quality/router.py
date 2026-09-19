@@ -14,6 +14,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
 from app.core.errors import AppError
 from app.modules.ai.call_quality.audio import ALLOWED_AUDIO_TYPES
+from app.modules.ai.call_quality.intelligence import CallIntelligenceError
 from app.modules.ai.call_quality.defaults import ensure_default_rule_set
 from app.modules.ai.call_quality.models import CallQualityAnalysis
 from app.modules.ai.call_quality.pipeline import CallQualityPipeline
@@ -30,6 +31,19 @@ from app.modules.sales.models import Call
 router = APIRouter(prefix="/call-quality", tags=["call-quality"])
 Session = Annotated[AsyncSession, Depends(get_db_session)]
 RuntimeSettings = Annotated[Settings, Depends(get_settings)]
+
+
+def _call_intelligence_app_error(exc: CallIntelligenceError) -> AppError:
+    """Keep provider/configuration failures out of the browser's generic fetch error."""
+    status = 503 if exc.code == "AI_NOT_CONFIGURED" else 502
+    if exc.code == "AI_NOT_CONFIGURED":
+        provider = "OpenAI" if "OPENAI_API_KEY" in str(exc) else "Groq"
+        return AppError(
+            exc.code,
+            f"ИИ для лаборатории не настроен: добавьте ключ {provider} в Render → Environment.",
+            status,
+        )
+    return AppError(exc.code, str(exc), status)
 
 @router.get("/status", response_model=CallQualityStatusResponse)
 async def get_status(user: CurrentUser, session: Session) -> CallQualityStatusResponse:
@@ -213,13 +227,16 @@ async def manual_test(
     session.add(analysis)
     await session.flush()
     await session.commit()
-    final_status = await CallQualityPipeline(session, settings).run_inline_audio(
-        user.tenant_id,
-        analysis.id,
-        b"".join(chunks),
-        filename=filename,
-        content_type=content_type,
-    )
+    try:
+        final_status = await CallQualityPipeline(session, settings).run_inline_audio(
+            user.tenant_id,
+            analysis.id,
+            b"".join(chunks),
+            filename=filename,
+            content_type=content_type,
+        )
+    except CallIntelligenceError as exc:
+        raise _call_intelligence_app_error(exc) from exc
     return ManualTestResponse(
         call_id=call.id, analysis_id=analysis.id, status=final_status
     )
@@ -261,6 +278,8 @@ async def lab_transcription(
             content_type=content_type,
             rules=rules,
         )
+    except CallIntelligenceError as exc:
+        raise _call_intelligence_app_error(exc) from exc
     finally:
         chunks.clear()
     roles = {
