@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     # Automatic call intelligence. Audio and transcripts are transient.
     # Groq is used separately from the role-scoped OpenAI business analyst.
     call_ai_provider: Literal["openai", "groq"] = "groq"
+    call_transcription_provider: Literal["openai", "groq"] | None = None
+    call_analysis_provider: Literal["openai", "groq"] | None = None
     groq_api_key: SecretStr = SecretStr("")
     groq_base_url: str = "https://api.groq.com/openai/v1"
     call_transcription_model: str = "whisper-large-v3-turbo"

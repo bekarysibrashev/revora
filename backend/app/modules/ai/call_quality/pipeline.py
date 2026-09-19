@@ -9,9 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.modules.ai.call_quality.audio import RecordingLoader
 from app.modules.ai.call_quality.intelligence import (
+    CallAnalysisClient,
     CallIntelligenceClient,
     CallIntelligenceError,
     CallReport,
+    CallTranscriptionClient,
+    DiarizedTranscript,
     GroqCallIntelligenceClient,
     OpenAICallIntelligenceClient,
 )
@@ -31,30 +34,54 @@ class CallQualityPipeline:
         *,
         loader: RecordingLoader | None = None,
         client: CallIntelligenceClient | None = None,
+        transcription_client: CallTranscriptionClient | None = None,
+        analysis_client: CallAnalysisClient | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
         self.loader = loader or RecordingLoader(settings)
-        self.client = client or self._default_client(settings)
+        if client is not None:
+            # Preserve the single-client injection used by existing callers
+            # and tests while allowing production to select each stage.
+            self.transcription_client = client
+            self.analysis_client = client
+        else:
+            self.transcription_client = (
+                transcription_client or self._default_transcription_client(settings)
+            )
+            self.analysis_client = (
+                analysis_client or self._default_analysis_client(settings)
+            )
 
     @staticmethod
-    def _default_client(settings: Settings) -> CallIntelligenceClient:
-        common = {
-            "transcription_model": settings.call_transcription_model,
-            "analysis_model": settings.call_analysis_model,
-            "timeout_seconds": settings.call_analysis_timeout_seconds,
-        }
-        if settings.call_ai_provider == "groq":
-            return GroqCallIntelligenceClient(
-                api_key=settings.groq_api_key.get_secret_value(),
-                base_url=settings.groq_base_url,
-                **common,
-            )
+    def _openai_client(settings: Settings) -> OpenAICallIntelligenceClient:
         return OpenAICallIntelligenceClient(
             api_key=settings.openai_api_key.get_secret_value(),
             base_url=settings.openai_base_url,
-            **common,
+            transcription_model=settings.call_transcription_model,
+            analysis_model=settings.call_analysis_model,
+            timeout_seconds=settings.call_analysis_timeout_seconds,
         )
+
+    @staticmethod
+    def _groq_client(settings: Settings) -> GroqCallIntelligenceClient:
+        return GroqCallIntelligenceClient(
+            api_key=settings.groq_api_key.get_secret_value(),
+            base_url=settings.groq_base_url,
+            transcription_model=settings.call_transcription_model,
+            analysis_model=settings.call_analysis_model,
+            timeout_seconds=settings.call_analysis_timeout_seconds,
+        )
+
+    @classmethod
+    def _default_transcription_client(cls, settings: Settings) -> CallTranscriptionClient:
+        provider = settings.call_transcription_provider or settings.call_ai_provider
+        return cls._openai_client(settings) if provider == "openai" else cls._groq_client(settings)
+
+    @classmethod
+    def _default_analysis_client(cls, settings: Settings) -> CallAnalysisClient:
+        provider = settings.call_analysis_provider or settings.call_ai_provider
+        return cls._openai_client(settings) if provider == "openai" else cls._groq_client(settings)
 
     async def _set_tenant_context(self, tenant_id: UUID) -> None:
         await self.session.execute(
@@ -114,7 +141,7 @@ class CallQualityPipeline:
         audio = transcript = None
         try:
             audio, filename, content_type = await self.loader.load(call.recording_url)
-            transcript = await self.client.transcribe(
+            transcript = await self.transcription_client.transcribe(
                 audio, filename=filename, content_type=content_type
             )
             if transcript.duration <= self.settings.call_min_duration_seconds:
@@ -126,7 +153,7 @@ class CallQualityPipeline:
                     call.recording_url = None
                 await self._commit_for_tenant(tenant_id)
                 return False
-            report = await self.client.analyze(
+            report = await self.analysis_client.analyze(
                 transcript,
                 {
                     "name": rules.name,
@@ -137,7 +164,7 @@ class CallQualityPipeline:
                     "loss_reasons": rules.loss_reasons,
                 },
             )
-            self._validate_and_apply(analysis, report, rules, transcript.duration)
+            self._validate_and_apply(analysis, report, rules, transcript)
             call.duration_seconds = call.duration_seconds or round(transcript.duration)
             await self.loader.delete_if_temporary(call.recording_url)
             if call.recording_url.startswith("minio://"):
@@ -210,7 +237,7 @@ class CallQualityPipeline:
 
         transcript = None
         try:
-            transcript = await self.client.transcribe(
+            transcript = await self.transcription_client.transcribe(
                 audio, filename=filename, content_type=content_type
             )
             call.duration_seconds = round(transcript.duration)
@@ -219,7 +246,7 @@ class CallQualityPipeline:
                 analysis.completed_at = datetime.now(UTC)
                 await self._commit_for_tenant(tenant_id)
                 return analysis.status
-            report = await self.client.analyze(
+            report = await self.analysis_client.analyze(
                 transcript,
                 {
                     "name": rules.name,
@@ -230,7 +257,7 @@ class CallQualityPipeline:
                     "loss_reasons": rules.loss_reasons,
                 },
             )
-            self._validate_and_apply(analysis, report, rules, transcript.duration)
+            self._validate_and_apply(analysis, report, rules, transcript)
             await self._commit_for_tenant(tenant_id)
             return analysis.status
         except CallIntelligenceError as exc:
@@ -255,8 +282,9 @@ class CallQualityPipeline:
         analysis: CallQualityAnalysis,
         report: CallReport,
         rules: CallQualityRuleSet,
-        duration: float,
+        transcript: DiarizedTranscript,
     ) -> None:
+        duration = transcript.duration
         configured = {item["name"].casefold(): item for item in rules.criteria}
         returned = {item.name.casefold(): item for item in report.criteria_scores}
         if configured.keys() != returned.keys():
@@ -284,7 +312,20 @@ class CallQualityPipeline:
         analysis.languages = report.languages
         analysis.mixed_language = report.mixed_language
         analysis.confidence = Decimal(str(report.confidence))
-        analysis.needs_review = report.needs_review or report.confidence < 0.65
+        speakers = {item.speaker for item in transcript.segments}
+        diarization_uncertain = "UNKNOWN" in speakers or len(speakers) < 2
+        assigned_speakers = {report.operator_speaker, report.customer_speaker}
+        role_assignment_uncertain = (
+            report.operator_speaker == report.customer_speaker
+            or "UNKNOWN" in assigned_speakers
+            or not assigned_speakers.issubset(speakers)
+        )
+        analysis.needs_review = (
+            report.needs_review
+            or report.confidence < 0.65
+            or diarization_uncertain
+            or role_assignment_uncertain
+        )
         analysis.criteria_scores = [
             {**item.model_dump(), "weight": configured[item.name.casefold()]["weight"]}
             for item in report.criteria_scores

@@ -9,8 +9,10 @@ from app.modules.ai.call_quality.audio import RecordingLoader
 from app.modules.ai.call_quality.intelligence import (
     CallIntelligenceError,
     CallReport,
+    DiarizedTranscript,
     GroqCallIntelligenceClient,
     OpenAICallIntelligenceClient,
+    TranscriptSegment,
 )
 from app.modules.ai.call_quality.models import CallQualityAnalysis
 from app.modules.ai.call_quality.pipeline import CallQualityPipeline
@@ -57,6 +59,26 @@ def report_payload(*, score: int = 91, confidence: float = 0.9) -> dict:
             "description": "Оператор предложил конкретное время.",
         }],
     }
+
+
+def diarized_transcript(*, unknown: bool = False) -> DiarizedTranscript:
+    return DiarizedTranscript(
+        duration=12.0,
+        segments=[
+            TranscriptSegment(
+                speaker="UNKNOWN" if unknown else "A",
+                start=0,
+                end=4,
+                text="Клиника, здравствуйте",
+            ),
+            TranscriptSegment(
+                speaker="UNKNOWN" if unknown else "B",
+                start=4,
+                end=8,
+                text="Ертең запись бар ма?",
+            ),
+        ],
+    )
 
 
 @pytest.mark.asyncio
@@ -166,7 +188,23 @@ def test_pipeline_defaults_to_groq_for_call_intelligence() -> None:
         groq_api_key="groq-test-key",
     )
     pipeline = CallQualityPipeline(SimpleNamespace(), settings)
-    assert isinstance(pipeline.client, GroqCallIntelligenceClient)
+    assert isinstance(pipeline.transcription_client, GroqCallIntelligenceClient)
+    assert isinstance(pipeline.analysis_client, GroqCallIntelligenceClient)
+
+
+def test_pipeline_supports_openai_diarization_with_groq_analysis() -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        openai_api_key="openai-test-key",
+        groq_api_key="groq-test-key",
+        call_transcription_provider="openai",
+        call_analysis_provider="groq",
+        call_transcription_model="gpt-4o-transcribe-diarize",
+    )
+    pipeline = CallQualityPipeline(SimpleNamespace(), settings)
+    assert isinstance(pipeline.transcription_client, OpenAICallIntelligenceClient)
+    assert isinstance(pipeline.analysis_client, GroqCallIntelligenceClient)
 
 
 @pytest.mark.asyncio
@@ -218,11 +256,47 @@ def test_pipeline_recomputes_weighted_score_and_marks_low_confidence_for_review(
         {"name": "Запись", "weight": 75},
     ])
     report = CallReport.model_validate(report_payload(score=1, confidence=0.5))
-    pipeline._validate_and_apply(analysis, report, rules, 12.0)
+    pipeline._validate_and_apply(analysis, report, rules, diarized_transcript())
     assert analysis.score == 95
     assert analysis.status == "needs_review"
     assert analysis.needs_review is True
     assert analysis.criteria_scores[1]["weight"] == 75
+
+
+def test_pipeline_requires_review_when_diarization_is_unknown() -> None:
+    settings = Settings(_env_file=None, app_env="test")
+    pipeline = CallQualityPipeline(
+        SimpleNamespace(), settings, loader=SimpleNamespace(), client=SimpleNamespace()
+    )
+    analysis = SimpleNamespace()
+    rules = SimpleNamespace(criteria=[
+        {"name": "Приветствие", "weight": 25},
+        {"name": "Запись", "weight": 75},
+    ])
+    report = CallReport.model_validate(report_payload())
+    pipeline._validate_and_apply(
+        analysis, report, rules, diarized_transcript(unknown=True)
+    )
+    assert analysis.status == "needs_review"
+    assert analysis.needs_review is True
+
+
+def test_pipeline_requires_review_when_speaker_roles_conflict() -> None:
+    settings = Settings(_env_file=None, app_env="test")
+    pipeline = CallQualityPipeline(
+        SimpleNamespace(), settings, loader=SimpleNamespace(), client=SimpleNamespace()
+    )
+    analysis = SimpleNamespace()
+    rules = SimpleNamespace(criteria=[
+        {"name": "Приветствие", "weight": 25},
+        {"name": "Запись", "weight": 75},
+    ])
+    payload = report_payload()
+    payload["customer_speaker"] = payload["operator_speaker"]
+    report = CallReport.model_validate(payload)
+    pipeline._validate_and_apply(analysis, report, rules, diarized_transcript())
+    assert analysis.status == "needs_review"
+    assert analysis.needs_review is True
 
 
 def test_call_analysis_table_cannot_store_transcript() -> None:

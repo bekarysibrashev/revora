@@ -74,12 +74,16 @@ services:
         value: https://api.openai.com/v1
       - key: CALL_AI_PROVIDER
         value: groq
+      - key: CALL_TRANSCRIPTION_PROVIDER
+        value: openai
+      - key: CALL_ANALYSIS_PROVIDER
+        value: groq
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_BASE_URL
         value: https://api.groq.com/openai/v1
       - key: CALL_TRANSCRIPTION_MODEL
-        value: whisper-large-v3-turbo
+        value: gpt-4o-transcribe-diarize
       - key: CALL_ANALYSIS_MODEL
         value: openai/gpt-oss-20b
       - key: CALL_MIN_DURATION_SECONDS

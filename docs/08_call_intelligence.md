@@ -3,9 +3,9 @@
 ## Что реализовано
 
 - Kcell history webhook создаёт звонок идемпотентно.
-- Звонок длительностью не более 7 секунд получает `skipped_short`.
-- Звонок длиннее 7 секунд с записью получает `queued`; без записи — `waiting_for_recording`.
-- Celery worker распознаёт аудио через Groq `whisper-large-v3-turbo`, затем Groq `openai/gpt-oss-20b` формирует строгий структурированный отчёт.
+- Звонок длительностью не более 10 секунд получает `skipped_short`.
+- Звонок длиннее 10 секунд с записью получает `queued`; без записи — `waiting_for_recording`.
+- Worker разделяет голоса и распознаёт аудио через OpenAI `gpt-4o-transcribe-diarize`, затем Groq `openai/gpt-oss-20b` формирует строгий структурированный отчёт.
 - Русская, казахская и смешанная речь не штрафуются за переключение языка.
 - Итоговая оценка пересчитывается сервером по весам активной версии стандартов.
 - Низкая уверенность или неоднозначные говорящие переводят результат в `needs_review`.
@@ -31,11 +31,19 @@
 
 Поддерживаются MP3, M4A, WAV, OGG и WEBM до `CALL_MAX_AUDIO_BYTES`.
 
-Для ручного теста достаточно бесплатного Groq Free Plan. В Render нужно
-добавить только `GROQ_API_KEY`; `OPENAI_API_KEY` не используется модулем
-контроля звонков. Пока отдельная diarization-служба не подключена, Groq
-Whisper помечает говорящего как `UNKNOWN`, а отчёт обязательно получает
-`needs_review`.
+Для ручного теста нужны `OPENAI_API_KEY` с активным API-биллингом и
+`GROQ_API_KEY`. OpenAI используется только для транскрипции с разделением
+говорящих, а Groq — для итоговой оценки. Если провайдер не смог различить
+минимум два голоса, отчёт обязательно получает `needs_review`.
+
+Production-конфигурация гибридного режима:
+
+```text
+CALL_TRANSCRIPTION_PROVIDER=openai
+CALL_TRANSCRIPTION_MODEL=gpt-4o-transcribe-diarize
+CALL_ANALYSIS_PROVIDER=groq
+CALL_ANALYSIS_MODEL=openai/gpt-oss-20b
+```
 
 ## Автоматический production-режим
 

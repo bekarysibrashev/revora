@@ -67,14 +67,20 @@ class CallReport(BaseModel):
     evidence: list[EvidenceItem]
 
 
-class CallIntelligenceClient(Protocol):
+class CallTranscriptionClient(Protocol):
     async def transcribe(
         self, audio: bytes, *, filename: str, content_type: str
     ) -> DiarizedTranscript: ...
 
+
+class CallAnalysisClient(Protocol):
     async def analyze(
         self, transcript: DiarizedTranscript, rules: dict
     ) -> CallReport: ...
+
+
+class CallIntelligenceClient(CallTranscriptionClient, CallAnalysisClient, Protocol):
+    """Backwards-compatible client implementing both pipeline stages."""
 
 
 REPORT_SCHEMA: dict[str, Any] = {
