@@ -12,6 +12,7 @@ from openpyxl import Workbook
 
 from app.core.config import Settings
 from app.modules.whatsapp.ai import (
+    handoff_reply,
     is_urgent_or_sensitive,
     retrieve_knowledge,
     rules_decision,
@@ -72,6 +73,14 @@ def test_unknown_question_is_handed_to_a_human() -> None:
 def test_urgent_and_human_requests_are_detected() -> None:
     assert is_urgent_or_sensitive("Кровотечение не останавливается") is not None
     assert is_urgent_or_sensitive("Позовите живого человека") is not None
+    assert is_urgent_or_sensitive("Хочу записаться на консультацию") == (
+        "Запись, перенос или отмена приёма"
+    )
+    assert is_urgent_or_sensitive("Можно перенести запись на завтра?") == (
+        "Запись, перенос или отмена приёма"
+    )
+    assert "неотложной" not in handoff_reply("Пациент просит человека").lower()
+    assert "расписание" in handoff_reply("Запись, перенос или отмена приёма").lower()
     assert is_urgent_or_sensitive("Где вы находитесь?") is None
 
 

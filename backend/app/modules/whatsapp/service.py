@@ -22,6 +22,7 @@ from app.modules.auth.models import User, UserRole
 from app.modules.whatsapp.ai import (
     ChatCompletionBot,
     WhatsAppAIError,
+    handoff_reply,
     is_urgent_or_sensitive,
     retrieve_knowledge,
     rules_decision,
@@ -943,12 +944,8 @@ class WhatsAppService:
     async def _decide(self, tenant_id: UUID, conversation: WhatsAppConversation, body: str):
         sensitive = is_urgent_or_sensitive(body)
         if sensitive:
-            reply = (
-                "Я передаю сообщение администратору. Если состояние угрожает жизни "
-                "или быстро ухудшается, пожалуйста, обратитесь за неотложной медицинской помощью."
-            )
             return rules_decision(None).model_copy(
-                update={"reply": reply, "handoff_reason": sensitive}
+                update={"reply": handoff_reply(sensitive), "handoff_reason": sensitive}
             ), "safety", Decimal("0")
         rows = list(
             (
