@@ -125,6 +125,7 @@ class Settings(BaseSettings):
     whatsapp_qr_gateway_url: str = ""
     whatsapp_qr_gateway_secret: SecretStr = SecretStr("")
     whatsapp_admin_pause_minutes: int = Field(default=60, ge=5, le=1440)
+    whatsapp_bot_reply_delay_seconds: int = Field(default=60, ge=0, le=600)
     embedded_whatsapp_operations_worker: bool = True
     whatsapp_operations_interval_seconds: int = Field(default=5, ge=2, le=60)
     whatsapp_delivery_max_attempts: int = Field(default=5, ge=1, le=12)

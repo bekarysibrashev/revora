@@ -120,6 +120,14 @@ class EmbeddedWhatsAppOperationsWorker:
         channel = await session.get(WhatsAppChannel, conversation.channel_id) if conversation else None
         if message is None or conversation is None or channel is None:
             return False
+        if message.sender_kind == "bot" and conversation.state in {"human_active", "closed"}:
+            # An administrator may answer from WhatsApp Business during the
+            # grace period. Never let previously queued AI text interrupt the
+            # human conversation.
+            message.status = "cancelled"
+            message.next_delivery_at = None
+            await session.commit()
+            return True
         secret = self.settings.whatsapp_data_key.get_secret_value()
         try:
             recipient = decrypt_contact(conversation.contact_ciphertext, secret)

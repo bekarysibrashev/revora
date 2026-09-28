@@ -2,11 +2,15 @@ from hashlib import sha256
 import hmac
 from io import BytesIO
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import httpx
 import pytest
 from openpyxl import Workbook
 
+from app.core.config import Settings
 from app.modules.whatsapp.ai import (
     is_urgent_or_sensitive,
     retrieve_knowledge,
@@ -17,6 +21,7 @@ from app.modules.whatsapp.meta_client import (
     MetaEmbeddedSignupClient,
     MetaEmbeddedSignupError,
 )
+from app.modules.whatsapp.operations_worker import EmbeddedWhatsAppOperationsWorker
 from app.modules.whatsapp.router import _message_body, _meta_timestamp
 from app.modules.whatsapp.security import (
     decrypt_contact,
@@ -30,6 +35,7 @@ from app.modules.whatsapp.schemas import (
     WhatsAppGatewayHeartbeat,
     WhatsAppQrMessageEvent,
 )
+from app.modules.whatsapp.service import WhatsAppService
 
 
 def test_retrieval_returns_only_a_matching_approved_answer() -> None:
@@ -282,3 +288,50 @@ async def test_coexistence_requires_an_unambiguous_phone_number() -> None:
             waba_id="waba-123",
             phone_number_id=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_cancels_ai_reply_after_human_takeover(monkeypatch) -> None:
+    tenant_id = uuid4()
+    conversation_id = uuid4()
+    channel_id = uuid4()
+    message = SimpleNamespace(
+        id=uuid4(),
+        conversation_id=conversation_id,
+        sender_kind="bot",
+        status="queued",
+        delivery_attempts=0,
+        last_delivery_error=None,
+        next_delivery_at=None,
+    )
+    conversation = SimpleNamespace(
+        id=conversation_id,
+        channel_id=channel_id,
+        state="human_active",
+    )
+    channel = SimpleNamespace(id=channel_id)
+    session = SimpleNamespace(
+        execute=AsyncMock(),
+        scalar=AsyncMock(side_effect=[message, message]),
+        get=AsyncMock(side_effect=[conversation, channel]),
+        commit=AsyncMock(),
+    )
+    send = AsyncMock()
+    monkeypatch.setattr(WhatsAppService, "_send", send)
+
+    worked = await EmbeddedWhatsAppOperationsWorker(Settings())._deliver_one(
+        session, tenant_id
+    )
+
+    assert worked is True
+    assert message.status == "cancelled"
+    assert message.next_delivery_at is None
+    send.assert_not_awaited()
+    assert session.commit.await_count == 2
+
+
+def test_whatsapp_bot_reply_delay_has_safe_bounds() -> None:
+    assert Settings().whatsapp_bot_reply_delay_seconds == 60
+    assert Settings(whatsapp_bot_reply_delay_seconds=0).whatsapp_bot_reply_delay_seconds == 0
+    with pytest.raises(ValueError):
+        Settings(whatsapp_bot_reply_delay_seconds=601)

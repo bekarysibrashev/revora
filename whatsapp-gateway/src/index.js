@@ -17,6 +17,7 @@ const port = Number(process.env.PORT || 3100)
 const backendUrl = String(process.env.REVORA_API_URL || '').replace(/\/$/, '')
 const gatewaySecret = String(process.env.WHATSAPP_QR_GATEWAY_SECRET || '')
 const authDir = path.join(os.tmpdir(), 'revora-whatsapp-auth')
+const pendingEventsFile = path.join(authDir, 'revora-pending-events.json')
 const gatewayVersion = '1.1.0'
 const instanceId = process.env.RENDER_INSTANCE_ID || crypto.randomUUID()
 const startedAt = Math.floor(Date.now() / 1000)
@@ -39,7 +40,9 @@ let connectedPhone = null
 let lastMessage = 'Запускаем QR-шлюз…'
 const botMessageIds = new Set()
 const sentCommands = new Map()
+const pendingEventBatches = []
 const pendingLogs = []
+let eventFlushRunning = false
 let lastMessageAt = null
 let lastHistorySyncAt = null
 let messagesForwarded = 0
@@ -70,6 +73,10 @@ function statusPayload() {
     phone: connectedPhone,
     message: lastMessage,
     last_error: lastError,
+    pending_messages: pendingEventBatches.reduce(
+      (total, payload) => total + (payload.messages?.length || 0),
+      0,
+    ),
   }
 }
 
@@ -92,6 +99,7 @@ function heartbeatPayload(logs) {
 }
 
 async function sendHeartbeat() {
+  await flushPendingEventBatches()
   const logs = pendingLogs.splice(0, pendingLogs.length)
   try {
     await backendRequest('/webhooks/whatsapp-qr/heartbeat', {
@@ -160,6 +168,14 @@ async function restoreAuthDirectory() {
       const commands = JSON.parse(await fs.readFile(path.join(authDir, 'revora-sent-commands.json'), 'utf8'))
       for (const [key, value] of Object.entries(commands || {})) sentCommands.set(key, value)
     } catch {}
+    try {
+      const batches = JSON.parse(await fs.readFile(pendingEventsFile, 'utf8'))
+      if (Array.isArray(batches)) {
+        pendingEventBatches.push(
+          ...batches.filter((payload) => Array.isArray(payload?.messages)),
+        )
+      }
+    } catch {}
     lastMessage = 'Сохранённая WhatsApp-сессия восстановлена'
   } catch (error) {
     lastMessage = `Не удалось восстановить сессию: ${error.message}`
@@ -190,6 +206,46 @@ function scheduleAuthBackup() {
 function watchAuthDirectory() {
   if (authWatcher) return
   authWatcher = fsSync.watch(authDir, () => scheduleAuthBackup())
+}
+
+async function persistPendingEventBatches() {
+  await fs.writeFile(pendingEventsFile, JSON.stringify(pendingEventBatches))
+  scheduleAuthBackup()
+}
+
+async function flushPendingEventBatches() {
+  if (eventFlushRunning || pendingEventBatches.length === 0) return
+  eventFlushRunning = true
+  try {
+    while (pendingEventBatches.length > 0) {
+      const payload = pendingEventBatches[0]
+      try {
+        await backendRequest('/webhooks/whatsapp-qr/events', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        })
+      } catch (error) {
+        lastError = `В очереди ${statusPayload().pending_messages} сообщений: ${error.message}`
+        return
+      }
+      const delivered = payload.messages?.length || 0
+      messagesForwarded += delivered
+      historyMessagesForwarded += (payload.messages || []).filter(
+        (message) => message.history,
+      ).length
+      pendingEventBatches.shift()
+      await persistPendingEventBatches()
+      if (delivered) {
+        lastMessageAt = Math.floor(Date.now() / 1000)
+        if ((payload.messages || []).some((message) => message.history)) {
+          lastHistorySyncAt = lastMessageAt
+        }
+      }
+    }
+    if (lastError?.startsWith('В очереди ')) lastError = null
+  } finally {
+    eventFlushRunning = false
+  }
 }
 
 function unwrapMessage(message) {
@@ -345,21 +401,15 @@ async function forwardMessages(messages, history = false) {
   const batchSize = events.some((event) => event.media_base64) ? 1 : 100
   for (let index = 0; index < events.length; index += batchSize) {
     const batch = events.slice(index, index + batchSize)
-    await backendRequest('/webhooks/whatsapp-qr/events', {
-      method: 'POST',
-      body: JSON.stringify({
-        phone: connectedPhone,
-        display_name: `WhatsApp +${connectedPhone}`,
-        messages: batch,
-      }),
+    pendingEventBatches.push({
+      phone: connectedPhone,
+      display_name: `WhatsApp +${connectedPhone}`,
+      messages: batch,
     })
-    messagesForwarded += batch.length
-    if (history) historyMessagesForwarded += batch.length
   }
-  if (events.length) {
-    lastMessageAt = Math.floor(Date.now() / 1000)
-    if (history) lastHistorySyncAt = lastMessageAt
-  }
+  if (!events.length) return
+  await persistPendingEventBatches()
+  await flushPendingEventBatches()
 }
 
 function scheduleReconnect() {
@@ -406,6 +456,7 @@ async function connectSocket() {
         lastError = null
         logEvent('info', 'connected', 'WhatsApp Business подключён')
         scheduleAuthBackup()
+        void flushPendingEventBatches()
       }
       if (connection === 'close') {
         const code = new Boom(lastDisconnect?.error).output?.statusCode

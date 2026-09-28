@@ -8,6 +8,7 @@ import { DataState, Metric, PageHeader } from "@/shared/ui";
 
 type Status = {
   configured: boolean; test_mode: boolean; ai_provider: string; auto_send: boolean;
+  reply_delay_seconds: number;
   embedded_signup_ready: boolean; meta_app_id: string | null;
   embedded_signup_config_id: string | null; connection_missing: string[];
   monthly_budget_kzt: number; estimated_spend_kzt: string; channels: number;
@@ -41,7 +42,7 @@ type QrStatus = {
   qr_data_url: string | null; phone: string | null; message: string | null;
   last_heartbeat_at: string | null; last_message_at: string | null; last_history_sync_at: string | null;
   messages_forwarded: number; history_messages_forwarded: number; reconnect_count: number;
-  last_error: string | null; stale: boolean;
+  last_error: string | null; pending_messages: number | null; stale: boolean;
 };
 type Analytics = {
   date_from:string; date_to:string; conversations:number; messages_total:number;
@@ -304,7 +305,7 @@ export default function WhatsAppPage() {
       <DataState loading={status.isLoading} error={status.error}>
         {status.data && <>
           <section className="metric-grid">
-            <Metric label="Режим" value={status.data.test_mode ? "Тестовый" : "WhatsApp"} note={status.data.auto_send ? "Автоответы включены" : "Только черновики"} />
+            <Metric label="Режим" value={status.data.test_mode ? "Тестовый" : "WhatsApp"} note={status.data.auto_send ? `Автоответы · приоритет администратора ${status.data.reply_delay_seconds ?? 60} сек.` : "Только черновики"} />
             <Metric label="Диалоги" value={`${status.data.open_conversations}`} note={`Ждут человека: ${status.data.waiting_for_human}`} />
             <Metric label="База знаний" value={`${status.data.knowledge_approved}/${status.data.knowledge_total}`} note="Одобрено владельцем" />
             <Metric label="Бюджет ИИ" value={`${Number(status.data.estimated_spend_kzt).toLocaleString("ru-RU")} ₸`} note={`Лимит: ${status.data.monthly_budget_kzt.toLocaleString("ru-RU")} ₸`} />
@@ -399,6 +400,7 @@ export default function WhatsAppPage() {
                       {message.is_draft && <small>Черновик — не отправлен</small>}
                       {message.status === "queued" || message.status === "retrying" || message.status === "sending" ? <small>Отправляется… попытка {message.delivery_attempts}</small> : null}
                       {message.status === "failed" && <small>Не отправлено: {message.last_delivery_error}</small>}
+                      {message.status === "cancelled" && <small>Отменено: администратор ответил или пришло более новое сообщение</small>}
                       {(message.status === "failed" || message.is_draft) && <button type="button" className="small" disabled={retryMessage.isPending} onClick={()=>retryMessage.mutate(message.id)}>Отправить сейчас</button>}
                     </div>)}</div>
                   <form className="wa-composer" onSubmit={(event) => {
@@ -437,6 +439,7 @@ export default function WhatsAppPage() {
                 <Metric label="Соединение" value={qrStatus.data?.connected?"Онлайн":qrStatus.data?.stale?"Нет связи":"Не подключено"} note={qrStatus.data?.state||"—"}/>
                 <Metric label="Последний heartbeat" value={qrStatus.data?.last_heartbeat_at?new Date(qrStatus.data.last_heartbeat_at).toLocaleTimeString("ru-RU"):"—"} note={qrStatus.data?.last_heartbeat_at?new Date(qrStatus.data.last_heartbeat_at).toLocaleDateString("ru-RU"):"Данных ещё нет"}/>
                 <Metric label="Передано сообщений" value={String(qrStatus.data?.messages_forwarded||0)} note={`Из истории: ${qrStatus.data?.history_messages_forwarded||0}`}/>
+                <Metric label="Очередь gateway" value={qrStatus.data?.pending_messages == null ? "—" : String(qrStatus.data.pending_messages)} note="Норма: 0"/>
                 <Metric label="Переподключения" value={String(qrStatus.data?.reconnect_count||0)} note={qrStatus.data?.last_message_at?`Последнее сообщение: ${new Date(qrStatus.data.last_message_at).toLocaleString("ru-RU")}`:"Сообщений ещё нет"}/>
               </section>
               {qrStatus.data?.last_error&&<div className="error-box">{qrStatus.data.last_error}</div>}

@@ -178,7 +178,7 @@ async def qr_status(
     live.messages_forwarded = cached.messages_forwarded
     live.history_messages_forwarded = cached.history_messages_forwarded
     live.reconnect_count = cached.reconnect_count
-    live.last_error = cached.last_error
+    live.last_error = live.last_error or cached.last_error
     live.stale = cached.stale
     return live
 

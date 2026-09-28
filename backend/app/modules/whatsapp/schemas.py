@@ -14,6 +14,7 @@ class WhatsAppStatusResponse(BaseModel):
     connection_missing: list[str]
     ai_provider: str
     auto_send: bool
+    reply_delay_seconds: int
     monthly_budget_kzt: int
     estimated_spend_kzt: Decimal
     channels: int
@@ -188,6 +189,7 @@ class WhatsAppQrStatusResponse(BaseModel):
     history_messages_forwarded: int = 0
     reconnect_count: int = 0
     last_error: str | None = None
+    pending_messages: int | None = None
     stale: bool = False
 
 

@@ -4,7 +4,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -151,6 +151,7 @@ class WhatsAppService:
             connection_missing=connection_missing,
             ai_provider=self.settings.whatsapp_ai_provider,
             auto_send=bool(automatic_channels),
+            reply_delay_seconds=self.settings.whatsapp_bot_reply_delay_seconds,
             monthly_budget_kzt=self.settings.whatsapp_monthly_budget_kzt,
             estimated_spend_kzt=spend,
             channels=channels,
@@ -428,6 +429,13 @@ class WhatsAppService:
                 provider="paused",
                 cost_kzt=Decimal("0"),
             )
+        if not simulated:
+            # Patients often split one thought into several messages. Keep
+            # only the newest unsent AI response so the bot answers the full
+            # context once instead of replying to every fragment. A queued
+            # handoff acknowledgement is preserved while human help is
+            # already requested by the early return above.
+            await self._cancel_pending_bot_messages(conversation.id)
         if message_type != "text":
             decision = rules_decision(None).model_copy(
                 update={
@@ -462,6 +470,7 @@ class WhatsAppService:
             ),
             next_delivery_at=(
                 datetime.now(UTC)
+                + timedelta(seconds=self.settings.whatsapp_bot_reply_delay_seconds)
                 if not simulated
                 and channel.bot_mode == "auto"
                 else None
@@ -557,6 +566,7 @@ class WhatsAppService:
             conversation.state = "human_active"
             conversation.assigned_user_id = None
             conversation.handoff_reason = "Администратор ответил в WhatsApp Business"
+            await self._cancel_pending_bot_messages(conversation.id)
         await self.session.flush()
 
     async def takeover(self, user: User, conversation_id: UUID) -> ConversationDetailResponse:
@@ -564,6 +574,7 @@ class WhatsAppService:
         item.state = "human_active"
         item.assigned_user_id = user.id
         item.handoff_reason = None
+        await self._cancel_pending_bot_messages(item.id)
         return await self.conversation(user, conversation_id)
 
     async def release(self, user: User, conversation_id: UUID) -> ConversationDetailResponse:
@@ -580,6 +591,7 @@ class WhatsAppService:
             raise AppError("WHATSAPP_CHANNEL_NOT_FOUND", "WhatsApp channel not found", 404)
         item.state = "human_active"
         item.assigned_user_id = user.id
+        await self._cancel_pending_bot_messages(item.id)
         now = datetime.now(UTC)
         message = WhatsAppMessage(
             tenant_id=user.tenant_id,
@@ -622,6 +634,17 @@ class WhatsAppService:
         )
         for channel in channels:
             channel.bot_mode = "auto" if auto_send else "draft"
+        if not auto_send:
+            await self.session.execute(
+                update(WhatsAppMessage)
+                .where(
+                    WhatsAppMessage.tenant_id == user.tenant_id,
+                    WhatsAppMessage.direction == "out",
+                    WhatsAppMessage.sender_kind == "bot",
+                    WhatsAppMessage.status.in_(("queued", "retrying")),
+                )
+                .values(status="cancelled", next_delivery_at=None)
+            )
         await self.session.flush()
         return await self.status(user)
 
@@ -962,7 +985,15 @@ class WhatsAppService:
             (
                 await self.session.scalars(
                     select(WhatsAppMessage)
-                    .where(WhatsAppMessage.conversation_id == conversation.id)
+                    .where(
+                        WhatsAppMessage.conversation_id == conversation.id,
+                        or_(
+                            WhatsAppMessage.direction == "in",
+                            WhatsAppMessage.status.in_(
+                                ("sent", "simulated", "synced", "history", "bot_echo")
+                            ),
+                        ),
+                    )
                     .order_by(
                         func.coalesce(
                             WhatsAppMessage.provider_timestamp,
@@ -1195,6 +1226,19 @@ class WhatsAppService:
                 select(func.count()).select_from(model).where(model.tenant_id == tenant_id)
             )
             or 0
+        )
+
+    async def _cancel_pending_bot_messages(self, conversation_id: UUID) -> None:
+        """Give a human or the patient's newest message priority over stale AI work."""
+        await self.session.execute(
+            update(WhatsAppMessage)
+            .where(
+                WhatsAppMessage.conversation_id == conversation_id,
+                WhatsAppMessage.direction == "out",
+                WhatsAppMessage.sender_kind == "bot",
+                WhatsAppMessage.status.in_(("queued", "retrying")),
+            )
+            .values(status="cancelled", next_delivery_at=None)
         )
 
     @staticmethod
