@@ -7,8 +7,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-from app.core.database import Base
-import app.models  # noqa: F401
+from migration_schema import create_table as create_frozen_table, drop_table as drop_frozen_table
 
 revision: str = "20260828_0028"
 down_revision: str | None = "20260828_0027"
@@ -18,8 +17,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     table = "whatsapp_qr_sessions"
-    bind = op.get_bind()
-    Base.metadata.tables[table].create(bind=bind, checkfirst=False)
+    create_frozen_table(revision, table, checkfirst=False)
     op.execute(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY')
     op.execute(f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY')
     op.execute(
@@ -30,6 +28,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    Base.metadata.tables["whatsapp_qr_sessions"].drop(
-        bind=op.get_bind(), checkfirst=False
-    )
+    drop_frozen_table("whatsapp_qr_sessions", checkfirst=False)

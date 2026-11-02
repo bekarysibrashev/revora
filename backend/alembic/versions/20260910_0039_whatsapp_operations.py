@@ -8,8 +8,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-from app.core.database import Base
-import app.models  # noqa: F401
+from migration_schema import create_table as create_frozen_table, drop_table as drop_frozen_table
 
 
 revision: str = "20260910_0039"
@@ -84,16 +83,14 @@ def upgrade() -> None:
         ["transcription_status"],
     )
 
-    bind = op.get_bind()
     for table in ("whatsapp_gateway_health", "whatsapp_gateway_logs"):
-        Base.metadata.tables[table].create(bind=bind, checkfirst=False)
+        create_frozen_table(revision, table, checkfirst=False)
         _tenant_policy(table)
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
     for table in ("whatsapp_gateway_logs", "whatsapp_gateway_health"):
-        Base.metadata.tables[table].drop(bind=bind, checkfirst=False)
+        drop_frozen_table(table, checkfirst=False)
     op.drop_index("ix_whatsapp_messages_next_delivery_at", table_name="whatsapp_messages")
     op.drop_index("ix_whatsapp_messages_transcription_status", table_name="whatsapp_messages")
     for column in (

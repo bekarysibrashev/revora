@@ -1,16 +1,14 @@
 """Create the canonical domain schema and tenant isolation policies.
 
-This initial domain revision intentionally creates the registered table snapshots
-through SQLAlchemy so PostgreSQL-specific exclusion constraints and indexes use
-the exact same definitions as the ORM. Once deployed, this revision is immutable.
+The legacy ORM-backed baseline is frozen in migration_schema/legacy_tables.json.
+Later fields are owned by their additive revisions, not by current app.models.
 """
 
 from collections.abc import Sequence
 
 from alembic import op
 
-from app.core.database import Base
-import app.models  # noqa: F401
+from migration_schema import create_table as create_frozen_table, drop_table as drop_frozen_table
 
 revision: str = "20260718_0003"
 down_revision: str | None = "20260718_0002"
@@ -47,10 +45,9 @@ RLS_EXCEPTIONS = {"ai_insight_reads"}
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
     op.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
     for table_name in DOMAIN_TABLES:
-        Base.metadata.tables[table_name].create(bind=bind, checkfirst=False)
+        create_frozen_table(revision, table_name, checkfirst=False)
     for table_name in DOMAIN_TABLES:
         if table_name in RLS_EXCEPTIONS:
             continue
@@ -64,6 +61,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
     for table_name in reversed(DOMAIN_TABLES):
-        Base.metadata.tables[table_name].drop(bind=bind, checkfirst=False)
+        drop_frozen_table(table_name, checkfirst=False)

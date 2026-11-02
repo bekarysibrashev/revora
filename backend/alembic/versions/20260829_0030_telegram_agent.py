@@ -8,8 +8,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-from app.core.database import Base
-import app.models  # noqa: F401
+from migration_schema import create_table as create_frozen_table, drop_table as drop_frozen_table
 
 revision: str = "20260829_0030"
 down_revision: str | None = "20260828_0029"
@@ -59,7 +58,7 @@ def upgrade() -> None:
     )
 
     table_name = "telegram_agent_task_drafts"
-    Base.metadata.tables[table_name].create(bind=op.get_bind(), checkfirst=True)
+    create_frozen_table(revision, table_name, checkfirst=True)
     op.execute(f'ALTER TABLE "{table_name}" ENABLE ROW LEVEL SECURITY')
     op.execute(f'ALTER TABLE "{table_name}" FORCE ROW LEVEL SECURITY')
     op.execute(
@@ -77,9 +76,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    Base.metadata.tables["telegram_agent_task_drafts"].drop(
-        bind=op.get_bind(), checkfirst=True
-    )
+    drop_frozen_table("telegram_agent_task_drafts", checkfirst=True)
     op.execute(
         "ALTER TABLE telegram_employees DROP CONSTRAINT IF EXISTS "
         "uq_telegram_employee_linked_user"

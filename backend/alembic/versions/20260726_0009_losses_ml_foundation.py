@@ -8,8 +8,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-from app.core.database import Base
-import app.models  # noqa: F401
+from migration_schema import create_table as create_frozen_table, drop_table as drop_frozen_table
 
 revision: str = "20260726_0009"
 down_revision: str | None = "20260724_0008"
@@ -26,9 +25,8 @@ TABLES = (
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
     for table_name in TABLES:
-        Base.metadata.tables[table_name].create(bind=bind, checkfirst=False)
+        create_frozen_table(revision, table_name, checkfirst=False)
         op.execute(f'ALTER TABLE "{table_name}" ENABLE ROW LEVEL SECURITY')
         op.execute(f'ALTER TABLE "{table_name}" FORCE ROW LEVEL SECURITY')
         op.execute(
@@ -39,6 +37,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
     for table_name in reversed(TABLES):
-        Base.metadata.tables[table_name].drop(bind=bind, checkfirst=False)
+        drop_frozen_table(table_name, checkfirst=False)

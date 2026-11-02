@@ -1,0 +1,307 @@
+{
+  "20260718_0003": {
+    "doctors": [
+      "CREATE TABLE doctors (\n\ttenant_id UUID NOT NULL, \n\texternal_id VARCHAR(150) NOT NULL, \n\tfull_name VARCHAR(200) NOT NULL, \n\tspecialty VARCHAR(150), \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_doctors PRIMARY KEY (id), \n\tCONSTRAINT uq_doctors_tenant_id UNIQUE (tenant_id, external_id), \n\tCONSTRAINT fk_doctors_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_doctors_full_name ON doctors (full_name)",
+      "CREATE INDEX ix_doctors_tenant_id ON doctors (tenant_id)"
+    ],
+    "expense_categories": [
+      "CREATE TABLE expense_categories (\n\ttenant_id UUID NOT NULL, \n\tname VARCHAR(150) NOT NULL, \n\tparent_id UUID, \n\tcost_behavior VARCHAR(20), \n\tcost_traceability VARCHAR(20), \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_expense_categories PRIMARY KEY (id), \n\tCONSTRAINT fk_expense_categories_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_expense_categories_parent_id_expense_categories FOREIGN KEY(parent_id) REFERENCES expense_categories (id), \n\tCONSTRAINT uq_expense_categories_tenant_id UNIQUE (tenant_id, name)\n)",
+      "CREATE INDEX ix_expense_categories_tenant_id ON expense_categories (tenant_id)"
+    ],
+    "integration_connections": [
+      "CREATE TABLE integration_connections (\n\ttenant_id UUID NOT NULL, \n\tprovider VARCHAR(50) NOT NULL, \n\tname VARCHAR(150) NOT NULL, \n\tstatus VARCHAR(30) NOT NULL, \n\tencrypted_credentials TEXT, \n\tsettings JSONB NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_integration_connections PRIMARY KEY (id), \n\tCONSTRAINT fk_integration_connections_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_integration_connections_tenant_id UNIQUE (tenant_id, provider, name)\n)",
+      "CREATE INDEX ix_integration_connections_status ON integration_connections (status)",
+      "CREATE INDEX ix_integration_connections_tenant_id ON integration_connections (tenant_id)"
+    ],
+    "patients": [
+      "CREATE TABLE patients (\n\ttenant_id UUID NOT NULL, \n\texternal_id VARCHAR(150) NOT NULL, \n\tfull_name VARCHAR(200), \n\tphone_e164_encrypted TEXT, \n\tphone_hash VARCHAR(64), \n\tlead_source VARCHAR(100), \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_patients PRIMARY KEY (id), \n\tCONSTRAINT uq_patients_tenant_id UNIQUE (tenant_id, external_id), \n\tCONSTRAINT fk_patients_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_patients_phone_hash ON patients (phone_hash)",
+      "CREATE INDEX ix_patients_tenant_id ON patients (tenant_id)"
+    ],
+    "service_directions": [
+      "CREATE TABLE service_directions (\n\ttenant_id UUID NOT NULL, \n\texternal_id VARCHAR(150) NOT NULL, \n\tname VARCHAR(200) NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_service_directions PRIMARY KEY (id), \n\tCONSTRAINT fk_service_directions_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_service_directions_tenant_id UNIQUE (tenant_id, external_id)\n)",
+      "CREATE INDEX ix_service_directions_tenant_id ON service_directions (tenant_id)"
+    ],
+    "account_balances": [
+      "CREATE TABLE account_balances (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\taccount_ref VARCHAR(100) NOT NULL, \n\tbalance_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tamount NUMERIC(14, 2) NOT NULL, \n\tcurrency VARCHAR(3) NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_account_balances PRIMARY KEY (id), \n\tCONSTRAINT fk_account_balances_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_account_balances_tenant_id UNIQUE (tenant_id, account_ref, balance_at), \n\tCONSTRAINT fk_account_balances_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id)\n)",
+      "CREATE INDEX ix_account_balances_balance_at ON account_balances (balance_at)",
+      "CREATE INDEX ix_account_balances_tenant_id ON account_balances (tenant_id)"
+    ],
+    "ai_insights": [
+      "CREATE TABLE ai_insights (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\tfingerprint VARCHAR(64) NOT NULL, \n\tinsight_type VARCHAR(50) NOT NULL, \n\tseverity VARCHAR(20) NOT NULL, \n\ttitle VARCHAR(250) NOT NULL, \n\tdescription TEXT NOT NULL, \n\tevidence JSONB NOT NULL, \n\tdetected_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tvalid_until TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_ai_insights PRIMARY KEY (id), \n\tCONSTRAINT uq_ai_insights_tenant_id UNIQUE (tenant_id, fingerprint), \n\tCONSTRAINT fk_ai_insights_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id), \n\tCONSTRAINT fk_ai_insights_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_ai_insights_branch_id ON ai_insights (branch_id)",
+      "CREATE INDEX ix_ai_insights_detected_at ON ai_insights (detected_at)",
+      "CREATE INDEX ix_ai_insights_insight_type ON ai_insights (insight_type)",
+      "CREATE INDEX ix_ai_insights_severity ON ai_insights (severity)",
+      "CREATE INDEX ix_ai_insights_tenant_id ON ai_insights (tenant_id)"
+    ],
+    "appointments": [
+      "CREATE TABLE appointments (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID NOT NULL, \n\tpatient_id UUID, \n\tdoctor_id UUID, \n\tdirection_id UUID, \n\texternal_id VARCHAR(150) NOT NULL, \n\tstarts_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tstatus VARCHAR(50) NOT NULL, \n\tis_primary BOOLEAN DEFAULT 'false' NOT NULL, \n\thas_reception BOOLEAN DEFAULT 'false' NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_appointments PRIMARY KEY (id), \n\tCONSTRAINT uq_appointments_tenant_id UNIQUE (tenant_id, external_id), \n\tCONSTRAINT fk_appointments_patient_id_patients FOREIGN KEY(patient_id) REFERENCES patients (id), \n\tCONSTRAINT fk_appointments_doctor_id_doctors FOREIGN KEY(doctor_id) REFERENCES doctors (id), \n\tCONSTRAINT fk_appointments_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id), \n\tCONSTRAINT fk_appointments_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_appointments_direction_id_service_directions FOREIGN KEY(direction_id) REFERENCES service_directions (id)\n)",
+      "CREATE INDEX ix_appointments_branch_id ON appointments (branch_id)",
+      "CREATE INDEX ix_appointments_doctor_id ON appointments (doctor_id)",
+      "CREATE INDEX ix_appointments_has_reception ON appointments (has_reception)",
+      "CREATE INDEX ix_appointments_patient_id ON appointments (patient_id)",
+      "CREATE INDEX ix_appointments_starts_at ON appointments (starts_at)",
+      "CREATE INDEX ix_appointments_status ON appointments (status)",
+      "CREATE INDEX ix_appointments_tenant_id ON appointments (tenant_id)"
+    ],
+    "audit_log": [
+      "CREATE TABLE audit_log (\n\ttenant_id UUID NOT NULL, \n\tactor_user_id UUID, \n\taction VARCHAR(100) NOT NULL, \n\tentity_type VARCHAR(100) NOT NULL, \n\tentity_id UUID, \n\toccurred_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tip_address INET, \n\tchanges JSONB, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_audit_log PRIMARY KEY (id), \n\tCONSTRAINT fk_audit_log_actor_user_id_users FOREIGN KEY(actor_user_id) REFERENCES users (id), \n\tCONSTRAINT fk_audit_log_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_audit_log_action ON audit_log (action)",
+      "CREATE INDEX ix_audit_log_actor_user_id ON audit_log (actor_user_id)",
+      "CREATE INDEX ix_audit_log_occurred_at ON audit_log (occurred_at)",
+      "CREATE INDEX ix_audit_log_tenant_id ON audit_log (tenant_id)"
+    ],
+    "bank_statement_uploads": [
+      "CREATE TABLE bank_statement_uploads (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\tuploaded_by_id UUID NOT NULL, \n\tbank VARCHAR(30) NOT NULL, \n\tobject_key VARCHAR(500) NOT NULL, \n\tstatus VARCHAR(30) NOT NULL, \n\terror_message TEXT, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_bank_statement_uploads PRIMARY KEY (id), \n\tCONSTRAINT uq_bank_statement_uploads_object_key UNIQUE (object_key), \n\tCONSTRAINT fk_bank_statement_uploads_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id), \n\tCONSTRAINT fk_bank_statement_uploads_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_bank_statement_uploads_uploaded_by_id_users FOREIGN KEY(uploaded_by_id) REFERENCES users (id)\n)",
+      "CREATE INDEX ix_bank_statement_uploads_status ON bank_statement_uploads (status)",
+      "CREATE INDEX ix_bank_statement_uploads_tenant_id ON bank_statement_uploads (tenant_id)"
+    ],
+    "doctor_compensation_rules": [
+      "CREATE TABLE doctor_compensation_rules (\n\ttenant_id UUID NOT NULL, \n\tdoctor_id UUID NOT NULL, \n\tvalid_from DATE NOT NULL, \n\tvalid_to DATE, \n\tpercentage_value NUMERIC(5, 2), \n\tfixed_amount NUMERIC(14, 2), \n\tcurrency VARCHAR(3) NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_doctor_compensation_rules PRIMARY KEY (id), \n\tCONSTRAINT exclude_overlapping_compensation EXCLUDE USING gist (doctor_id WITH =, daterange(valid_from, COALESCE(valid_to, 'infinity'::date), '[]') WITH &&), \n\tCONSTRAINT fk_doctor_compensation_rules_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT ck_doctor_compensation_rules_valid_percentage CHECK (percentage_value IS NULL OR percentage_value BETWEEN 0 AND 100), \n\tCONSTRAINT fk_doctor_compensation_rules_doctor_id_doctors FOREIGN KEY(doctor_id) REFERENCES doctors (id) ON DELETE CASCADE, \n\tCONSTRAINT ck_doctor_compensation_rules_exactly_one_compensation_value CHECK ((percentage_value IS NULL) <> (fixed_amount IS NULL))\n)",
+      "CREATE INDEX ix_doctor_compensation_rules_doctor_id ON doctor_compensation_rules (doctor_id)",
+      "CREATE INDEX ix_doctor_compensation_rules_tenant_id ON doctor_compensation_rules (tenant_id)"
+    ],
+    "doctor_ratings": [
+      "CREATE TABLE doctor_ratings (\n\ttenant_id UUID NOT NULL, \n\tdoctor_id UUID NOT NULL, \n\tsource VARCHAR(50) NOT NULL, \n\trating NUMERIC(3, 2) NOT NULL, \n\treviews_count INTEGER NOT NULL, \n\trated_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_doctor_ratings PRIMARY KEY (id), \n\tCONSTRAINT fk_doctor_ratings_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_doctor_ratings_tenant_id UNIQUE (tenant_id, doctor_id, source, rated_at), \n\tCONSTRAINT fk_doctor_ratings_doctor_id_doctors FOREIGN KEY(doctor_id) REFERENCES doctors (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_doctor_ratings_doctor_id ON doctor_ratings (doctor_id)",
+      "CREATE INDEX ix_doctor_ratings_tenant_id ON doctor_ratings (tenant_id)"
+    ],
+    "expense_facts": [
+      "CREATE TABLE expense_facts (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\tcategory_id UUID, \n\texternal_id VARCHAR(150) NOT NULL, \n\toccurred_on DATE NOT NULL, \n\tamount NUMERIC(14, 2) NOT NULL, \n\tpaid_amount NUMERIC(14, 2) DEFAULT '0' NOT NULL, \n\tcurrency VARCHAR(3) NOT NULL, \n\tcounterparty VARCHAR(250), \n\tdescription TEXT, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_expense_facts PRIMARY KEY (id), \n\tCONSTRAINT uq_expense_facts_tenant_id UNIQUE (tenant_id, external_id), \n\tCONSTRAINT fk_expense_facts_category_id_expense_categories FOREIGN KEY(category_id) REFERENCES expense_categories (id), \n\tCONSTRAINT fk_expense_facts_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id), \n\tCONSTRAINT fk_expense_facts_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_expense_facts_branch_id ON expense_facts (branch_id)",
+      "CREATE INDEX ix_expense_facts_occurred_on ON expense_facts (occurred_on)",
+      "CREATE INDEX ix_expense_facts_tenant_id ON expense_facts (tenant_id)"
+    ],
+    "leads": [
+      "CREATE TABLE leads (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\tpatient_id UUID, \n\tassigned_user_id UUID, \n\texternal_id VARCHAR(150) NOT NULL, \n\tsource VARCHAR(100) NOT NULL, \n\tstatus VARCHAR(50) NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_leads PRIMARY KEY (id), \n\tCONSTRAINT fk_leads_assigned_user_id_users FOREIGN KEY(assigned_user_id) REFERENCES users (id), \n\tCONSTRAINT fk_leads_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id), \n\tCONSTRAINT fk_leads_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_leads_tenant_id UNIQUE (tenant_id, external_id), \n\tCONSTRAINT fk_leads_patient_id_patients FOREIGN KEY(patient_id) REFERENCES patients (id)\n)",
+      "CREATE INDEX ix_leads_assigned_user_id ON leads (assigned_user_id)",
+      "CREATE INDEX ix_leads_branch_id ON leads (branch_id)",
+      "CREATE INDEX ix_leads_status ON leads (status)",
+      "CREATE INDEX ix_leads_tenant_id ON leads (tenant_id)"
+    ],
+    "marketing_spend_facts": [
+      "CREATE TABLE marketing_spend_facts (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\tsource VARCHAR(50) NOT NULL, \n\texternal_id VARCHAR(150) NOT NULL, \n\tcampaign_name VARCHAR(250), \n\tspend_date DATE NOT NULL, \n\tamount NUMERIC(14, 2) NOT NULL, \n\tcurrency VARCHAR(3) NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_marketing_spend_facts PRIMARY KEY (id), \n\tCONSTRAINT fk_marketing_spend_facts_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_marketing_spend_facts_tenant_id UNIQUE (tenant_id, source, external_id, spend_date), \n\tCONSTRAINT fk_marketing_spend_facts_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id)\n)",
+      "CREATE INDEX ix_marketing_spend_facts_spend_date ON marketing_spend_facts (spend_date)",
+      "CREATE INDEX ix_marketing_spend_facts_tenant_id ON marketing_spend_facts (tenant_id)"
+    ],
+    "revenue_facts": [
+      "CREATE TABLE revenue_facts (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID NOT NULL, \n\tpatient_id UUID, \n\tdoctor_id UUID, \n\tdirection_id UUID, \n\texternal_id VARCHAR(150) NOT NULL, \n\trecognition_type VARCHAR(20) NOT NULL, \n\toccurred_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tamount NUMERIC(14, 2) NOT NULL, \n\tcurrency VARCHAR(3) NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_revenue_facts PRIMARY KEY (id), \n\tCONSTRAINT fk_revenue_facts_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_revenue_facts_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id), \n\tCONSTRAINT fk_revenue_facts_doctor_id_doctors FOREIGN KEY(doctor_id) REFERENCES doctors (id), \n\tCONSTRAINT uq_revenue_facts_tenant_id UNIQUE (tenant_id, external_id, recognition_type), \n\tCONSTRAINT fk_revenue_facts_patient_id_patients FOREIGN KEY(patient_id) REFERENCES patients (id), \n\tCONSTRAINT fk_revenue_facts_direction_id_service_directions FOREIGN KEY(direction_id) REFERENCES service_directions (id)\n)",
+      "CREATE INDEX ix_revenue_facts_branch_id ON revenue_facts (branch_id)",
+      "CREATE INDEX ix_revenue_facts_direction_id ON revenue_facts (direction_id)",
+      "CREATE INDEX ix_revenue_facts_occurred_at ON revenue_facts (occurred_at)",
+      "CREATE INDEX ix_revenue_facts_tenant_id ON revenue_facts (tenant_id)"
+    ],
+    "sync_runs": [
+      "CREATE TABLE sync_runs (\n\ttenant_id UUID NOT NULL, \n\tconnection_id UUID NOT NULL, \n\tstatus VARCHAR(30) NOT NULL, \n\tstarted_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tfinished_at TIMESTAMP WITH TIME ZONE, \n\trecords_read INTEGER NOT NULL, \n\trecords_written INTEGER NOT NULL, \n\terror_message TEXT, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_sync_runs PRIMARY KEY (id), \n\tCONSTRAINT fk_sync_runs_connection_id_integration_connections FOREIGN KEY(connection_id) REFERENCES integration_connections (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_sync_runs_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_sync_runs_connection_id ON sync_runs (connection_id)",
+      "CREATE INDEX ix_sync_runs_status ON sync_runs (status)",
+      "CREATE INDEX ix_sync_runs_tenant_id ON sync_runs (tenant_id)"
+    ],
+    "treatment_plans": [
+      "CREATE TABLE treatment_plans (\n\ttenant_id UUID NOT NULL, \n\tpatient_id UUID NOT NULL, \n\texternal_id VARCHAR(150) NOT NULL, \n\tstatus VARCHAR(50) NOT NULL, \n\taccepted_at TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_treatment_plans PRIMARY KEY (id), \n\tCONSTRAINT uq_treatment_plans_tenant_id UNIQUE (tenant_id, external_id), \n\tCONSTRAINT fk_treatment_plans_patient_id_patients FOREIGN KEY(patient_id) REFERENCES patients (id), \n\tCONSTRAINT fk_treatment_plans_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_treatment_plans_patient_id ON treatment_plans (patient_id)",
+      "CREATE INDEX ix_treatment_plans_tenant_id ON treatment_plans (tenant_id)"
+    ],
+    "ai_insight_reads": [
+      "CREATE TABLE ai_insight_reads (\n\tinsight_id UUID NOT NULL, \n\tuser_id UUID NOT NULL, \n\tdismissed_at TIMESTAMP WITH TIME ZONE, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_ai_insight_reads PRIMARY KEY (insight_id, user_id), \n\tCONSTRAINT fk_ai_insight_reads_user_id_users FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_ai_insight_reads_insight_id_ai_insights FOREIGN KEY(insight_id) REFERENCES ai_insights (id) ON DELETE CASCADE\n)"
+    ],
+    "attribution_facts": [
+      "CREATE TABLE attribution_facts (\n\ttenant_id UUID NOT NULL, \n\tlead_id UUID NOT NULL, \n\trevenue_fact_id UUID NOT NULL, \n\tsource VARCHAR(50) NOT NULL, \n\tconfidence NUMERIC(5, 4) NOT NULL, \n\tattributed_amount NUMERIC(14, 2) NOT NULL, \n\tcurrency VARCHAR(3) NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_attribution_facts PRIMARY KEY (id), \n\tCONSTRAINT fk_attribution_facts_lead_id_leads FOREIGN KEY(lead_id) REFERENCES leads (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_attribution_facts_revenue_fact_id_revenue_facts FOREIGN KEY(revenue_fact_id) REFERENCES revenue_facts (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_attribution_facts_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_attribution_facts_tenant_id UNIQUE (tenant_id, lead_id, revenue_fact_id)\n)",
+      "CREATE INDEX ix_attribution_facts_lead_id ON attribution_facts (lead_id)",
+      "CREATE INDEX ix_attribution_facts_tenant_id ON attribution_facts (tenant_id)"
+    ],
+    "calls": [
+      "CREATE TABLE calls (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\tlead_id UUID, \n\texternal_id VARCHAR(150) NOT NULL, \n\tphone_hash VARCHAR(64) NOT NULL, \n\tdirection VARCHAR(20) NOT NULL, \n\tstarted_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tduration_seconds INTEGER, \n\toutcome VARCHAR(50), \n\texternal_user VARCHAR(150), \n\tphone_masked VARCHAR(30), \n\trecording_url TEXT, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_calls PRIMARY KEY (id), \n\tCONSTRAINT uq_calls_tenant_id UNIQUE (tenant_id, external_id), \n\tCONSTRAINT fk_calls_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id), \n\tCONSTRAINT fk_calls_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_calls_lead_id_leads FOREIGN KEY(lead_id) REFERENCES leads (id)\n)",
+      "CREATE INDEX ix_calls_external_user ON calls (external_user)",
+      "CREATE INDEX ix_calls_phone_hash ON calls (phone_hash)",
+      "CREATE INDEX ix_calls_started_at ON calls (started_at)",
+      "CREATE INDEX ix_calls_tenant_id ON calls (tenant_id)"
+    ],
+    "raw_bank_transactions": [
+      "CREATE TABLE raw_bank_transactions (\n\ttenant_id UUID NOT NULL, \n\tupload_id UUID NOT NULL, \n\ttransaction_hash VARCHAR(64) NOT NULL, \n\toccurred_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tamount NUMERIC(14, 2) NOT NULL, \n\tcurrency VARCHAR(3) NOT NULL, \n\tcounterparty VARCHAR(250), \n\tpurpose TEXT, \n\traw_payload JSONB NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_raw_bank_transactions PRIMARY KEY (id), \n\tCONSTRAINT uq_raw_bank_transactions_tenant_id UNIQUE (tenant_id, transaction_hash), \n\tCONSTRAINT fk_raw_bank_transactions_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_raw_bank_transactions_upload_id_bank_statement_uploads FOREIGN KEY(upload_id) REFERENCES bank_statement_uploads (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_raw_bank_transactions_occurred_at ON raw_bank_transactions (occurred_at)",
+      "CREATE INDEX ix_raw_bank_transactions_tenant_id ON raw_bank_transactions (tenant_id)",
+      "CREATE INDEX ix_raw_bank_transactions_upload_id ON raw_bank_transactions (upload_id)"
+    ],
+    "ai_classification_feedback": [
+      "CREATE TABLE ai_classification_feedback (\n\ttenant_id UUID NOT NULL, \n\ttransaction_id UUID NOT NULL, \n\tpredicted_category_id UUID, \n\tcorrected_category_id UUID NOT NULL, \n\tcorrected_by_id UUID NOT NULL, \n\tmodel_version VARCHAR(100), \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_ai_classification_feedback PRIMARY KEY (id), \n\tCONSTRAINT fk_ai_classification_feedback_corrected_category_id_exp_9c25 FOREIGN KEY(corrected_category_id) REFERENCES expense_categories (id), \n\tCONSTRAINT fk_ai_classification_feedback_predicted_category_id_exp_8b97 FOREIGN KEY(predicted_category_id) REFERENCES expense_categories (id), \n\tCONSTRAINT fk_ai_classification_feedback_corrected_by_id_users FOREIGN KEY(corrected_by_id) REFERENCES users (id), \n\tCONSTRAINT fk_ai_classification_feedback_transaction_id_raw_bank_t_fd3d FOREIGN KEY(transaction_id) REFERENCES raw_bank_transactions (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_ai_classification_feedback_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_ai_classification_feedback_tenant_id ON ai_classification_feedback (tenant_id)",
+      "CREATE INDEX ix_ai_classification_feedback_transaction_id ON ai_classification_feedback (transaction_id)"
+    ],
+    "cash_flow_facts": [
+      "CREATE TABLE cash_flow_facts (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\traw_transaction_id UUID, \n\texternal_id VARCHAR(150), \n\taccount_ref VARCHAR(150), \n\tcategory_id UUID, \n\toccurred_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tdirection VARCHAR(10) NOT NULL, \n\tamount NUMERIC(14, 2) NOT NULL, \n\tcurrency VARCHAR(3) NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_cash_flow_facts PRIMARY KEY (id), \n\tCONSTRAINT fk_cash_flow_facts_category_id_expense_categories FOREIGN KEY(category_id) REFERENCES expense_categories (id), \n\tCONSTRAINT uq_cash_flow_facts_tenant_external_id UNIQUE (tenant_id, external_id), \n\tCONSTRAINT uq_cash_flow_facts_tenant_raw_transaction UNIQUE (tenant_id, raw_transaction_id), \n\tCONSTRAINT fk_cash_flow_facts_raw_transaction_id_raw_bank_transactions FOREIGN KEY(raw_transaction_id) REFERENCES raw_bank_transactions (id), \n\tCONSTRAINT fk_cash_flow_facts_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id), \n\tCONSTRAINT fk_cash_flow_facts_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_cash_flow_facts_account_ref ON cash_flow_facts (account_ref)",
+      "CREATE INDEX ix_cash_flow_facts_branch_id ON cash_flow_facts (branch_id)",
+      "CREATE INDEX ix_cash_flow_facts_occurred_at ON cash_flow_facts (occurred_at)",
+      "CREATE INDEX ix_cash_flow_facts_tenant_id ON cash_flow_facts (tenant_id)"
+    ]
+  },
+  "20260726_0009": {
+    "loss_opportunities": [
+      "CREATE TABLE loss_opportunities (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\tassigned_user_id UUID, \n\tfingerprint VARCHAR(64) NOT NULL, \n\tloss_type VARCHAR(50) NOT NULL, \n\tseverity VARCHAR(20) NOT NULL, \n\tstatus VARCHAR(30) NOT NULL, \n\ttitle VARCHAR(250) NOT NULL, \n\tdescription TEXT NOT NULL, \n\trecommended_action TEXT NOT NULL, \n\tentity_type VARCHAR(50), \n\tentity_id UUID, \n\testimated_amount NUMERIC(14, 2) NOT NULL, \n\trecovered_amount NUMERIC(14, 2) NOT NULL, \n\tcurrency VARCHAR(3) NOT NULL, \n\tconfidence NUMERIC(5, 4) NOT NULL, \n\tevidence JSONB NOT NULL, \n\tperiod_start DATE NOT NULL, \n\tperiod_end DATE NOT NULL, \n\tdetected_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tlast_detected_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tresolved_at TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_loss_opportunities PRIMARY KEY (id), \n\tCONSTRAINT fk_loss_opportunities_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_loss_opportunities_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id) ON DELETE SET NULL, \n\tCONSTRAINT fk_loss_opportunities_assigned_user_id_users FOREIGN KEY(assigned_user_id) REFERENCES users (id) ON DELETE SET NULL, \n\tCONSTRAINT uq_loss_opportunities_tenant_id UNIQUE (tenant_id, fingerprint)\n)",
+      "CREATE INDEX ix_loss_opportunities_assigned_user_id ON loss_opportunities (assigned_user_id)",
+      "CREATE INDEX ix_loss_opportunities_branch_id ON loss_opportunities (branch_id)",
+      "CREATE INDEX ix_loss_opportunities_detected_at ON loss_opportunities (detected_at)",
+      "CREATE INDEX ix_loss_opportunities_entity_id ON loss_opportunities (entity_id)",
+      "CREATE INDEX ix_loss_opportunities_loss_type ON loss_opportunities (loss_type)",
+      "CREATE INDEX ix_loss_opportunities_period_end ON loss_opportunities (period_end)",
+      "CREATE INDEX ix_loss_opportunities_period_start ON loss_opportunities (period_start)",
+      "CREATE INDEX ix_loss_opportunities_severity ON loss_opportunities (severity)",
+      "CREATE INDEX ix_loss_opportunities_status ON loss_opportunities (status)",
+      "CREATE INDEX ix_loss_opportunities_tenant_id ON loss_opportunities (tenant_id)"
+    ],
+    "ml_dataset_snapshots": [
+      "CREATE TABLE ml_dataset_snapshots (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\tpurpose VARCHAR(100) NOT NULL, \n\tsnapshot_key VARCHAR(64) NOT NULL, \n\tdate_from DATE NOT NULL, \n\tdate_to DATE NOT NULL, \n\trow_count INTEGER NOT NULL, \n\tpositive_count INTEGER NOT NULL, \n\tfeature_schema JSONB NOT NULL, \n\tquality_report JSONB NOT NULL, \n\tsource_max_updated_at TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_ml_dataset_snapshots PRIMARY KEY (id), \n\tCONSTRAINT fk_ml_dataset_snapshots_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id) ON DELETE SET NULL, \n\tCONSTRAINT fk_ml_dataset_snapshots_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_ml_dataset_snapshots_tenant_id UNIQUE (tenant_id, snapshot_key)\n)",
+      "CREATE INDEX ix_ml_dataset_snapshots_branch_id ON ml_dataset_snapshots (branch_id)",
+      "CREATE INDEX ix_ml_dataset_snapshots_purpose ON ml_dataset_snapshots (purpose)",
+      "CREATE INDEX ix_ml_dataset_snapshots_tenant_id ON ml_dataset_snapshots (tenant_id)"
+    ],
+    "ml_experiments": [
+      "CREATE TABLE ml_experiments (\n\ttenant_id UUID NOT NULL, \n\tdataset_snapshot_id UUID NOT NULL, \n\tname VARCHAR(200) NOT NULL, \n\tproblem_type VARCHAR(50) NOT NULL, \n\ttarget_name VARCHAR(100) NOT NULL, \n\talgorithm VARCHAR(100) NOT NULL, \n\tstatus VARCHAR(30) NOT NULL, \n\tparameters JSONB NOT NULL, \n\tmetrics JSONB NOT NULL, \n\tnotes TEXT, \n\tstarted_at TIMESTAMP WITH TIME ZONE, \n\tfinished_at TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_ml_experiments PRIMARY KEY (id), \n\tCONSTRAINT fk_ml_experiments_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_ml_experiments_dataset_snapshot_id_ml_dataset_snapshots FOREIGN KEY(dataset_snapshot_id) REFERENCES ml_dataset_snapshots (id) ON DELETE RESTRICT\n)",
+      "CREATE INDEX ix_ml_experiments_dataset_snapshot_id ON ml_experiments (dataset_snapshot_id)",
+      "CREATE INDEX ix_ml_experiments_status ON ml_experiments (status)",
+      "CREATE INDEX ix_ml_experiments_tenant_id ON ml_experiments (tenant_id)"
+    ],
+    "ml_model_versions": [
+      "CREATE TABLE ml_model_versions (\n\ttenant_id UUID NOT NULL, \n\texperiment_id UUID NOT NULL, \n\tname VARCHAR(150) NOT NULL, \n\tversion INTEGER NOT NULL, \n\tstatus VARCHAR(30) NOT NULL, \n\tartifact_uri VARCHAR(500), \n\tfeature_schema JSONB NOT NULL, \n\tmetrics JSONB NOT NULL, \n\ttrained_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_ml_model_versions PRIMARY KEY (id), \n\tCONSTRAINT fk_ml_model_versions_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_ml_model_versions_experiment_id_ml_experiments FOREIGN KEY(experiment_id) REFERENCES ml_experiments (id) ON DELETE RESTRICT, \n\tCONSTRAINT uq_ml_model_versions_tenant_id UNIQUE (tenant_id, name, version)\n)",
+      "CREATE INDEX ix_ml_model_versions_experiment_id ON ml_model_versions (experiment_id)",
+      "CREATE INDEX ix_ml_model_versions_status ON ml_model_versions (status)",
+      "CREATE INDEX ix_ml_model_versions_tenant_id ON ml_model_versions (tenant_id)"
+    ],
+    "ml_predictions": [
+      "CREATE TABLE ml_predictions (\n\ttenant_id UUID NOT NULL, \n\tmodel_version_id UUID NOT NULL, \n\tentity_type VARCHAR(50) NOT NULL, \n\tentity_id UUID NOT NULL, \n\tscore NUMERIC(8, 7) NOT NULL, \n\tpredicted_label VARCHAR(50), \n\texplanation JSONB NOT NULL, \n\tpredicted_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tactual_outcome VARCHAR(50), \n\toutcome_at TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_ml_predictions PRIMARY KEY (id), \n\tCONSTRAINT fk_ml_predictions_model_version_id_ml_model_versions FOREIGN KEY(model_version_id) REFERENCES ml_model_versions (id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_ml_predictions_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_ml_predictions_entity_id ON ml_predictions (entity_id)",
+      "CREATE INDEX ix_ml_predictions_model_version_id ON ml_predictions (model_version_id)",
+      "CREATE INDEX ix_ml_predictions_predicted_at ON ml_predictions (predicted_at)",
+      "CREATE INDEX ix_ml_predictions_tenant_id ON ml_predictions (tenant_id)"
+    ]
+  },
+  "20260727_0010": {
+    "meta_ads_accounts": [
+      "CREATE TABLE meta_ads_accounts (\n\ttenant_id UUID NOT NULL, \n\texternal_account_id VARCHAR(50) NOT NULL, \n\tname VARCHAR(250) NOT NULL, \n\taccount_status INTEGER NOT NULL, \n\tcurrency VARCHAR(3) NOT NULL, \n\ttimezone_name VARCHAR(100) NOT NULL, \n\tlast_sync_attempted_at TIMESTAMP WITH TIME ZONE, \n\tlast_synced_at TIMESTAMP WITH TIME ZONE, \n\tlast_error TEXT, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_meta_ads_accounts PRIMARY KEY (id), \n\tCONSTRAINT uq_meta_ads_accounts_tenant_id UNIQUE (tenant_id, external_account_id), \n\tCONSTRAINT fk_meta_ads_accounts_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_meta_ads_accounts_tenant_id ON meta_ads_accounts (tenant_id)"
+    ],
+    "meta_campaign_daily_metrics": [
+      "CREATE TABLE meta_campaign_daily_metrics (\n\ttenant_id UUID NOT NULL, \n\taccount_id UUID NOT NULL, \n\tcampaign_external_id VARCHAR(80) NOT NULL, \n\tcampaign_name VARCHAR(250) NOT NULL, \n\tstatus VARCHAR(40) NOT NULL, \n\teffective_status VARCHAR(40) NOT NULL, \n\tmetric_date DATE NOT NULL, \n\tspend NUMERIC(14, 2) NOT NULL, \n\timpressions INTEGER NOT NULL, \n\treach INTEGER NOT NULL, \n\tclicks INTEGER NOT NULL, \n\tunique_clicks INTEGER NOT NULL, \n\tlink_clicks INTEGER NOT NULL, \n\toutbound_clicks INTEGER NOT NULL, \n\tlanding_page_views INTEGER NOT NULL, \n\tleads INTEGER NOT NULL, \n\tpurchases INTEGER NOT NULL, \n\tconversations_started INTEGER NOT NULL, \n\tmessaging_connections INTEGER NOT NULL, \n\tvideo_plays INTEGER NOT NULL, \n\tvideo_thruplays INTEGER NOT NULL, \n\tactions JSONB NOT NULL, \n\taction_values JSONB NOT NULL, \n\toutbound_clicks_raw JSONB NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_meta_campaign_daily_metrics PRIMARY KEY (id), \n\tCONSTRAINT fk_meta_campaign_daily_metrics_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_meta_campaign_daily_metrics_tenant_id UNIQUE (tenant_id, account_id, campaign_external_id, metric_date), \n\tCONSTRAINT fk_meta_campaign_daily_metrics_account_id_meta_ads_accounts FOREIGN KEY(account_id) REFERENCES meta_ads_accounts (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_meta_campaign_daily_metrics_account_id ON meta_campaign_daily_metrics (account_id)",
+      "CREATE INDEX ix_meta_campaign_daily_metrics_campaign_external_id ON meta_campaign_daily_metrics (campaign_external_id)",
+      "CREATE INDEX ix_meta_campaign_daily_metrics_metric_date ON meta_campaign_daily_metrics (metric_date)",
+      "CREATE INDEX ix_meta_campaign_daily_metrics_tenant_id ON meta_campaign_daily_metrics (tenant_id)"
+    ]
+  },
+  "20260729_0014": {
+    "whatsapp_channels": [
+      "CREATE TABLE whatsapp_channels (\n\ttenant_id UUID NOT NULL, \n\tphone_number_id VARCHAR(80) NOT NULL, \n\twaba_id VARCHAR(80), \n\tdisplay_name VARCHAR(150) NOT NULL, \n\tbusiness_number_masked VARCHAR(30), \n\taccess_token_ciphertext TEXT, \n\ttoken_expires_at TIMESTAMP WITH TIME ZONE, \n\tconnected_by_user_id UUID, \n\tconnection_mode VARCHAR(30) NOT NULL, \n\tstatus VARCHAR(30) NOT NULL, \n\tbot_mode VARCHAR(20) NOT NULL, \n\tis_active BOOLEAN NOT NULL, \n\tlast_webhook_at TIMESTAMP WITH TIME ZONE, \n\tlast_error VARCHAR(500), \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_whatsapp_channels PRIMARY KEY (id), \n\tCONSTRAINT fk_whatsapp_channels_connected_by_user_id_users FOREIGN KEY(connected_by_user_id) REFERENCES users (id) ON DELETE SET NULL, \n\tCONSTRAINT uq_whatsapp_channels_tenant_id UNIQUE (tenant_id, phone_number_id), \n\tCONSTRAINT fk_whatsapp_channels_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_whatsapp_channels_phone_number_id ON whatsapp_channels (phone_number_id)",
+      "CREATE INDEX ix_whatsapp_channels_tenant_id ON whatsapp_channels (tenant_id)"
+    ],
+    "whatsapp_conversations": [
+      "CREATE TABLE whatsapp_conversations (\n\ttenant_id UUID NOT NULL, \n\tchannel_id UUID NOT NULL, \n\tcontact_hash VARCHAR(64) NOT NULL, \n\tcontact_ciphertext TEXT NOT NULL, \n\tcontact_masked VARCHAR(30) NOT NULL, \n\tstate VARCHAR(30) NOT NULL, \n\tlanguage VARCHAR(5) NOT NULL, \n\tassigned_user_id UUID, \n\thandoff_reason VARCHAR(300), \n\tlast_message_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tlast_patient_message_at TIMESTAMP WITH TIME ZONE, \n\tunread_count INTEGER NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_whatsapp_conversations PRIMARY KEY (id), \n\tCONSTRAINT uq_whatsapp_conversations_tenant_id UNIQUE (tenant_id, channel_id, contact_hash), \n\tCONSTRAINT fk_whatsapp_conversations_channel_id_whatsapp_channels FOREIGN KEY(channel_id) REFERENCES whatsapp_channels (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_whatsapp_conversations_assigned_user_id_users FOREIGN KEY(assigned_user_id) REFERENCES users (id) ON DELETE SET NULL, \n\tCONSTRAINT fk_whatsapp_conversations_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_whatsapp_conversations_assigned_user_id ON whatsapp_conversations (assigned_user_id)",
+      "CREATE INDEX ix_whatsapp_conversations_channel_id ON whatsapp_conversations (channel_id)",
+      "CREATE INDEX ix_whatsapp_conversations_contact_hash ON whatsapp_conversations (contact_hash)",
+      "CREATE INDEX ix_whatsapp_conversations_last_message_at ON whatsapp_conversations (last_message_at)",
+      "CREATE INDEX ix_whatsapp_conversations_state ON whatsapp_conversations (state)",
+      "CREATE INDEX ix_whatsapp_conversations_tenant_id ON whatsapp_conversations (tenant_id)"
+    ],
+    "whatsapp_messages": [
+      "CREATE TABLE whatsapp_messages (\n\ttenant_id UUID NOT NULL, \n\tconversation_id UUID NOT NULL, \n\texternal_message_id VARCHAR(160) NOT NULL, \n\tdirection VARCHAR(10) NOT NULL, \n\tsender_kind VARCHAR(20) NOT NULL, \n\tmessage_type VARCHAR(30) NOT NULL, \n\tbody_ciphertext TEXT, \n\tstatus VARCHAR(30) NOT NULL, \n\tis_draft BOOLEAN NOT NULL, \n\tprovider_timestamp TIMESTAMP WITH TIME ZONE, \n\tsent_at TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_whatsapp_messages PRIMARY KEY (id), \n\tCONSTRAINT fk_whatsapp_messages_conversation_id_whatsapp_conversations FOREIGN KEY(conversation_id) REFERENCES whatsapp_conversations (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_whatsapp_messages_tenant_id UNIQUE (tenant_id, external_message_id), \n\tCONSTRAINT fk_whatsapp_messages_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_whatsapp_messages_conversation_id ON whatsapp_messages (conversation_id)",
+      "CREATE INDEX ix_whatsapp_messages_external_message_id ON whatsapp_messages (external_message_id)",
+      "CREATE INDEX ix_whatsapp_messages_tenant_id ON whatsapp_messages (tenant_id)"
+    ],
+    "whatsapp_knowledge_items": [
+      "CREATE TABLE whatsapp_knowledge_items (\n\ttenant_id UUID NOT NULL, \n\tcategory VARCHAR(120) NOT NULL, \n\ttitle VARCHAR(300) NOT NULL, \n\tcontent_ru TEXT, \n\tcontent_kk TEXT, \n\tkeywords JSONB NOT NULL, \n\trisk_level VARCHAR(30) NOT NULL, \n\tsource VARCHAR(250) NOT NULL, \n\tis_approved BOOLEAN NOT NULL, \n\tapproved_by_id UUID, \n\tapproved_at TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_whatsapp_knowledge_items PRIMARY KEY (id), \n\tCONSTRAINT fk_whatsapp_knowledge_items_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_whatsapp_knowledge_items_approved_by_id_users FOREIGN KEY(approved_by_id) REFERENCES users (id) ON DELETE SET NULL, \n\tCONSTRAINT uq_whatsapp_knowledge_items_tenant_id UNIQUE (tenant_id, source)\n)",
+      "CREATE INDEX ix_whatsapp_knowledge_items_category ON whatsapp_knowledge_items (category)",
+      "CREATE INDEX ix_whatsapp_knowledge_items_is_approved ON whatsapp_knowledge_items (is_approved)",
+      "CREATE INDEX ix_whatsapp_knowledge_items_tenant_id ON whatsapp_knowledge_items (tenant_id)"
+    ],
+    "whatsapp_ai_usage": [
+      "CREATE TABLE whatsapp_ai_usage (\n\ttenant_id UUID NOT NULL, \n\tconversation_id UUID, \n\tprovider VARCHAR(30) NOT NULL, \n\tmodel VARCHAR(100) NOT NULL, \n\tinput_tokens INTEGER NOT NULL, \n\toutput_tokens INTEGER NOT NULL, \n\testimated_cost_kzt NUMERIC(12, 4) NOT NULL, \n\toccurred_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_whatsapp_ai_usage PRIMARY KEY (id), \n\tCONSTRAINT fk_whatsapp_ai_usage_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_whatsapp_ai_usage_conversation_id_whatsapp_conversations FOREIGN KEY(conversation_id) REFERENCES whatsapp_conversations (id) ON DELETE SET NULL\n)",
+      "CREATE INDEX ix_whatsapp_ai_usage_occurred_at ON whatsapp_ai_usage (occurred_at)",
+      "CREATE INDEX ix_whatsapp_ai_usage_tenant_id ON whatsapp_ai_usage (tenant_id)"
+    ]
+  },
+  "20260828_0028": {
+    "whatsapp_qr_sessions": [
+      "CREATE TABLE whatsapp_qr_sessions (\n\ttenant_id UUID NOT NULL, \n\tarchive_ciphertext TEXT NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_whatsapp_qr_sessions PRIMARY KEY (id), \n\tCONSTRAINT uq_whatsapp_qr_sessions_tenant_id UNIQUE (tenant_id), \n\tCONSTRAINT fk_whatsapp_qr_sessions_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_whatsapp_qr_sessions_tenant_id ON whatsapp_qr_sessions (tenant_id)"
+    ]
+  },
+  "20260828_0029": {
+    "telegram_invitations": [
+      "CREATE TABLE telegram_invitations (\n\ttenant_id UUID NOT NULL, \n\tcode_hash VARCHAR(64) NOT NULL, \n\tcode_hint VARCHAR(12) NOT NULL, \n\trole VARCHAR(30) NOT NULL, \n\tbranch_id UUID, \n\tcreated_by_user_id UUID NOT NULL, \n\tlinked_user_id UUID, \n\texpires_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tmax_uses INTEGER NOT NULL, \n\tuses INTEGER NOT NULL, \n\trevoked_at TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_telegram_invitations PRIMARY KEY (id), \n\tCONSTRAINT uq_telegram_invitations_code_hash UNIQUE (code_hash), \n\tCONSTRAINT fk_telegram_invitations_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_invitations_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_invitations_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_invitations_linked_user_id_users FOREIGN KEY(linked_user_id) REFERENCES users (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_telegram_invitations_branch_id ON telegram_invitations (branch_id)",
+      "CREATE INDEX ix_telegram_invitations_created_by_user_id ON telegram_invitations (created_by_user_id)",
+      "CREATE INDEX ix_telegram_invitations_expires_at ON telegram_invitations (expires_at)",
+      "CREATE INDEX ix_telegram_invitations_linked_user_id ON telegram_invitations (linked_user_id)",
+      "CREATE INDEX ix_telegram_invitations_tenant_id ON telegram_invitations (tenant_id)"
+    ],
+    "telegram_invite_routes": [
+      "CREATE TABLE telegram_invite_routes (\n\tcode_hash VARCHAR(64) NOT NULL, \n\ttenant_id UUID NOT NULL, \n\tinvitation_id UUID NOT NULL, \n\tCONSTRAINT pk_telegram_invite_routes PRIMARY KEY (code_hash), \n\tCONSTRAINT uq_telegram_invite_routes_invitation_id UNIQUE (invitation_id), \n\tCONSTRAINT fk_telegram_invite_routes_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_invite_routes_invitation_id_telegram_invitations FOREIGN KEY(invitation_id) REFERENCES telegram_invitations (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_telegram_invite_routes_tenant_id ON telegram_invite_routes (tenant_id)"
+    ],
+    "telegram_employees": [
+      "CREATE TABLE telegram_employees (\n\ttenant_id UUID NOT NULL, \n\tbranch_id UUID, \n\tlinked_user_id UUID, \n\tagent_session_id UUID, \n\trole VARCHAR(30) NOT NULL, \n\ttelegram_user_id BIGINT NOT NULL, \n\ttelegram_chat_id BIGINT NOT NULL, \n\tusername VARCHAR(64), \n\tfull_name VARCHAR(200) NOT NULL, \n\tis_active BOOLEAN NOT NULL, \n\tregistered_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tlast_seen_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_telegram_employees PRIMARY KEY (id), \n\tCONSTRAINT fk_telegram_employees_branch_id_branches FOREIGN KEY(branch_id) REFERENCES branches (id) ON DELETE SET NULL, \n\tCONSTRAINT fk_telegram_employees_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_employees_agent_session_id_ai_chat_sessions FOREIGN KEY(agent_session_id) REFERENCES ai_chat_sessions (id) ON DELETE SET NULL, \n\tCONSTRAINT uq_telegram_employee_linked_user UNIQUE (tenant_id, linked_user_id), \n\tCONSTRAINT fk_telegram_employees_linked_user_id_users FOREIGN KEY(linked_user_id) REFERENCES users (id) ON DELETE SET NULL\n)",
+      "CREATE INDEX ix_telegram_employees_agent_session_id ON telegram_employees (agent_session_id)",
+      "CREATE INDEX ix_telegram_employees_branch_id ON telegram_employees (branch_id)",
+      "CREATE INDEX ix_telegram_employees_is_active ON telegram_employees (is_active)",
+      "CREATE INDEX ix_telegram_employees_linked_user_id ON telegram_employees (linked_user_id)",
+      "CREATE INDEX ix_telegram_employees_role ON telegram_employees (role)",
+      "CREATE INDEX ix_telegram_employees_tenant_id ON telegram_employees (tenant_id)"
+    ],
+    "telegram_employee_routes": [
+      "CREATE TABLE telegram_employee_routes (\n\ttelegram_user_id BIGSERIAL NOT NULL, \n\ttelegram_chat_id BIGINT NOT NULL, \n\ttenant_id UUID NOT NULL, \n\temployee_id UUID NOT NULL, \n\tCONSTRAINT pk_telegram_employee_routes PRIMARY KEY (telegram_user_id), \n\tCONSTRAINT uq_telegram_employee_routes_telegram_chat_id UNIQUE (telegram_chat_id), \n\tCONSTRAINT uq_telegram_employee_routes_employee_id UNIQUE (employee_id), \n\tCONSTRAINT fk_telegram_employee_routes_employee_id_telegram_employees FOREIGN KEY(employee_id) REFERENCES telegram_employees (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_employee_routes_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_telegram_employee_routes_tenant_id ON telegram_employee_routes (tenant_id)"
+    ],
+    "telegram_tasks": [
+      "CREATE TABLE telegram_tasks (\n\ttenant_id UUID NOT NULL, \n\temployee_id UUID NOT NULL, \n\tassigned_by_user_id UUID, \n\ttitle VARCHAR(250) NOT NULL, \n\tdescription TEXT NOT NULL, \n\tpriority VARCHAR(20) NOT NULL, \n\tstatus VARCHAR(20) NOT NULL, \n\tdue_at TIMESTAMP WITH TIME ZONE, \n\tdelivered_at TIMESTAMP WITH TIME ZONE, \n\taccepted_at TIMESTAMP WITH TIME ZONE, \n\tcompleted_at TIMESTAMP WITH TIME ZONE, \n\tcompletion_note TEXT, \n\ttelegram_message_id BIGINT, \n\tdelivery_attempts INTEGER NOT NULL, \n\tnext_delivery_at TIMESTAMP WITH TIME ZONE, \n\tlast_delivery_error VARCHAR(500), \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_telegram_tasks PRIMARY KEY (id), \n\tCONSTRAINT fk_telegram_tasks_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_tasks_assigned_by_user_id_users FOREIGN KEY(assigned_by_user_id) REFERENCES users (id) ON DELETE SET NULL, \n\tCONSTRAINT fk_telegram_tasks_employee_id_telegram_employees FOREIGN KEY(employee_id) REFERENCES telegram_employees (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_telegram_tasks_assigned_by_user_id ON telegram_tasks (assigned_by_user_id)",
+      "CREATE INDEX ix_telegram_tasks_delivered_at ON telegram_tasks (delivered_at)",
+      "CREATE INDEX ix_telegram_tasks_due_at ON telegram_tasks (due_at)",
+      "CREATE INDEX ix_telegram_tasks_employee_id ON telegram_tasks (employee_id)",
+      "CREATE INDEX ix_telegram_tasks_next_delivery_at ON telegram_tasks (next_delivery_at)",
+      "CREATE INDEX ix_telegram_tasks_status ON telegram_tasks (status)",
+      "CREATE INDEX ix_telegram_tasks_tenant_id ON telegram_tasks (tenant_id)"
+    ],
+    "telegram_report_subscriptions": [
+      "CREATE TABLE telegram_report_subscriptions (\n\ttenant_id UUID NOT NULL, \n\temployee_id UUID NOT NULL, \n\tcadence VARCHAR(20) NOT NULL, \n\tlocal_time TIME WITHOUT TIME ZONE NOT NULL, \n\tweekday INTEGER, \n\tis_active BOOLEAN NOT NULL, \n\tlast_period_key VARCHAR(20), \n\tlast_sent_at TIMESTAMP WITH TIME ZONE, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_telegram_report_subscriptions PRIMARY KEY (id), \n\tCONSTRAINT fk_telegram_report_subscriptions_employee_id_telegram_employees FOREIGN KEY(employee_id) REFERENCES telegram_employees (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_report_subscriptions_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_telegram_report_subscription UNIQUE (tenant_id, employee_id, cadence)\n)",
+      "CREATE INDEX ix_telegram_report_subscriptions_employee_id ON telegram_report_subscriptions (employee_id)",
+      "CREATE INDEX ix_telegram_report_subscriptions_tenant_id ON telegram_report_subscriptions (tenant_id)"
+    ]
+  },
+  "20260829_0030": {
+    "telegram_agent_task_drafts": [
+      "CREATE TABLE telegram_agent_task_drafts (\n\ttenant_id UUID NOT NULL, \n\trequested_by_employee_id UUID NOT NULL, \n\tassignee_employee_id UUID NOT NULL, \n\ttitle VARCHAR(250) NOT NULL, \n\tdescription TEXT NOT NULL, \n\tpriority VARCHAR(20) NOT NULL, \n\tdue_at TIMESTAMP WITH TIME ZONE, \n\tstatus VARCHAR(20) NOT NULL, \n\texpires_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tconfirmed_at TIMESTAMP WITH TIME ZONE, \n\tcreated_task_id UUID, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_telegram_agent_task_drafts PRIMARY KEY (id), \n\tCONSTRAINT fk_telegram_agent_task_drafts_requested_by_employee_id__0ca6 FOREIGN KEY(requested_by_employee_id) REFERENCES telegram_employees (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_agent_task_drafts_assignee_employee_id_tele_00e5 FOREIGN KEY(assignee_employee_id) REFERENCES telegram_employees (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_agent_task_drafts_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_telegram_agent_task_drafts_created_task_id_telegram_tasks FOREIGN KEY(created_task_id) REFERENCES telegram_tasks (id) ON DELETE SET NULL\n)",
+      "CREATE INDEX ix_telegram_agent_task_drafts_assignee_employee_id ON telegram_agent_task_drafts (assignee_employee_id)",
+      "CREATE INDEX ix_telegram_agent_task_drafts_created_task_id ON telegram_agent_task_drafts (created_task_id)",
+      "CREATE INDEX ix_telegram_agent_task_drafts_due_at ON telegram_agent_task_drafts (due_at)",
+      "CREATE INDEX ix_telegram_agent_task_drafts_expires_at ON telegram_agent_task_drafts (expires_at)",
+      "CREATE INDEX ix_telegram_agent_task_drafts_requested_by_employee_id ON telegram_agent_task_drafts (requested_by_employee_id)",
+      "CREATE INDEX ix_telegram_agent_task_drafts_status ON telegram_agent_task_drafts (status)",
+      "CREATE INDEX ix_telegram_agent_task_drafts_tenant_id ON telegram_agent_task_drafts (tenant_id)"
+    ]
+  },
+  "20260905_0036": {
+    "whatsapp_knowledge_sheets": [
+      "CREATE TABLE whatsapp_knowledge_sheets (\n\ttenant_id UUID NOT NULL, \n\tspreadsheet_id VARCHAR(200) NOT NULL, \n\tsheet_url VARCHAR(500) NOT NULL, \n\tsheet_names JSONB NOT NULL, \n\tis_enabled BOOLEAN NOT NULL, \n\tlast_synced_at TIMESTAMP WITH TIME ZONE, \n\tlast_sync_status VARCHAR(20), \n\tlast_sync_error VARCHAR(500), \n\tlast_sync_imported INTEGER NOT NULL, \n\tlast_sync_updated INTEGER NOT NULL, \n\tlast_sync_auto_approved INTEGER NOT NULL, \n\tlast_sync_review_required INTEGER NOT NULL, \n\tlast_sync_human_only INTEGER NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_whatsapp_knowledge_sheets PRIMARY KEY (id), \n\tCONSTRAINT fk_whatsapp_knowledge_sheets_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, \n\tCONSTRAINT uq_whatsapp_knowledge_sheets_tenant_id UNIQUE (tenant_id)\n)",
+      "CREATE INDEX ix_whatsapp_knowledge_sheets_tenant_id ON whatsapp_knowledge_sheets (tenant_id)"
+    ]
+  },
+  "20260910_0039": {
+    "whatsapp_gateway_health": [
+      "CREATE TABLE whatsapp_gateway_health (\n\ttenant_id UUID NOT NULL, \n\tstate VARCHAR(40) NOT NULL, \n\tconnected BOOLEAN NOT NULL, \n\tphone_masked VARCHAR(30), \n\tgateway_version VARCHAR(40), \n\tinstance_id VARCHAR(100), \n\tstarted_at TIMESTAMP WITH TIME ZONE, \n\tlast_heartbeat_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tlast_message_at TIMESTAMP WITH TIME ZONE, \n\tlast_history_sync_at TIMESTAMP WITH TIME ZONE, \n\tmessages_forwarded INTEGER NOT NULL, \n\thistory_messages_forwarded INTEGER NOT NULL, \n\treconnect_count INTEGER NOT NULL, \n\tlast_error VARCHAR(500), \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_whatsapp_gateway_health PRIMARY KEY (id), \n\tCONSTRAINT uq_whatsapp_gateway_health_tenant_id UNIQUE (tenant_id), \n\tCONSTRAINT fk_whatsapp_gateway_health_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_whatsapp_gateway_health_last_heartbeat_at ON whatsapp_gateway_health (last_heartbeat_at)",
+      "CREATE INDEX ix_whatsapp_gateway_health_state ON whatsapp_gateway_health (state)",
+      "CREATE INDEX ix_whatsapp_gateway_health_tenant_id ON whatsapp_gateway_health (tenant_id)"
+    ],
+    "whatsapp_gateway_logs": [
+      "CREATE TABLE whatsapp_gateway_logs (\n\ttenant_id UUID NOT NULL, \n\tlevel VARCHAR(20) NOT NULL, \n\tevent VARCHAR(80) NOT NULL, \n\tmessage VARCHAR(500) NOT NULL, \n\toccurred_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tid UUID NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tupdated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, \n\tCONSTRAINT pk_whatsapp_gateway_logs PRIMARY KEY (id), \n\tCONSTRAINT fk_whatsapp_gateway_logs_tenant_id_tenants FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE\n)",
+      "CREATE INDEX ix_whatsapp_gateway_logs_level ON whatsapp_gateway_logs (level)",
+      "CREATE INDEX ix_whatsapp_gateway_logs_occurred_at ON whatsapp_gateway_logs (occurred_at)",
+      "CREATE INDEX ix_whatsapp_gateway_logs_tenant_id ON whatsapp_gateway_logs (tenant_id)"
+    ]
+  }
+}
