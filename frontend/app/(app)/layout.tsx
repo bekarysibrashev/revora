@@ -18,6 +18,7 @@ type NavGroup = { label: string; mark: string; items: NavItem[] };
 
 const coreItems: NavItem[] = [
   { href: "/dashboard", label: "Обзор", mark: "О", roles: ["owner", "manager", "administrator"] },
+  { href: "/losses", label: "Карта потерь", mark: "₸", roles: ["owner", "manager", "administrator"] },
   { href: "/contacts", label: "Новые обращения", mark: "НО", roles: ["owner", "manager", "administrator"] },
   { href: "/sales", label: "Продажи", mark: "С", roles: ["owner", "manager", "administrator", "sales_manager"] },
   { href: "/doctors", label: "Врачи", mark: "В", roles: ["owner", "manager", "administrator"] },
@@ -48,7 +49,6 @@ const groups: NavGroup[] = [
     mark: "⋯",
     items: [
       { href: "/analytics", label: "Контроль данных", mark: "К", roles: ["owner", "manager"] },
-      { href: "/losses", label: "Карта потерь", mark: "₸", roles: ["owner", "manager", "administrator"] },
       { href: "/data-science", label: "ML-исследования", mark: "ML", roles: ["owner", "manager"] },
     ],
   },
@@ -216,7 +216,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
       )}
       <section className="workspace">
         <header className="topbar">
-          <button className="icon-button mobile-only" onClick={() => setOpen(true)}>
+          <button className="icon-button mobile-only" aria-label="Открыть меню" aria-expanded={open} onClick={() => setOpen(true)}>
             ☰
           </button>
           <div className="top-title">
