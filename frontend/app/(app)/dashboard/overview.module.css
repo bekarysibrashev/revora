@@ -1,0 +1,30 @@
+.overview { color:#172e29; }
+.figures {display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:12px;margin:0 0 22px}
+.figure,.featured,.setup,.queue,.details {border:1px solid #d6dfdb;border-radius:14px;background:#fff}
+.figure,.featured {padding:24px;display:grid;align-content:start;gap:12px;min-width:0}
+.featured,.setup {background:#193e34;color:#fff;border-color:#193e34}
+.figure h2,.featured h2 {font-size:16px;font-weight:600;margin:0}
+.figure strong,.featured strong {font-size:clamp(26px,3vw,42px);font-variant-numeric:tabular-nums;letter-spacing:-.045em;line-height:1.15;overflow-wrap:anywhere}
+.figure small,.featured small,.details small {font-size:14px;line-height:1.45;color:#50645e}
+.featured small,.setup p,.setup .kicker {color:#d2e2dc}
+.setup,.queue {padding:clamp(18px,3vw,32px);margin-bottom:20px}
+.kicker,.priority {font-size:12px;letter-spacing:.055em;font-weight:700;color:#476359}
+.setup h2,.queue h2 {font-size:clamp(22px,2vw,30px);letter-spacing:-.035em;line-height:1.2;margin:6px 0 12px}
+.setup p,.queue p {max-width:68ch;font-size:15px;line-height:1.55;margin:8px 0}
+.setup a,.queue header a {display:inline-flex;align-items:center;min-height:44px;padding:8px 14px;border-radius:8px;background:#ecf4f0;color:#214d40;font-weight:650}
+.setup a {margin-top:12px;background:white}
+.queue header,.details>button {display:flex;justify-content:space-between;align-items:center;gap:12px}
+.queue p,.meta {color:#50645e}
+.meta {display:flex;flex-wrap:wrap;gap:8px 22px;background:#f4f7f5;padding:12px 16px;border-radius:8px;font-size:14px;margin:12px 0}
+.meta b {color:#172e29;font-variant-numeric:tabular-nums}
+.queue ul {list-style:none;padding:0;margin:4px 0 0}
+.queue li {padding:14px 0;border-bottom:1px solid #e1e7e4}
+.queue li:last-child {border:0;padding-bottom:0}
+.queue h3 {margin:4px 0;font-size:18px}
+.priority {color:#855322;letter-spacing:0}
+.details {padding:0 20px}
+.details>button {min-height:72px;width:100%;padding:14px 0;background:none;border:0;color:inherit;text-align:left;font-size:18px;font-weight:650}
+.details small {display:block;font-weight:400}
+.overview :is(a,button):focus-visible {outline:3px solid #558872;outline-offset:3px}
+@media(max-width:760px){.figures{grid-template-columns:repeat(2,minmax(0,1fr))}.featured{grid-column:1/-1}.figure,.featured{padding:16px}.queue header{align-items:flex-start;flex-direction:column}.queue header a{align-self:flex-start}.queue h2{margin-bottom:0}}
+@media(max-width:400px){.figures{grid-template-columns:minmax(0,1fr)}}
