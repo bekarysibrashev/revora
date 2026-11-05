@@ -68,7 +68,7 @@ class FakeLossRepository:
     async def reconcile_recoveries(self, tenant_id, date_from, date_to, branch_id):
         return 0
 
-    async def dismiss_absent(self, tenant_id, candidates, date_from, date_to):
+    async def dismiss_absent(self, tenant_id, candidates, date_from, date_to, branch_id=None):
         return 0
 
     async def list(self, tenant_id, date_from, date_to, branch_id):

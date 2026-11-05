@@ -38,7 +38,7 @@ class LossService:
             user.tenant_id, candidates, date_from, date_to
         )
         await self.repository.dismiss_absent(
-            user.tenant_id, candidates, date_from, date_to
+            user.tenant_id, candidates, date_from, date_to, branch_id
         )
         await self.repository.reconcile_recoveries(
             user.tenant_id, date_from, date_to, branch_id

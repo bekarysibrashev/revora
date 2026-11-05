@@ -231,7 +231,7 @@ function LossCard({
       </div>
       <div className="loss-card-money">
         <small>Оценка возможности</small>
-        <strong>{money(item.estimated_amount)}</strong>
+        <strong>{Number(item.estimated_amount) > 0 ? money(item.estimated_amount) : 'Сумма неизвестна'}</strong>
         <span>Уверенность {confidence}%</span>
         {item.status === "recovered" ? (
           <b className="good">Возвращено {money(item.recovered_amount)}</b>
@@ -314,7 +314,7 @@ function stageLabel(value: unknown) {
 
 function reasonLabel(value: unknown) {
   return {
-    missed_without_callback: "Не найден обратный звонок за 30 минут",
+    missed_without_callback: "После пропущенного звонка не найден обратный разговор или запись",
     whatsapp_unanswered_after_sla: "Нет ответа в WhatsApp более 30 минут",
     no_patient_or_appointment_after_14_days: "За 14 дней не появились пациент и запись",
     cancelled: "Отмена без последующей активной записи",

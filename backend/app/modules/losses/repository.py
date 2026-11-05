@@ -296,8 +296,7 @@ class LossRepository:
                 )
             confidence = basis_confidence if is_no_show else basis_confidence * Decimal("0.60")
             estimate = unit_value if is_no_show else unit_value * Decimal("0.60")
-            if estimate <= ZERO:
-                continue
+            estimate = max(ZERO, estimate)
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(f"{row.status}:{row.id}"),
@@ -344,8 +343,7 @@ class LossRepository:
             lost_leads_query = lost_leads_query.where(Lead.branch_id == branch_id)
         for row in (await self.session.execute(lost_leads_query)).all():
             estimate = contact_value
-            if estimate <= ZERO:
-                continue
+            estimate = max(ZERO, estimate)
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(f"lost_lead:{row.id}"),
@@ -388,7 +386,8 @@ class LossRepository:
             Call.tenant_id == tenant_id,
             Call.phone_hash.is_not(None),
             func.lower(Call.direction).in_(["in", "incoming", "inbound", "входящий"]),
-            func.coalesce(Call.duration_seconds, 0) <= 5,
+            # Kcell history reports Missed/Success explicitly; duration includes ringing.
+            func.lower(func.trim(Call.outcome)).in_(["missed", "no_answer", "no answer", "noanswer", "not answered"]),
             Call.started_at >= start,
             Call.started_at < end,
             Call.started_at < datetime.now(UTC) - timedelta(minutes=30),
@@ -401,6 +400,7 @@ class LossRepository:
                         ["out", "outgoing", "outbound", "исходящий"]
                     ),
                     callback.started_at > Call.started_at,
+                    func.lower(func.trim(callback.outcome)).in_(["success", "answered", "connected"]),
                 )
             ),
             ~exists(
@@ -422,8 +422,7 @@ class LossRepository:
             missed_calls = missed_calls.where(Call.branch_id == branch_id)
         for row in (await self.session.execute(missed_calls)).all():
             estimate = contact_value
-            if estimate <= ZERO:
-                continue
+            estimate = max(ZERO, estimate)
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(f"missed_call:{row.id}"),
@@ -502,8 +501,7 @@ class LossRepository:
             unanswered = unanswered.where(False)
         for row in (await self.session.execute(unanswered)).all():
             estimate = contact_value
-            if estimate <= ZERO:
-                continue
+            estimate = max(ZERO, estimate)
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(
@@ -606,6 +604,7 @@ class LossRepository:
         candidates: list[LossCandidate],
         date_from: date,
         date_to: date,
+        branch_id: UUID | None = None,
     ) -> int:
         """Close false positives that no longer satisfy loss evidence.
 
@@ -621,6 +620,8 @@ class LossRepository:
             LossOpportunity.period_end == date_to,
             LossOpportunity.status == "open",
         )
+        if branch_id is not None:
+            statement = statement.where(LossOpportunity.branch_id == branch_id)
         if fingerprints:
             statement = statement.where(~LossOpportunity.fingerprint.in_(fingerprints))
         result = await self.session.execute(
