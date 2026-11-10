@@ -4,7 +4,7 @@ export type LossOpportunity = {
   assigned_user_id: string | null;
   loss_type: string;
   severity: "critical" | "warning";
-  status: "open" | "in_progress" | "recovered" | "dismissed";
+  status: "open" | "in_progress" | "booked" | "recovered" | "dismissed";
   title: string;
   description: string;
   recommended_action: string;
@@ -15,6 +15,7 @@ export type LossOpportunity = {
   currency: string;
   confidence: string;
   evidence: Record<string, unknown>;
+  contact_phone: string | null;
   detected_at: string;
   last_detected_at: string;
 };
@@ -25,6 +26,7 @@ export type LossMap = {
     recovered_total: string;
     open_count: number;
     in_progress_count: number;
+    booked_count: number;
     recovered_count: number;
     critical_count: number;
     stage_counts: Record<string, number>;

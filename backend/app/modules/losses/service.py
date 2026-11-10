@@ -2,6 +2,8 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
+from app.core.config import Settings, get_settings
+from app.core.data_protection import SensitiveDataProtectionError, decrypt_sensitive_text
 from app.core.errors import AppError
 from app.modules.auth.models import User, UserRole
 from app.modules.losses.repository import LossRepository
@@ -23,9 +25,11 @@ class LossService:
         self,
         repository: LossRepository,
         telegram_repository: TelegramRepository | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self.repository = repository
         self.telegram_repository = telegram_repository
+        self.settings = settings
 
     async def refresh(
         self, user: User, date_from: date, date_to: date, branch_id: UUID | None
@@ -37,11 +41,11 @@ class LossService:
         detected = await self.repository.upsert(
             user.tenant_id, candidates, date_from, date_to
         )
-        await self.repository.dismiss_absent(
-            user.tenant_id, candidates, date_from, date_to, branch_id
-        )
         await self.repository.reconcile_recoveries(
             user.tenant_id, date_from, date_to, branch_id
+        )
+        await self.repository.dismiss_absent(
+            user.tenant_id, candidates, date_from, date_to, branch_id
         )
         response = await self.map(user, date_from, date_to, branch_id)
         return LossRefreshResponse(**response.model_dump(), detected=detected)
@@ -56,13 +60,15 @@ class LossService:
         totals = await self.repository.summary(
             user.tenant_id, date_from, date_to, branch_id
         )
-        items = [self._response(item) for item in records]
+        phones = await self._contact_phones(user, records)
+        items = [self._response(item, contact_phone=phones.get(item.id)) for item in records]
         return LossMapResponse(
             summary=LossMapSummary(
                 estimated_total=totals.estimated_total,
                 recovered_total=totals.recovered_total,
                 open_count=totals.open_count,
                 in_progress_count=totals.in_progress_count,
+                booked_count=totals.booked_count,
                 recovered_count=totals.recovered_count,
                 critical_count=totals.critical_count,
                 stage_counts=totals.stage_counts,
@@ -146,12 +152,27 @@ class LossService:
                 changes={"telegram_task_id": str(task.id), "assigned_user_id": str(assigned_user_id)},
             )
         item.resolved_at = (
-            datetime.now(UTC) if payload.status in {"recovered", "dismissed"} else None
+            datetime.now(UTC) if payload.status in {"booked", "recovered", "dismissed"} else None
         )
         return self._response(item)
 
+    async def _contact_phones(self, user: User, records) -> dict[UUID, str]:
+        ciphertexts = await self.repository.contact_phone_ciphertexts(user.tenant_id, records)
+        secret = (self.settings or get_settings()).patient_data_key.get_secret_value()
+        phones: dict[UUID, str] = {}
+        for opportunity_id, ciphertext in ciphertexts.items():
+            try:
+                phones[opportunity_id] = decrypt_sensitive_text(
+                    ciphertext, secret, setting_name="PATIENT_DATA_KEY"
+                )
+            except SensitiveDataProtectionError:
+                # A stale row encrypted with a retired key remains matchable by
+                # hash, but must never make the whole map unavailable.
+                continue
+        return phones
+
     @staticmethod
-    def _response(item) -> LossOpportunityResponse:
+    def _response(item, contact_phone: str | None = None) -> LossOpportunityResponse:
         return LossOpportunityResponse(
             id=item.id,
             branch_id=item.branch_id,
@@ -169,6 +190,7 @@ class LossService:
             currency=item.currency,
             confidence=item.confidence,
             evidence=item.evidence,
+            contact_phone=contact_phone,
             detected_at=item.detected_at,
             last_detected_at=item.last_detected_at,
         )

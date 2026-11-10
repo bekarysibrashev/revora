@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
-LossStatus = Literal["open", "in_progress", "recovered", "dismissed"]
+LossStatus = Literal["open", "in_progress", "booked", "recovered", "dismissed"]
 
 
 class LossOpportunityResponse(BaseModel):
@@ -26,6 +26,7 @@ class LossOpportunityResponse(BaseModel):
     currency: str
     confidence: Decimal
     evidence: dict[str, object]
+    contact_phone: str | None = None
     detected_at: datetime
     last_detected_at: datetime
 
@@ -35,6 +36,7 @@ class LossMapSummary(BaseModel):
     recovered_total: Decimal
     open_count: int
     in_progress_count: int
+    booked_count: int
     recovered_count: int
     critical_count: int
     stage_counts: dict[str, int] = Field(default_factory=dict)

@@ -4,6 +4,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.config import Settings
+from app.core.data_protection import decrypt_sensitive_text
 from app.modules.integrations.canonical_writer import CanonicalWriteError, CanonicalWriter
 
 
@@ -70,6 +72,33 @@ async def test_patient_phone_hash_converts_matching_lead_to_won() -> None:
     assert result == patient_id
     statement = session.execute.await_args.args[0]
     assert "UPDATE leads" in str(statement)
+
+
+@pytest.mark.asyncio
+async def test_patient_phone_is_normalized_and_encrypted_for_authorized_ui() -> None:
+    session = AsyncMock()
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        patient_data_key="patient-phone-test-key-with-sufficient-length",
+    )
+    writer = CanonicalWriter(session, settings)
+    writer._upsert = AsyncMock(return_value=uuid4())
+    writer._optional_branch_id = AsyncMock(return_value=None)
+
+    await writer._write_patient(
+        uuid4(),
+        {"external_id": "patient-guid", "phone_e164": "8 (701) 367-67-07"},
+    )
+
+    values = writer._upsert.await_args.args[1]
+    assert values["phone_hash"]
+    assert values["phone_e164_encrypted"] != "+77013676707"
+    assert decrypt_sensitive_text(
+        values["phone_e164_encrypted"],
+        settings.patient_data_key.get_secret_value(),
+        setting_name="PATIENT_DATA_KEY",
+    ) == "+77013676707"
 
 
 @pytest.mark.asyncio

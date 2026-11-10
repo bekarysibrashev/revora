@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from hashlib import sha256
+from typing import Callable, Iterable, TypeVar
 from uuid import UUID
 
 from sqlalchemy import case, exists, func, select, update
@@ -17,6 +18,27 @@ from app.modules.sales.repository import reconcile_lost_leads
 from app.modules.whatsapp.models import WhatsAppConversation, WhatsAppMessage
 
 ZERO = Decimal("0")
+Row = TypeVar("Row")
+
+
+def latest_event_per_episode(
+    rows: Iterable[Row],
+    *,
+    episode_key: Callable[[Row], object],
+    occurred_at: Callable[[Row], datetime],
+) -> list[Row]:
+    """Keep one latest unresolved event per person or phone.
+
+    A cancellation is an event, not a new lost patient. This prevents a person
+    with multiple cancelled slots from inflating the work queue.
+    """
+    latest: dict[object, Row] = {}
+    for row in rows:
+        key = episode_key(row)
+        previous = latest.get(key)
+        if previous is None or occurred_at(row) > occurred_at(previous):
+            latest[key] = row
+    return list(latest.values())
 
 
 def _bounded_rate(
@@ -96,6 +118,7 @@ class LossTotals:
     recovered_total: Decimal
     open_count: int
     in_progress_count: int
+    booked_count: int
     recovered_count: int
     critical_count: int
     total_count: int
@@ -255,8 +278,17 @@ class LossRepository:
             Appointment.patient_id,
             Appointment.doctor_id,
             Appointment.direction_id,
+        ).join(
+            Patient,
+            (Patient.tenant_id == Appointment.tenant_id)
+            & (Patient.id == Appointment.patient_id),
         ).where(
             Appointment.tenant_id == tenant_id,
+            # A loss case must be operationally actionable. Without a stable
+            # 1C patient link and encrypted callback number, it is a statistic
+            # to improve, not a person that an administrator can recover.
+            Appointment.patient_id.is_not(None),
+            Patient.phone_e164_encrypted.is_not(None),
             Appointment.status.in_(["no_show", "cancelled"]),
             Appointment.starts_at >= start,
             Appointment.starts_at < end,
@@ -273,7 +305,12 @@ class LossRepository:
         )
         if branch_id:
             appointment_query = appointment_query.where(Appointment.branch_id == branch_id)
-        appointments = (await self.session.execute(appointment_query)).all()
+        appointment_rows = (await self.session.execute(appointment_query)).all()
+        appointments = latest_event_per_episode(
+            appointment_rows,
+            episode_key=lambda row: row.patient_id,
+            occurred_at=lambda row: row.starts_at,
+        )
 
         candidates: list[LossCandidate] = []
         for row in appointments:
@@ -299,7 +336,7 @@ class LossRepository:
             estimate = max(ZERO, estimate)
             candidates.append(
                 LossCandidate(
-                    fingerprint=self._fingerprint(f"{row.status}:{row.id}"),
+                    fingerprint=self._fingerprint(f"appointment_episode:{row.patient_id}"),
                     branch_id=row.branch_id,
                     loss_type=row.status,
                     severity="critical" if is_no_show else "warning",
@@ -319,6 +356,7 @@ class LossRepository:
                     estimated_amount=estimate.quantize(Decimal("0.01")),
                     confidence=confidence,
                     evidence={
+                        "episode_kind": "patient",
                         "appointment_status": row.status,
                         "starts_at": row.starts_at.isoformat(),
                         "doctor_linked": row.doctor_id is not None,
@@ -653,6 +691,59 @@ class LossRepository:
             statement = statement.where(LossOpportunity.branch_id == branch_id)
         return list((await self.session.scalars(statement)).all())
 
+    async def contact_phone_ciphertexts(
+        self, tenant_id: UUID, opportunities: Iterable[LossOpportunity]
+    ) -> dict[UUID, str]:
+        """Return encrypted phones for cases that have a proven patient link.
+
+        The number is projected for the authorised loss-map UI only. It is not
+        copied into loss evidence, audit records, notifications or exports.
+        """
+        records = list(opportunities)
+        result: dict[UUID, str] = {}
+        appointment_ids = [
+            item.entity_id
+            for item in records
+            if item.entity_type == "appointment" and item.entity_id is not None
+        ]
+        if appointment_ids:
+            rows = await self.session.execute(
+                select(LossOpportunity.id, Patient.phone_e164_encrypted)
+                .join(Appointment, Appointment.id == LossOpportunity.entity_id)
+                .join(Patient, Patient.id == Appointment.patient_id)
+                .where(
+                    LossOpportunity.tenant_id == tenant_id,
+                    LossOpportunity.id.in_([item.id for item in records]),
+                    Appointment.id.in_(appointment_ids),
+                    Patient.phone_e164_encrypted.is_not(None),
+                )
+            )
+            result.update({row.id: row.phone_e164_encrypted for row in rows.all()})
+
+        call_ids = [
+            item.entity_id
+            for item in records
+            if item.entity_type == "call" and item.entity_id is not None
+        ]
+        if call_ids:
+            rows = await self.session.execute(
+                select(LossOpportunity.id, Patient.phone_e164_encrypted)
+                .join(Call, Call.id == LossOpportunity.entity_id)
+                .join(
+                    Patient,
+                    (Patient.tenant_id == Call.tenant_id)
+                    & (Patient.phone_hash == Call.phone_hash),
+                )
+                .where(
+                    LossOpportunity.tenant_id == tenant_id,
+                    LossOpportunity.id.in_([item.id for item in records]),
+                    Call.id.in_(call_ids),
+                    Patient.phone_e164_encrypted.is_not(None),
+                )
+            )
+            result.update({row.id: row.phone_e164_encrypted for row in rows.all()})
+        return result
+
     async def summary(
         self,
         tenant_id: UUID,
@@ -663,7 +754,7 @@ class LossRepository:
         """Aggregate the whole map, independently from the 500-card UI page."""
         active_amount = case(
             (
-                ~LossOpportunity.status.in_(["recovered", "dismissed"]),
+                ~LossOpportunity.status.in_(["booked", "recovered", "dismissed"]),
                 LossOpportunity.estimated_amount,
             ),
             else_=ZERO,
@@ -673,6 +764,7 @@ class LossRepository:
             func.coalesce(func.sum(LossOpportunity.recovered_amount), ZERO),
             func.sum(case((LossOpportunity.status == "open", 1), else_=0)),
             func.sum(case((LossOpportunity.status == "in_progress", 1), else_=0)),
+            func.sum(case((LossOpportunity.status == "booked", 1), else_=0)),
             func.sum(case((LossOpportunity.status == "recovered", 1), else_=0)),
             func.sum(
                 case(
@@ -684,7 +776,7 @@ class LossRepository:
                     else_=0,
                 )
             ),
-            func.count(LossOpportunity.id),
+            func.sum(case((LossOpportunity.status != "dismissed", 1), else_=0)),
         ).where(
             LossOpportunity.tenant_id == tenant_id,
             LossOpportunity.period_start == date_from,
@@ -704,7 +796,7 @@ class LossRepository:
                 LossOpportunity.tenant_id == tenant_id,
                 LossOpportunity.period_start == date_from,
                 LossOpportunity.period_end == date_to,
-                ~LossOpportunity.status.in_(["recovered", "dismissed"]),
+                ~LossOpportunity.status.in_(["booked", "recovered", "dismissed"]),
             )
             .group_by(stage)
         )
@@ -718,9 +810,10 @@ class LossRepository:
             recovered_total=Decimal(row[1] or 0),
             open_count=int(row[2] or 0),
             in_progress_count=int(row[3] or 0),
-            recovered_count=int(row[4] or 0),
-            critical_count=int(row[5] or 0),
-            total_count=int(row[6] or 0),
+            booked_count=int(row[4] or 0),
+            recovered_count=int(row[5] or 0),
+            critical_count=int(row[6] or 0),
+            total_count=int(row[7] or 0),
             stage_counts={str(item[0]): int(item[1]) for item in stage_rows if item[0]},
             stage_amounts={
                 str(item[0]): Decimal(item[2] or 0) for item in stage_rows if item[0]
@@ -734,10 +827,11 @@ class LossRepository:
         date_to: date,
         branch_id: UUID | None,
     ) -> int:
-        """Confirm recovery only from a later real payment linked to the same patient.
+        """Resolve a case when the same patient later books or pays.
 
-        A Telegram completion or a manual status change is not financial proof. This
-        reconciliation is safe to repeat and never exposes patient data in evidence.
+        A booking is a successful return, but not proof of revenue; it has its
+        own state. Payment confirms recovery. Neither outcome relies on a
+        Telegram click or a staff assertion.
         """
         opportunities = select(LossOpportunity).where(
             LossOpportunity.tenant_id == tenant_id,
@@ -848,8 +942,18 @@ class LossRepository:
             for patient_id, event_at in event_by_opportunity.values()
             if patient_id is not None and event_at is not None
         }
+        appointments_by_patient: dict[UUID, list[datetime]] = {}
         payments_by_patient: dict[UUID, list[tuple[datetime, Decimal]]] = {}
         if patient_ids:
+            appointment_rows = await self.session.execute(
+                select(Appointment.patient_id, Appointment.starts_at).where(
+                    Appointment.tenant_id == tenant_id,
+                    Appointment.patient_id.in_(patient_ids),
+                    Appointment.status.in_(["scheduled", "completed", "transferred"]),
+                )
+            )
+            for row in appointment_rows.all():
+                appointments_by_patient.setdefault(row.patient_id, []).append(row.starts_at)
             payment_rows = await self.session.execute(
                 select(
                     RevenueFact.patient_id,
@@ -870,6 +974,25 @@ class LossRepository:
         for item in items:
             patient_id, event_at = event_by_opportunity.get(item.id, (None, None))
             if patient_id is None or event_at is None:
+                continue
+            booked_at = next(
+                (
+                    occurred_at
+                    for occurred_at in appointments_by_patient.get(patient_id, [])
+                    if occurred_at > event_at
+                ),
+                None,
+            )
+            if booked_at is not None:
+                item.status = "booked"
+                item.resolved_at = datetime.now(UTC)
+                item.evidence = {
+                    **item.evidence,
+                    "recovery_basis": "later_patient_appointment",
+                    "booked_at": booked_at.isoformat(),
+                    "recovery_confirmed_at": item.resolved_at.isoformat(),
+                }
+                recovered += 1
                 continue
             payment = sum(
                 (

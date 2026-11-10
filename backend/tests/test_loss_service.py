@@ -80,6 +80,7 @@ class FakeLossRepository:
             recovered_total=Decimal("0"),
             open_count=1,
             in_progress_count=0,
+            booked_count=0,
             recovered_count=0,
             critical_count=1,
             total_count=1832,
@@ -89,6 +90,9 @@ class FakeLossRepository:
 
     async def get(self, tenant_id, opportunity_id):
         return self.item if opportunity_id == self.item.id else None
+
+    async def contact_phone_ciphertexts(self, tenant_id, opportunities):
+        return {}
 
 
 class FakeTelegramRepository:
