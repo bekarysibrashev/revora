@@ -70,10 +70,10 @@ export default function LossesPage() {
           <>
             <section className="metric-grid">
               <Metric
-                label="Потенциально теряется"
+                label="Пациенты под риском"
                 value={money(data.data.summary.estimated_total)}
                 tone={Number(data.data.summary.estimated_total) > 0 ? "bad" : "good"}
-                note="Оценка, а не подтверждённая потеря"
+                note="Оценка возможности, не подтверждённая потеря"
               />
               <Metric
                 label="Уже возвращено"
@@ -82,7 +82,13 @@ export default function LossesPage() {
                 note={`${data.data.summary.recovered_count} закрытых возможностей`}
               />
               <Metric
-                label="Открыто"
+                label="Уже записались"
+                value={String(data.data.summary.booked_count || 0)}
+                tone="good"
+                note="Повторная запись найдена автоматически"
+              />
+              <Metric
+                label="Требуют контакта"
                 value={String(data.data.summary.open_count)}
                 note={`${data.data.summary.critical_count} критических`}
               />
@@ -99,8 +105,8 @@ export default function LossesPage() {
               <div>
                 <strong>Детерминированный поиск потерь</strong>
                 <p>
-                  Revora использует только существующие факты и отдельно
-                  показывает уверенность финансовой оценки.
+                  Один кейс — один пациент или номер. Повторные отмены не
+                  создают дубли, а последующая запись закрывает кейс автоматически.
                 </p>
               </div>
               <button
@@ -223,6 +229,12 @@ function LossCard({
               <strong>{sourceLabel(item.evidence.source)}</strong>
             </span>
           )}
+          {item.contact_phone && (
+            <span>
+              <small>Номер телефона</small>
+              <strong>{item.contact_phone}</strong>
+            </span>
+          )}
         </div>
         <div className="loss-action">
           <small>Следующее действие</small>
@@ -235,6 +247,8 @@ function LossCard({
         <span>Уверенность {confidence}%</span>
         {item.status === "recovered" ? (
           <b className="good">Возвращено {money(item.recovered_amount)}</b>
+        ) : item.status === "booked" ? (
+          <b className="good">Пациент уже записался повторно</b>
         ) : (
           <div className="loss-controls">
             {item.status === "open" && (
@@ -296,10 +310,11 @@ type TelegramEmployee = {
 
 function statusLabel(status: LossOpportunity["status"]) {
   return {
-    open: "Открыто",
+    open: "Требует контакта",
     in_progress: "В работе",
+    booked: "Записался",
     recovered: "Возвращено",
-    dismissed: "Исключено",
+    dismissed: "Не является потерей",
   }[status];
 }
 

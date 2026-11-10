@@ -2,13 +2,15 @@
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from hashlib import sha256
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings, get_settings
+from app.core.data_protection import SensitiveDataProtectionError, encrypt_sensitive_text
+from app.core.security import normalize_phone_e164, phone_hash as normalized_phone_hash
 from app.modules.auth.models import User
 from app.modules.doctors.models import Doctor, DoctorRating
 from app.modules.finance.models import AccountBalance, CashFlowFact, ExpenseCategory, ExpenseFact, PayrollFact, RevenueFact
@@ -41,8 +43,11 @@ class CanonicalWriter:
         "treatment_plan",
     }
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, settings: Settings | None = None) -> None:
         self.session = session
+        # Do not read process settings for the hash-only legacy path. That
+        # keeps old imports working until the clinic installs the new extension.
+        self.settings = settings
 
     async def write(
         self, *, tenant_id: UUID, target_entity: str, data: dict[str, object]
@@ -55,16 +60,34 @@ class CanonicalWriter:
 
     async def _write_patient(self, tenant_id: UUID, data: dict[str, object]) -> UUID:
         external_id = self._string(data, "external_id")
-        phone = self._optional_string(data, "phone")
+        phone = self._optional_string(data, "phone_e164") or self._optional_string(data, "phone")
         phone_hash = self._optional_string(data, "phone_hash")
         if phone_hash and (len(phone_hash) != 64 or any(c not in "0123456789abcdef" for c in phone_hash.lower())):
             raise CanonicalWriteError("phone_hash must be a SHA-256 hex digest")
+        encrypted_phone: str | None = None
+        if phone:
+            try:
+                normalized_phone = normalize_phone_e164(phone)
+                calculated_hash = normalized_phone_hash(normalized_phone)
+            except ValueError as exc:
+                raise CanonicalWriteError("phone must be a valid E.164-compatible number") from exc
+            if phone_hash and phone_hash.lower() != calculated_hash:
+                raise CanonicalWriteError("phone_hash does not match phone")
+            try:
+                encrypted_phone = encrypt_sensitive_text(
+                    normalized_phone,
+                    (self.settings or get_settings()).patient_data_key.get_secret_value(),
+                    setting_name="PATIENT_DATA_KEY",
+                )
+            except SensitiveDataProtectionError as exc:
+                raise CanonicalWriteError(str(exc)) from exc
+            phone_hash = calculated_hash
         values = {
             "tenant_id": tenant_id,
             "external_id": external_id,
             "full_name": self._optional_string(data, "full_name"),
-            "phone_e164_encrypted": None,
-            "phone_hash": phone_hash.lower() if phone_hash else (self._phone_hash(phone) if phone else None),
+            "phone_e164_encrypted": encrypted_phone,
+            "phone_hash": phone_hash.lower() if phone_hash else None,
             "lead_source": self._optional_string(data, "lead_source"),
             "branch_id": await self._optional_branch_id(tenant_id, data),
             "first_visit_at": self._datetime(data, "first_visit_at") if data.get("first_visit_at") else None,
@@ -72,14 +95,19 @@ class CanonicalWriter:
             "visit_count": self._integer(data, "visit_count") if data.get("visit_count") is not None else 0,
             "is_active": bool(data.get("is_active", True)),
         }
+        update_fields = [
+            "full_name", "phone_hash", "lead_source", "branch_id",
+            "first_visit_at", "last_visit_at", "visit_count", "is_active",
+        ]
+        # A legacy extension sends only a hash. It must never erase a number
+        # already encrypted from the current extension.
+        if encrypted_phone is not None:
+            update_fields.append("phone_e164_encrypted")
         patient_id = await self._upsert(
             Patient,
             values,
             ["tenant_id", "external_id"],
-            [
-                "full_name", "phone_hash", "lead_source", "branch_id",
-                "first_visit_at", "last_visit_at", "visit_count", "is_active",
-            ],
+            update_fields,
         )
         if values["phone_hash"] and values["is_active"]:
             await self.session.execute(
@@ -732,14 +760,3 @@ class CanonicalWriter:
             return datetime.fromisoformat(str(value))
         except ValueError as exc:
             raise CanonicalWriteError(f"{field} must be an ISO datetime") from exc
-
-    @staticmethod
-    def _phone_hash(phone: str) -> str:
-        digits = "".join(character for character in phone if character.isdigit())
-        if len(digits) == 11 and digits.startswith("8"):
-            digits = "7" + digits[1:]
-        elif len(digits) == 10:
-            digits = "7" + digits
-        if len(digits) < 10:
-            raise CanonicalWriteError("phone has too few digits")
-        return sha256(f"+{digits}".encode()).hexdigest()
