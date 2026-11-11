@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/modules/auth";
 import { api, apiBinary } from "@/shared/api-client";
@@ -73,6 +73,27 @@ const stateLabels: Record<string, string> = {
   closed: "Закрыт",
 };
 
+const stateTone: Record<string, string> = {
+  bot_active: "bot",
+  human_requested: "waiting",
+  human_active: "human",
+  closed: "closed",
+};
+
+function shortTime(value: string) {
+  const date = new Date(value);
+  const today = new Date();
+  return date.toDateString() === today.toDateString()
+    ? date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleDateString("ru-RU", { day: "2-digit", month: "short" });
+}
+
+function messageAuthor(message: Message) {
+  if (message.direction === "in") return "Пациент";
+  if (message.sender_kind === "bot") return "ИИ Revora";
+  return "Администратор";
+}
+
 export default function WhatsAppPage() {
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -84,6 +105,8 @@ export default function WhatsAppPage() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
   const [selected, setSelected] = useState("");
+  const [dialogSearch, setDialogSearch] = useState("");
+  const [dialogFilter, setDialogFilter] = useState<"all" | "waiting" | "human" | "bot">("all");
   const [testMessage, setTestMessage] = useState("");
   const [lastTestMessage, setLastTestMessage] = useState("");
   const [testContact, setTestContact] = useState(() => `simulator-${Date.now()}`);
@@ -133,9 +156,24 @@ export default function WhatsAppPage() {
     enabled: tab === "system" && user?.role === "owner",
     refetchInterval: tab === "system" ? 15000 : false,
   });
+  const visibleConversations = useMemo(() => {
+    const needle = dialogSearch.trim().toLowerCase();
+    return (conversations.data?.items || []).filter((item) => {
+      const matchSearch = !needle || [item.contact_full, item.channel_name, item.handoff_reason || ""]
+        .join(" ").toLowerCase().includes(needle);
+      const matchFilter = dialogFilter === "all"
+        || (dialogFilter === "waiting" && item.state === "human_requested")
+        || (dialogFilter === "human" && item.state === "human_active")
+        || (dialogFilter === "bot" && item.state === "bot_active");
+      return matchSearch && matchFilter;
+    });
+  }, [conversations.data?.items, dialogFilter, dialogSearch]);
   useEffect(() => {
     if (knowledgeSheet.data?.connected) setSheetNamesInput(knowledgeSheet.data.sheet_names.join(", "));
   }, [knowledgeSheet.data?.connected, knowledgeSheet.data?.sheet_names.join(",")]);
+  useEffect(() => {
+    if (!selected && visibleConversations.length) setSelected(visibleConversations[0].id);
+  }, [selected, visibleConversations]);
   const refresh = async () => {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["wa-status"] }),
@@ -375,39 +413,62 @@ export default function WhatsAppPage() {
                 {simulate.isError && <div className="error-box">{simulate.error.message}</div>}
               </div>
             </div>}
-            {tab === "dialogs" && <div className="wa-layout">
+            {tab === "dialogs" && <div className="wa-workspace">
               <aside className="wa-dialog-list">
-                {conversations.data?.items.map((item) => <button key={item.id} className={selected === item.id ? "active" : ""} onClick={() => setSelected(item.id)}>
-                  <strong>{item.contact_full}</strong>
-                  <small>{item.channel_name} · {stateLabels[item.state] || item.state}</small>
-                </button>)}
-                {!conversations.data?.items.length && <p>Диалогов пока нет.</p>}
+                <div className="wa-inbox-head">
+                  <div><strong>Входящие</strong><small>{conversations.data?.items.length || 0} диалогов</small></div>
+                  <span className="wa-online-dot" title="Синхронизация активна" />
+                </div>
+                <label className="wa-search">
+                  <span aria-hidden="true">⌕</span>
+                  <input value={dialogSearch} onChange={(event) => setDialogSearch(event.target.value)} placeholder="Поиск по номеру или причине" />
+                </label>
+                <div className="wa-filters" aria-label="Фильтр диалогов">
+                  {([ ["all", "Все"], ["waiting", "Нужен ответ"], ["human", "У админа"], ["bot", "ИИ"] ] as const).map(([value, label]) =>
+                    <button type="button" className={dialogFilter === value ? "active" : ""} onClick={() => setDialogFilter(value)} key={value}>{label}</button>
+                  )}
+                </div>
+                <div className="wa-dialog-scroll">
+                  {visibleConversations.map((item) => <button key={item.id} className={`wa-dialog-row ${selected === item.id ? "active" : ""}`} onClick={() => setSelected(item.id)}>
+                    <span className="wa-avatar">{item.contact_full.replace(/\D/g, "").slice(-2) || "WA"}</span>
+                    <span className="wa-dialog-copy"><span className="wa-dialog-top"><strong>{item.contact_full}</strong><time>{shortTime(item.last_message_at)}</time></span>
+                      <span className="wa-dialog-bottom"><em className={`wa-state ${stateTone[item.state] || "closed"}`}>{stateLabels[item.state] || item.state}</em>
+                      {item.handoff_reason ? <small>{item.handoff_reason}</small> : <small>{item.channel_name}</small>}
+                      {item.unread_count > 0 && <b className="wa-unread">{item.unread_count > 99 ? "99+" : item.unread_count}</b>}</span>
+                    </span>
+                  </button>)}
+                  {!visibleConversations.length && <div className="wa-empty-list">{conversations.data?.items.length ? "Ничего не найдено" : "Диалогов пока нет"}</div>}
+                </div>
               </aside>
               <div className="wa-chat">
-                {!selected && <div className="center-state">Выберите диалог</div>}
+                {!selected && <div className="center-state">Выберите диалог слева</div>}
                 {detail.data && <>
-                  <header><div><strong>{detail.data.conversation.contact_full}</strong><small>{stateLabels[detail.data.conversation.state] || detail.data.conversation.state}</small></div>
-                    {detail.data.conversation.state === "human_active"
-                      ? <button onClick={() => transition.mutate("release")}>Вернуть ИИ</button>
-                      : <button onClick={() => transition.mutate("takeover")}>Забрать диалог</button>}
+                  <header className="wa-chat-head"><div className="wa-contact"><span className="wa-avatar large">{detail.data.conversation.contact_full.replace(/\D/g, "").slice(-2) || "WA"}</span><div><strong>{detail.data.conversation.contact_full}</strong><small>WhatsApp · {detail.data.conversation.channel_name}</small></div></div>
+                    <div className="wa-chat-actions"><em className={`wa-state ${stateTone[detail.data.conversation.state] || "closed"}`}>{stateLabels[detail.data.conversation.state] || detail.data.conversation.state}</em>
+                    {detail.data.conversation.state === "human_active" && <button type="button" onClick={() => transition.mutate("release")}>Включить ИИ</button>}</div>
                   </header>
+                  {detail.data.conversation.handoff_reason && <div className="wa-handoff-note"><strong>Требуется администратор</strong><span>{detail.data.conversation.handoff_reason}</span></div>}
                   <div className="wa-messages">{detail.data.messages.map((message) =>
-                    <div key={message.id} className={`wa-bubble ${message.direction === "in" ? "patient" : "bot"}`}>
-                      {message.body}
-                      {message.transcript && <small>Расшифровка: {message.transcript}</small>}
-                      {message.transcription_status === "processing" || message.transcription_status === "queued" || message.transcription_status === "retrying" ? <small>Расшифровываем голосовое…</small> : null}
-                      {message.media_available && <button type="button" className="small" onClick={() => void downloadMedia(message)}>Скачать {message.media_filename || "вложение"}</button>}
-                      {message.is_draft && <small>Черновик — не отправлен</small>}
-                      {message.status === "queued" || message.status === "retrying" || message.status === "sending" ? <small>Отправляется… попытка {message.delivery_attempts}</small> : null}
-                      {message.status === "failed" && <small>Не отправлено: {message.last_delivery_error}</small>}
-                      {message.status === "cancelled" && <small>Отменено: администратор ответил или пришло более новое сообщение</small>}
-                      {(message.status === "failed" || message.is_draft) && <button type="button" className="small" disabled={retryMessage.isPending} onClick={()=>retryMessage.mutate(message.id)}>Отправить сейчас</button>}
+                    <div key={message.id} className={`wa-message-row ${message.direction === "in" ? "incoming" : "outgoing"}`}>
+                      <div className={`wa-bubble ${message.direction === "in" ? "patient" : "bot"}`}>
+                        <span className="wa-message-author">{messageAuthor(message)}</span>
+                        {message.body && <div>{message.body}</div>}
+                        {message.transcript && <small>Расшифровка: {message.transcript}</small>}
+                        {message.transcription_status === "processing" || message.transcription_status === "queued" || message.transcription_status === "retrying" ? <small>Расшифровываем голосовое…</small> : null}
+                        {message.media_available && <button type="button" className="small" onClick={() => void downloadMedia(message)}>Скачать {message.media_filename || "вложение"}</button>}
+                        {message.is_draft && <small>Черновик — не отправлен</small>}
+                        {message.status === "queued" || message.status === "retrying" || message.status === "sending" ? <small>Отправляется… попытка {message.delivery_attempts}</small> : null}
+                        {message.status === "failed" && <small>Не отправлено: {message.last_delivery_error}</small>}
+                        {message.status === "cancelled" && <small>Отменено: администратор ответил или пришло более новое сообщение</small>}
+                        <time className="wa-message-time">{shortTime(message.created_at)}</time>
+                        {(message.status === "failed" || message.is_draft) && <button type="button" className="small" disabled={retryMessage.isPending} onClick={()=>retryMessage.mutate(message.id)}>Отправить сейчас</button>}
+                      </div>
                     </div>)}</div>
                   <form className="wa-composer" onSubmit={(event) => {
                     event.preventDefault(); if (humanMessage.trim()) sendHuman.mutate(humanMessage.trim());
                   }}>
-                    <textarea value={humanMessage} onChange={(event) => setHumanMessage(event.target.value)} rows={2} placeholder="Ответ администратора" />
-                    <button className="primary">Отправить</button>
+                    <textarea value={humanMessage} onChange={(event) => setHumanMessage(event.target.value)} rows={2} placeholder="Напишите ответ пациенту…" />
+                    <button className="primary" disabled={sendHuman.isPending || !humanMessage.trim()}>{sendHuman.isPending ? "Отправляем…" : "Отправить"}</button>
                   </form>
                 </>}
               </div>
