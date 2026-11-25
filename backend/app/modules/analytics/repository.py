@@ -278,13 +278,16 @@ class AnalyticsRepository:
             ),
             (
                 "appointments_without_direction",
-                "Записи без направления",
-                "Невозможно корректно посчитать аналитику по специализациям.",
+                "Состоявшиеся приёмы без направления",
+                "Для этих завершённых приёмов услуга не дала однозначную специализацию.",
                 "warning",
                 "appointments",
                 select(func.count(Appointment.id)).where(
                     *appointments_base,
-                    Appointment.status.in_(["scheduled", "completed"]),
+                    # A future booking often has no service yet. It must not be
+                    # reported as a data error: a direction is only meaningful
+                    # after a completed reception has an actual service row.
+                    Appointment.status == "completed",
                     Appointment.direction_id.is_(None),
                 ),
             ),
