@@ -19,6 +19,10 @@ from app.modules.whatsapp.models import WhatsAppConversation, WhatsAppMessage
 
 ZERO = Decimal("0")
 Row = TypeVar("Row")
+# The queue is intentionally limited to work that still needs a person.  A
+# confirmed re-booking, recovery or rejection remains available in the audit
+# trail and summary, but must not occupy a card in the operational map.
+ACTIONABLE_LOSS_STATUSES = ("open", "in_progress")
 
 
 def latest_event_per_episode(
@@ -680,6 +684,7 @@ class LossRepository:
                 LossOpportunity.tenant_id == tenant_id,
                 LossOpportunity.period_start == date_from,
                 LossOpportunity.period_end == date_to,
+                LossOpportunity.status.in_(ACTIONABLE_LOSS_STATUSES),
             )
             .order_by(
                 case((LossOpportunity.status == "open", 0), else_=1),
@@ -776,7 +781,15 @@ class LossRepository:
                     else_=0,
                 )
             ),
-            func.sum(case((LossOpportunity.status != "dismissed", 1), else_=0)),
+            # `total` drives the UI's "build/recalculate" state.  It must
+            # mean the same thing as the cards the manager sees: actionable
+            # cases only, not a historical mix of booked and dismissed rows.
+            func.sum(
+                case(
+                    (LossOpportunity.status.in_(ACTIONABLE_LOSS_STATUSES), 1),
+                    else_=0,
+                )
+            ),
         ).where(
             LossOpportunity.tenant_id == tenant_id,
             LossOpportunity.period_start == date_from,

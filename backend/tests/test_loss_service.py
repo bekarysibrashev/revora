@@ -12,6 +12,7 @@ from app.modules.losses.repository import (
     LossRepository,
     LossTotals,
     expected_contact_value,
+    latest_event_per_episode,
 )
 from app.modules.losses.service import LossService
 
@@ -175,6 +176,24 @@ def test_contact_value_uses_conservative_rates_for_sparse_history() -> None:
 
     assert amount == Decimal("11156.25")
     assert rates == {"booking_rate": 0.35, "show_rate": 0.75, "collection_rate": 0.85}
+
+
+def test_multiple_cancellations_of_one_patient_leave_one_latest_case() -> None:
+    """A calendar history must not turn one patient into several losses."""
+    first = SimpleNamespace(patient_id="patient-1", starts_at=datetime(2026, 9, 3, tzinfo=UTC))
+    newest = SimpleNamespace(patient_id="patient-1", starts_at=datetime(2026, 9, 17, tzinfo=UTC))
+    another = SimpleNamespace(patient_id="patient-2", starts_at=datetime(2026, 9, 8, tzinfo=UTC))
+
+    rows = latest_event_per_episode(
+        [first, another, newest],
+        episode_key=lambda row: row.patient_id,
+        occurred_at=lambda row: row.starts_at,
+    )
+
+    assert {(row.patient_id, row.starts_at) for row in rows} == {
+        ("patient-1", newest.starts_at),
+        ("patient-2", another.starts_at),
+    }
 
 
 @pytest.mark.asyncio
