@@ -57,6 +57,12 @@ export default function LossesPage() {
       }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["loss-map", query] }),
   });
+  // The API retains closed rows for audit and recovery metrics.  The manager's
+  // queue must show only a person who still needs an action, even during a
+  // rolling backend deploy or with older archived rows in the response.
+  const actionableItems = (data.data?.items || []).filter(
+    (item) => item.status === "open" || item.status === "in_progress"
+  );
 
   return (
     <>
@@ -130,7 +136,7 @@ export default function LossesPage() {
             )}
 
             <div className="loss-list">
-              {data.data.items.map((item) => (
+              {actionableItems.map((item) => (
                 <LossCard
                   key={item.id}
                   item={item}
@@ -141,7 +147,7 @@ export default function LossesPage() {
                   }
                 />
               ))}
-              {!data.data.items.length && (
+              {!actionableItems.length && (
                 <section className="panel quality-empty">
                   <span>₸</span>
                   <div>
