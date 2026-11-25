@@ -22,6 +22,7 @@ import {
 
 export default function LossesPage() {
   const { filters } = useFilters();
+  const [showAll, setShowAll] = useState(false);
   const query = queryString(filters);
   const client = useQueryClient();
   const employees = useQuery({
@@ -63,6 +64,7 @@ export default function LossesPage() {
   const actionableItems = (data.data?.items || []).filter(
     (item) => item.status === "open" || item.status === "in_progress"
   );
+  const visibleItems = showAll ? actionableItems : actionableItems.slice(0, 20);
 
   return (
     <>
@@ -136,7 +138,7 @@ export default function LossesPage() {
             )}
 
             <div className="loss-list">
-              {actionableItems.map((item) => (
+              {visibleItems.map((item) => (
                 <LossCard
                   key={item.id}
                   item={item}
@@ -158,6 +160,11 @@ export default function LossesPage() {
                     </p>
                   </div>
                 </section>
+              )}
+              {actionableItems.length > 20 && (
+                <button className="quiet loss-show-more" onClick={() => setShowAll((value) => !value)}>
+                  {showAll ? "Свернуть список" : `Показать все ${actionableItems.length} случаев`}
+                </button>
               )}
             </div>
           </>
@@ -207,6 +214,8 @@ function LossCard({
   const [amount, setAmount] = useState(item.recovered_amount || "");
   const [assignedUserId, setAssignedUserId] = useState(item.assigned_user_id || "");
   const confidence = Math.round(Number(item.confidence) * 100);
+  const evidence = item.evidence || {};
+  const financialEstimateIsProven = evidence.financial_estimate_proven === true && Number(item.estimated_amount) > 0;
   return (
     <article className={`loss-card ${item.severity}`}>
       <div className="loss-card-main">
@@ -219,20 +228,39 @@ function LossCard({
           </span>
         </div>
         <h2>{item.title}</h2>
-        <p>{item.description}</p>
+        <p>
+          Это кандидат на ручную проверку, а не доказанная потеря. В загруженных
+          данных 1С не найдена следующая активная запись после этого события.
+        </p>
         <div className="loss-proof">
           <span>
-            <small>Где оборвалась цепочка</small>
-            <strong>{stageLabel(item.evidence.funnel_stage)}</strong>
+            <small>Дата события</small>
+            <strong>{formatDate(evidence.starts_at)}</strong>
           </span>
           <span>
-            <small>Почему показано</small>
-            <strong>{reasonLabel(item.evidence.reason_code)}</strong>
+            <small>Филиал</small>
+            <strong>{stringEvidence(evidence.branch_name, "Не указан")}</strong>
           </span>
-          {typeof item.evidence.source === "string" && (
+          <span>
+            <small>Врач</small>
+            <strong>{stringEvidence(evidence.doctor_name, "Не указан")}</strong>
+          </span>
+          <span>
+            <small>Направление</small>
+            <strong>{stringEvidence(evidence.direction_name, "Не указано")}</strong>
+          </span>
+          <span>
+            <small>Причина отмены</small>
+            <strong>{evidence.cancellation_reason_available ? "Передана из 1С" : "Не передана из 1С"}</strong>
+          </span>
+          <span>
+            <small>История пациента</small>
+            <strong>{visitHistory(evidence)}</strong>
+          </span>
+          {typeof evidence.source === "string" && (
             <span>
               <small>Источник</small>
-              <strong>{sourceLabel(item.evidence.source)}</strong>
+              <strong>{sourceLabel(evidence.source)}</strong>
             </span>
           )}
           {item.contact_phone && (
@@ -248,9 +276,9 @@ function LossCard({
         </div>
       </div>
       <div className="loss-card-money">
-        <small>Оценка возможности</small>
-        <strong>{money(item.estimated_amount)}</strong>
-        <span>Уверенность {confidence}%</span>
+        <small>Финансовая оценка</small>
+        <strong>{financialEstimateIsProven ? money(item.estimated_amount) : "Не оцениваем"}</strong>
+        <span>{financialEstimateIsProven ? `На основе истории оплат пациента · уверенность ${confidence}%` : "Нет подтверждённой суммы по этому пациенту"}</span>
         {item.status === "recovered" ? (
           <b className="good">Возвращено {money(item.recovered_amount)}</b>
         ) : item.status === "booked" ? (
@@ -341,6 +369,22 @@ function reasonLabel(value: unknown) {
     cancelled: "Отмена без последующей активной записи",
     no_show: "Неявка без последующей активной записи",
   }[String(value)] || "Есть подтверждённый обрыв воронки";
+}
+
+function stringEvidence(value: unknown, fallback: string) {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function formatDate(value: unknown) {
+  if (typeof value !== "string") return "Не передана из 1С";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "Не передана из 1С" : parsed.toLocaleString("ru-RU");
+}
+
+function visitHistory(evidence: Record<string, unknown>) {
+  const visits = Number(evidence.patient_visit_count || 0);
+  const lastVisit = formatDate(evidence.patient_last_visit_at);
+  return visits > 0 ? `${visits} визитов; последний — ${lastVisit}` : "История визитов не передана";
 }
 
 function sourceLabel(value: string) {
