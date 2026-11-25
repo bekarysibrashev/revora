@@ -11,10 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.modules.finance.models import RevenueFact
+from app.modules.doctors.models import Doctor
 from app.modules.losses.models import LossOpportunity
 from app.modules.reports.repository import OfficialReportsRepository
-from app.modules.sales.models import Appointment, Call, Lead, Patient
+from app.modules.sales.models import Appointment, Call, Lead, Patient, ServiceDirection
 from app.modules.sales.repository import reconcile_lost_leads
+from app.modules.tenancy.models import Branch
 from app.modules.whatsapp.models import WhatsAppConversation, WhatsAppMessage
 
 ZERO = Decimal("0")
@@ -282,10 +284,28 @@ class LossRepository:
             Appointment.patient_id,
             Appointment.doctor_id,
             Appointment.direction_id,
+            Appointment.is_primary,
+            Patient.last_visit_at,
+            Patient.visit_count,
+            Doctor.full_name.label("doctor_name"),
+            ServiceDirection.name.label("direction_name"),
+            Branch.name.label("branch_name"),
         ).join(
             Patient,
             (Patient.tenant_id == Appointment.tenant_id)
             & (Patient.id == Appointment.patient_id),
+        ).outerjoin(
+            Doctor,
+            (Doctor.tenant_id == Appointment.tenant_id)
+            & (Doctor.id == Appointment.doctor_id),
+        ).outerjoin(
+            ServiceDirection,
+            (ServiceDirection.tenant_id == Appointment.tenant_id)
+            & (ServiceDirection.id == Appointment.direction_id),
+        ).outerjoin(
+            Branch,
+            (Branch.tenant_id == Appointment.tenant_id)
+            & (Branch.id == Appointment.branch_id),
         ).where(
             Appointment.tenant_id == tenant_id,
             # A loss case must be operationally actionable. Without a stable
@@ -319,6 +339,7 @@ class LossRepository:
         candidates: list[LossCandidate] = []
         for row in appointments:
             is_no_show = row.status == "no_show"
+            has_patient_value = row.patient_id in patient_averages
             if row.patient_id in patient_averages:
                 unit_value, basis, basis_confidence = (
                     patient_averages[row.patient_id], "patient_payment_average", Decimal("0.9000")
@@ -335,9 +356,17 @@ class LossRepository:
                 unit_value, basis, basis_confidence = (
                     average_visit, "clinic_accrual_average", Decimal("0.5000")
                 )
-            confidence = basis_confidence if is_no_show else basis_confidence * Decimal("0.60")
-            estimate = unit_value if is_no_show else unit_value * Decimal("0.60")
-            estimate = max(ZERO, estimate)
+            # A clinic-wide average is useful for aggregate planning, but it
+            # is not evidence of the value of this particular patient. Do not
+            # make every cancelled appointment look like the same confirmed
+            # financial loss. Show an amount only when this patient has an
+            # actual payment history in the imported data.
+            confidence = (
+                basis_confidence if has_patient_value else Decimal("0.30")
+            )
+            estimate = (
+                unit_value if is_no_show else unit_value * Decimal("0.60")
+            ) if has_patient_value else ZERO
             candidates.append(
                 LossCandidate(
                     fingerprint=self._fingerprint(f"appointment_episode:{row.patient_id}"),
@@ -363,13 +392,25 @@ class LossRepository:
                         "episode_kind": "patient",
                         "appointment_status": row.status,
                         "starts_at": row.starts_at.isoformat(),
+                        "appointment_is_primary": row.is_primary,
+                        "branch_name": row.branch_name,
+                        "doctor_name": row.doctor_name,
+                        "direction_name": row.direction_name,
+                        "patient_visit_count": row.visit_count,
+                        "patient_last_visit_at": (
+                            row.last_visit_at.isoformat()
+                            if row.last_visit_at is not None
+                            else None
+                        ),
                         "doctor_linked": row.doctor_id is not None,
                         "direction_linked": row.direction_id is not None,
                         "estimation_basis": basis,
-                        "unit_value": float(unit_value),
+                        "unit_value": float(unit_value) if has_patient_value else None,
+                        "financial_estimate_proven": has_patient_value,
                         "funnel_stage": "visit",
                         "reason_code": row.status,
-                        "proof": "no_later_active_appointment",
+                        "proof": "no_later_active_appointment_in_imported_data",
+                        "cancellation_reason_available": False,
                     },
                 )
             )
